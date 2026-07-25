@@ -1,0 +1,17 @@
+# Répertoires à ignorer
+build/
+xpacks/
+node_modules/
+src/firmware/build/
+
+# Fichiers de build
+*.o
+*.elf
+*.hex
+*.bit
+*.json
+*.config
+
+# IDE
+.vscode/settings.json
+.DS_Store

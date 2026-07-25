@@ -1,0 +1,48 @@
+# 25MHz Clock
+LOCATE COMP "clk_25mhz" SITE "P3";
+IOBUF PORT "clk_25mhz" IO_TYPE=LVCMOS33;
+FREQUENCY NET "clk_25mhz" 25.000000 MHz;
+
+# Status LED (D2)
+LOCATE COMP "led_d2" SITE "L2";
+IOBUF PORT "led_d2" IO_TYPE=LVCMOS33;
+
+# SPI Flash
+LOCATE COMP "flash_csb" SITE "R2";
+LOCATE COMP "flash_miso" SITE "V2";
+LOCATE COMP "flash_mosi" SITE "W2";
+IOBUF PORT "flash_csb" IO_TYPE=LVCMOS33;
+
+# Ethernet PHY 0 (Broadcom B50612D)
+LOCATE COMP "eth0_rst_n" SITE "R1";
+LOCATE COMP "eth0_mdio" SITE "T2";
+LOCATE COMP "eth0_mdc" SITE "P1";
+LOCATE COMP "eth0_rx_clk" SITE "M1";
+LOCATE COMP "eth0_rx_ctl" SITE "N1";
+LOCATE COMP "eth0_rx_data[0]" SITE "M2";
+LOCATE COMP "eth0_rx_data[1]" SITE "N2";
+LOCATE COMP "eth0_rx_data[2]" SITE "P2";
+LOCATE COMP "eth0_rx_data[3]" SITE "R3";
+LOCATE COMP "eth0_tx_clk" SITE "M4";
+LOCATE COMP "eth0_tx_ctl" SITE "L4";
+LOCATE COMP "eth0_tx_data[0]" SITE "L1";
+LOCATE COMP "eth0_tx_data[1]" SITE "L3";
+LOCATE COMP "eth0_tx_data[2]" SITE "P5";
+LOCATE COMP "eth0_tx_data[3]" SITE "L5";
+IOBUF PORT "eth0_rst_n" IO_TYPE=LVCMOS33;
+# ... (Add remaining IOBUF commands as needed)
+
+# SDRAM
+LOCATE COMP "sdram_clk" SITE "B3";
+LOCATE COMP "sdram_cke" SITE "F3";
+LOCATE COMP "sdram_cs_n" SITE "D5";
+LOCATE COMP "sdram_we_n" SITE "A5";
+LOCATE COMP "sdram_cas_n" SITE "E5";
+LOCATE COMP "sdram_ras_n" SITE "B5";
+
+
+# uart0
+LOCATE COMP "rx0" SITE "H16";
+IOBUF PORT "rx0" IO_TYPE=LVCMOS33;
+LOCATE COMP "tx0" SITE "H17";
+IOBUF PORT "tx0" IO_TYPE=LVCMOS33;
