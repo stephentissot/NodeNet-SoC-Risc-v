@@ -157,18 +157,36 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                      Wishbone Bus (32-bit)              │
-├────┬──────────────┬──────┬──────────┬──────────────────┤
-│    │              │      │          │                  │
-│PicoRV32         ROM    RAM       LED GPIO            UART0–3
-│    │              │      │          │                  │
-│    └──────────────┴──────┴──────────┴──────────────────┘
-│                         │
-│                    Address Decoder
-│
-└─ 25 MHz Clock, 64K ROM, 64K RAM, Modbus RS485 routing
+                   +----------------+
+                   |   PicoRV32     |
+                   +-------+--------+
+                           |
+                      Wishbone B4
+                           |
+      +--------+-----------+-----------+
+      |        |           |           |
+   wb_rom   wb_ram      wb_uart     wb_led
+                           |
+                       uart.v (Alex)
+                           |
+                    RS485 Transceiver
+                           |
+                    TMUX4051 Mux Array
+                           |
+                    RJ45 Connectors
 ```
+
+**Data Flow**:
+1. **CPU** (PicoRV32): 32-bit RISC-V, 25 MHz clock
+2. **Wishbone B.4 Bus**: 32-bit address, 32-bit data, address decoder for peripherals
+3. **Memory & I/O**:
+   - `wb_rom`: 64 KiB boot ROM (0x00000000)
+   - `wb_ram`: 64 KiB RAM (0x00010000)
+   - `wb_uart`: UART with FIFOs (0x10001000+)
+   - `wb_led`: GPIO output (0x10000000)
+4. **UART Core**: Wraps Alex Forencich's `uart.v` with Wishbone interface
+5. **RS485 Physical**: Transceiver converts CMOS ↔ RS485 differential signaling
+6. **Multiplexing**: TMUX4051 arrays route A/B pairs to correct RJ45 connectors
 
 ## Planned Enhancements
 
