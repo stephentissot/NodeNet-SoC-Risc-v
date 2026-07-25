@@ -207,6 +207,7 @@ make flash
 ## References
 
 - [PicoRV32 GitHub](https://github.com/YosysHQ/picorv32)
+- [Verilog UART IP (Alex Forencich)](https://github.com/alexforencich/verilog-uart) – Core UART module used in wb_uart.sv
 - [Wishbone B.4 Specification](https://cdn.opencores.org/downloads/wbspec_b4.pdf)
 - [LFE5U FPGA Datasheet](https://www.latticesemi.com/en/Products/FPGAs/ECP5)
 - [RISC-V Unprivileged ISA Manual](https://riscv.org/specifications/)

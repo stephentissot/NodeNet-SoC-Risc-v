@@ -16,6 +16,8 @@ All modules follow the Wishbone B.4 standard with:
 
 **Purpose**: Serial communication with RS485 driver support, buffered I/O.
 
+**Based On**: [Verilog UART IP by Alex Forencich](https://github.com/alexforencich/verilog-uart) – wraps the high-quality `uart.v` core with Wishbone B.4 interface and circular FIFOs for buffering.
+
 **Address**: Configurable (default: `0x10001000`)
 
 **Register Map**:
