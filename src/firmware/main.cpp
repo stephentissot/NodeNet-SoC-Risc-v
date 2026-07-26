@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include "version.h"
 
 // Bare-metal C++ stubs (no libstdc++, no exceptions, no RTTI)
 // Called if a pure virtual function is invoked — should never happen in practice.
