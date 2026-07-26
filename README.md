@@ -7,7 +7,7 @@ A complete RISC-V System-on-Chip (SoC) design for the Colorlight i9 FPGA board, 
 This project demonstrates a scalable embedded systems design on a cost-effective FPGA:
 - **Processor**: PicoRV32 (32-bit RISC-V, bare-metal)
 - **Clock**: 25 MHz
-- **Memory**: 64 KiB ROM (boot code) + 64 KiB RAM (stack/variables)
+- **Memory**: 64 KiB ROM (boot code) + 64 KiB RAM (stack/variables) + 8 MB SDRAM
 - **Peripherals**: LED GPIO, UART with FIFOs, RS485 multiplexing
 - **Protocol Support**: Modbus RTU (4 UARTs), NodeNet JSON (planned)
 
@@ -21,6 +21,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - `0x00010000–0x0002FFFF`: 64 KiB RAM
   - `0x10000000`: LED GPIO (1-bit output)
   - `0x10001000–0x10004000`: 4× UART peripherals (planned)
+  - `0x20000000–0x207FFFFF`: 8 MB SDRAM (M12L64322A)
 
 ### Peripherals
 - **UART Module** (`wb_uart.sv`): 
@@ -73,16 +74,18 @@ make clean
 ## Memory Layout
 
 ```
-Address Range       Size    Purpose
-─────────────────────────────────────────
-0x00000000–0x0000FFFF  64 KiB  Boot ROM (firmware binary)
-0x00010000–0x0002FFFF  64 KiB  RAM (stack, BSS, heap)
-─────────────────────────────────────────
-0x10000000           4 B     LED GPIO (bit [0] = LED output)
-0x10001000           12 B    UART0 (DATA @ +0x0, STATUS @ +0x4, BAUD @ +0x8)
-0x10002000           12 B    UART1 (planned)
-0x10003000           12 B    UART2 (planned)
-0x10004000           12 B    UART3 (planned)
+Address Range             Size      Purpose
+─────────────────────────────────────────────────────────
+0x00000000–0x0000FFFF   64 KiB    Boot ROM (firmware binary)
+0x00010000–0x0002FFFF   64 KiB    RAM (stack, BSS, heap)
+─────────────────────────────────────────────────────────
+0x10000000              4 B       LED GPIO (bit [0] = LED output)
+0x10001000              12 B      UART0 (DATA @ +0x0, STATUS @ +0x4, BAUD @ +0x8)
+0x10002000              12 B      UART1 (planned)
+0x10003000              12 B      UART2 (planned)
+0x10004000              12 B      UART3 (planned)
+─────────────────────────────────────────────────────────
+0x20000000–0x207FFFFF   8 MB      SDRAM (M12L64322A, external)
 ```
 
 ## Device Pinout
@@ -151,8 +154,9 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
   - ROM (64 KiB): 32 blocks
   - RAM (64 KiB): 32 blocks
   - UART0 + FIFOs: ~300 LUT
+  - SDRAM controller: ~400 LUT
   - GPIO: ~50 LUT
-  - **Total: ~33% of available resources**
+  - **Total: ~35% of available resources**
 
 ## Architecture
 
@@ -163,12 +167,12 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
                            |
                       Wishbone B4
                            |
-      +--------+-----------+-----------+
-      |        |           |           |
-   wb_rom   wb_ram      wb_uart     wb_led
-                           |
-                       uart.v (Alex)
-                           |
+      +--------+-----------+-----------+----------+
+      |        |           |           |          |
+   wb_rom   wb_ram      wb_uart     wb_gpio   wb_sdram
+                           |                     |
+                       uart.v (Alex)       M12L64322A
+                           |               (8MB SDRAM)
                     RS485 Transceiver
                            |
                     TMUX4051 Mux Array
@@ -182,14 +186,16 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
 3. **Memory & I/O**:
    - `wb_rom`: 64 KiB boot ROM (0x00000000)
    - `wb_ram`: 64 KiB RAM (0x00010000)
+   - `wb_sdram`: 8 MB SDRAM (0x20000000)
    - `wb_uart`: UART with FIFOs (0x10001000+)
-   - `wb_led`: GPIO output (0x10000000)
+   - `wb_gpio`: GPIO output (0x10000000)
 4. **UART Core**: Wraps Alex Forencich's `uart.v` with Wishbone interface
 5. **RS485 Physical**: Transceiver converts CMOS ↔ RS485 differential signaling
 6. **Multiplexing**: TMUX4051 arrays route A/B pairs to correct RJ45 connectors
 
 ## Planned Enhancements
 
+- [x] 8 MB SDRAM controller (`wb_sdram.sv`) with auto-refresh and auto-precharge
 - [ ] UART1–4 implementation and testing
 - [ ] RS485 multiplexer firmware control
 - [ ] Modbus RTU library (master/slave modes)

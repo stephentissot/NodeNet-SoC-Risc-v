@@ -196,7 +196,7 @@ parameter ADDR = 32'h0000_0000;
 
 ---
 
-### 4. `simpleGPIO.sv` – LED Output (1-bit GPIO)
+### 4. `wb_gpio.sv` – LED Output (1-bit GPIO)
 
 **Purpose**: Simple output control for LED indicator (D2 on Colorlight i9).
 
@@ -245,7 +245,110 @@ uint32_t state = *led_gpio;
 
 ---
 
-## Wishbone Interconnect Integration
+### 5. `wb_sdram.sv` – 8 MB External SDRAM Controller
+
+**Purpose**: Full-featured SDRAM controller for the M12L64322A chip on Colorlight i9, exposing 8 MB of external DRAM to the CPU via Wishbone B.4.
+
+**Address**: `0x20000000–0x207FFFFF` (8 MB)
+
+**Hardware Notes (Colorlight i9 v7.2 PCB)**:
+> The following signals are **hardwired on the PCB** and are NOT driven by the FPGA:
+> - `CS_N` → GND (chip always selected)
+> - `CKE` → VCC (clock always enabled)
+> - `DQM[3:0]` → GND (byte masking permanently disabled)
+>
+> **Consequence**: all SDRAM reads/writes are always full 32-bit. Individual byte masking via `wb_sel_i` is not supported at the SDRAM level.
+
+**SDRAM Organization**:
+| Parameter | Value |
+|-----------|-------|
+| Chip | M12L64322A |
+| Total capacity | 8 MB (64 Mbit) |
+| Banks | 4 (`BA[1:0]`) |
+| Rows per bank | 2048 (`A[10:0]`, 11-bit) |
+| Columns per row | 256 words (`A[7:0]`, 8-bit) |
+| Data width | 32 bits (`DQ[31:0]`) |
+
+**Address Mapping** (within 8 MB window):
+
+| `wb_adr_i` bits | SDRAM field | Size |
+|-----------------|-------------|------|
+| `[22:21]` | Bank `BA[1:0]` | 4 banks |
+| `[20:10]` | Row `A[10:0]` | 2048 rows |
+| `[9:2]` | Column `A[7:0]` | 256 words |
+| `[1:0]` | Byte offset (ignored) | — |
+
+**Parameters**:
+
+```systemverilog
+parameter [31:0] ADDR         = 32'h2000_0000;
+parameter        CLK_FREQ_MHZ = 25;
+parameter        T_INIT_US    = 200;  // Power-on hold delay
+parameter        T_RFC_NS     = 63;   // Auto-refresh cycle time
+parameter        T_REF_US     = 7;    // Refresh interval (< 7.8 µs)
+```
+
+**Timing (25 MHz = 40 ns/cycle)**:
+
+| Parameter | Value | Cycles |
+|-----------|-------|--------|
+| `tRCD` (RAS→CAS) | 40 ns | 1 |
+| `tRP` (precharge) | 40 ns | 1 (auto-precharge) |
+| `tRFC` (refresh) | 80 ns | 2 |
+| CAS latency | — | 2 SDRAM cycles |
+| Refresh period | 7 µs | every 175 cycles |
+| Read latency | — | 6 FPGA cycles |
+| Write latency | — | 4 FPGA cycles |
+
+**Clock technique**: `sdram_clk = ~clk` (inverted). FPGA outputs settle ~2 ns after `posedge clk`; SDRAM captures them at the next `sdram_clk` rising edge (= `negedge clk`, 20 ns later), giving **~18 ns setup margin** vs. tAS = 2 ns minimum.
+
+**Mode Register**: CL=2, BL=1 (single word burst), sequential — programmed automatically during initialization.
+
+**Initialization sequence** (automatic at power-on/reset):
+1. Wait 200 µs (5000 cycles)
+2. PRECHARGE ALL banks
+3. 2× AUTO REFRESH
+4. LOAD MODE REGISTER (CL=2, BL=1)
+5. Ready — normal operation begins
+
+**Usage Example**:
+
+```c
+#define SDRAM_BASE 0x20000000
+
+volatile uint32_t *sdram = (volatile uint32_t *)SDRAM_BASE;
+
+// Write 32-bit word at offset 0 (bank 0, row 0, col 0)
+sdram[0] = 0xDEADBEEF;
+
+// Read it back
+uint32_t val = sdram[0];  // Returns 0xDEADBEEF
+
+// Basic memory test
+void sdram_test(void) {
+    uint32_t i, errors = 0;
+    // Write pattern
+    for (i = 0; i < 1024; i++) sdram[i] = i ^ 0xA5A5A5A5;
+    // Verify
+    for (i = 0; i < 1024; i++) {
+        if (sdram[i] != (i ^ 0xA5A5A5A5)) errors++;
+    }
+    // errors == 0 → SDRAM working correctly
+}
+```
+
+**Limitations**:
+- **No byte masking**: `DQM=GND` on PCB → `wb_sel_i` is ignored; always reads/writes full 32 bits
+- **Single-word bursts**: BL=1; no burst transfers (can be extended by changing MODE_REG)
+- **Auto-precharge**: row closes after every access; no open-row optimization
+
+**SDRAM Physical Pins** (from `colorlight_i9.lpf`):
+- `sdram_clk` → B9, `sdram_ras_n` → B10, `sdram_cas_n` → A9, `sdram_we_n` → A10
+- `sdram_ba[1:0]` → C8, B11
+- `sdram_a[10:0]` → B12, A11..A13, A14, B15, B16, A17, A16, C14, B13
+- `sdram_dq[31:0]` → 32 pins (see `colorlight_i9.lpf` for full list)
+
+---
 
 All modules are instantiated in [../top.sv](../top.sv) with address decoding:
 
