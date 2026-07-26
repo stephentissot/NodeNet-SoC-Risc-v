@@ -38,11 +38,12 @@ src/firmware/
 ├── main.cpp         Application entry point
 ├── i2c.h            I2C MMIO driver (wb_i2c peripheral)
 ├── sdram.h          SDRAM helpers (SDRAM_DATA macro, sdram_wait_ready)
-├── u8g2_hal.h       u8g2 HAL declarations
-├── u8g2_hal.cpp     u8g2 HAL: I2C callback + delay callback
 └── lib/
-    └── u8g2/        u8g2 graphics library (git submodule)
-        └── csrc/    132 C source files compiled with --gc-sections
+    ├── u8g2/        u8g2 graphics library (git submodule)
+    │   └── csrc/    132 C source files compiled with --gc-sections
+    └── u8g2_hal/    u8g2 hardware abstraction layer (our code)
+        ├── u8g2_hal.h   HAL declarations
+        └── u8g2_hal.cpp I2C callback + delay callback
 ```
 
 ---

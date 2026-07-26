@@ -14,12 +14,16 @@ CFLAGS=-march=rv32im -mabi=ilp32 \
        -I$(U8G2_DIR)
 
 # C++ flags: no exceptions, no RTTI (keeps code small on bare-metal)
+# -I.            : src/firmware/ on include path (for i2c.h from lib/u8g2_hal/)
+# -Ilib/u8g2_hal : exposes u8g2_hal.h to main.cpp
 CXXFLAGS=$(CFLAGS) \
          -std=c++17 \
          -fno-exceptions \
          -fno-rtti \
          -fno-threadsafe-statics \
-         -fno-use-cxa-atexit
+         -fno-use-cxa-atexit \
+         -I. \
+         -Ilib/u8g2_hal
 
 # -nostartfiles: don't use toolchain crt0 (we have start.S)
 # --specs=nano.specs: newlib-nano provides memcpy/strlen/memset etc.
@@ -50,7 +54,7 @@ $(BUILD)/start.o: start.S | $(BUILD)
 $(BUILD)/main.o: main.cpp | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
-$(BUILD)/u8g2_hal.o: u8g2_hal.cpp | $(BUILD)
+$(BUILD)/u8g2_hal.o: lib/u8g2_hal/u8g2_hal.cpp | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
 # u8g2 C sources (compiled with gcc, not g++)
