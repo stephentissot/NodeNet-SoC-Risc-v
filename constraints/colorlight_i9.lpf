@@ -86,20 +86,11 @@ LOCATE COMP "sdram_dq[30]" SITE "D14"; IOBUF PORT "sdram_dq[30]" IO_TYPE=LVCMOS3
 LOCATE COMP "sdram_dq[31]" SITE "D13"; IOBUF PORT "sdram_dq[31]" IO_TYPE=LVCMOS33 SLEWRATE=FAST;
 
 
-# uart0
-LOCATE COMP "rx0" SITE "H16";
+# NodeNet485 (UART @ 1 Mb/s on H16/H17, RS485 driver enable automatic on module)
+LOCATE COMP "rx0" SITE "H16";  # RX input for NodeNet485
 IOBUF PORT "rx0" IO_TYPE=LVCMOS33;
-LOCATE COMP "tx0" SITE "H17";
+LOCATE COMP "tx0" SITE "H17";  # TX output for NodeNet485
 IOBUF PORT "tx0" IO_TYPE=LVCMOS33;
-
-# NodeNet485 (UART @ 1 Mb/s + RS485 driver control on pmodh)
-# TODO: Verify PMODH pin assignments for CABGA381 package
-#LOCATE COMP "rx_nn" SITE "J5";  # pmodh[1] — RX (input)
-#IOBUF PORT "rx_nn" IO_TYPE=LVCMOS33;
-#LOCATE COMP "tx_nn" SITE "J4";  # pmodh[0] — TX (output)
-#IOBUF PORT "tx_nn" IO_TYPE=LVCMOS33;
-#LOCATE COMP "de_nn" SITE "J6";  # pmodh[2] — Driver Enable (output)
-#IOBUF PORT "de_nn" IO_TYPE=LVCMOS33;
 
 # I2C0 — pmodg[0..1] on Colorlight i9 (external 4.7 kΩ pullup to 3.3 V required)
 LOCATE COMP "i2c0_scl" SITE "H4"; IOBUF PORT "i2c0_scl" IO_TYPE=LVCMOS33;

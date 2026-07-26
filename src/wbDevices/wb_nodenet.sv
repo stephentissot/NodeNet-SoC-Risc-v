@@ -23,10 +23,9 @@ module wb_nodenet #(
   input  wire stb_i,
   output wire ack_o,
   
-  // UART/RS485 Interface
+  // UART/RS485 Interface (no driver enable needed - handled automatically on module)
   input  wire uart_rx_i,
-  output wire uart_tx_o,
-  output wire uart_de_o
+  output wire uart_tx_o
 );
 
   // Internal registers
@@ -49,7 +48,6 @@ module wb_nodenet #(
   
   // Simple loopback: RX -> TX
   assign uart_tx_o = uart_rx_i;
-  assign uart_de_o = 1'b1;  // Always drive RS485
   
   // Wishbone logic
   always @(posedge clk_i) begin
