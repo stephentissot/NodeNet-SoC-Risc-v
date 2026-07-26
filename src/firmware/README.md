@@ -55,8 +55,8 @@ src/firmware/
 | `0x00000000–0x0000FFFF` | 64 KiB | **Boot ROM** — firmware binary |
 | `0x00010000–0x0002FFFF` | 64 KiB | **RAM** — stack, BSS, initialized data |
 | `0x10000000` | 4 B | **LED GPIO** |
-| `0x10001000` | 12 B | **UART0** |
 | `0x10005000` | 32 B | **I2C0** |
+| `0x10006000` | 32 B | **NodeNet485** (RS-485 @ 1 Mb/s) |
 | `0x20000000–0x207FFFFF` | 8 MB | **SDRAM** (external, available after ~200 µs) |
 
 ---
@@ -75,63 +75,120 @@ LED ^= 1;   // Toggle
 
 ---
 
-### UART0 (`0x10001000`)
+### NodeNet485 (`0x10006000`) — Multi-Node RS-485
 
-16-byte RX and TX FIFOs. Default baud: `prescale=27` ≈ 115200 @ 25 MHz.
+The NodeNet485 protocol provides reliable multi-node communication over RS-485 at 1 Mb/s. Full API in `include/nodenet.h`.
 
 ```cpp
-#define UART0_DATA   (*(volatile uint32_t*)0x10001000)
-#define UART0_STATUS (*(volatile uint32_t*)0x10001004)
-#define UART0_BAUD   (*(volatile uint32_t*)0x10001008)
+#include "nodenet.h"
 
-// Status bits
-#define UART_RX_EMPTY (1u << 0)
-#define UART_RX_FULL  (1u << 1)
-#define UART_TX_EMPTY (1u << 2)
-#define UART_TX_FULL  (1u << 3)
-#define UART_RX_OVERRUN  (1u << 4)
-#define UART_RX_FRAMEERR (1u << 5)
-
-void uart_init(uint16_t prescale) {
-    UART0_BAUD = prescale;          // 27 → ~115200 baud @ 25 MHz
+// Initialize node address 0x01 with NORMAL priority
+static inline void nodenet0_init(uint8_t my_addr, NodeNetPriority priority) {
+    volatile uint32_t *cfg = (volatile uint32_t *)0x10006010;
+    *cfg = (my_addr << 0) | (NODENET_PRIORITY_NORMAL << 8) | (250000000 << 10);
 }
 
-void uart_putc(char c) {
-    while (UART0_STATUS & UART_TX_FULL);
-    UART0_DATA = c;
-}
+// Send unicast message to node 0x02
+static inline void nodenet0_send(uint8_t dst, const uint8_t *data, uint16_t len);
+static inline void nodenet0_send(uint8_t dst, const char *str);  // C-string variant
 
-void uart_puts(const char *s) {
-    while (*s) {
-        if (*s == '\n') uart_putc('\r');
-        uart_putc(*s++);
-    }
-}
+// Send broadcast alert
+static inline void nodenet0_broadcast(const uint8_t *data, uint16_t len);
+static inline void nodenet0_broadcast(const char *str);  // C-string variant
 
-char uart_getc(void) {
-    while (UART0_STATUS & UART_RX_EMPTY);
-    return (char)(UART0_DATA & 0xFF);
-}
+// Poll for incoming messages
+static inline bool nodenet0_has_message();
+static inline uint8_t nodenet0_message_count();
 
-bool uart_available(void) {
-    return !(UART0_STATUS & UART_RX_EMPTY);
-}
+// Read and process message
+struct NodeNetMessage {
+    uint8_t src_addr;
+    uint16_t len;
+    uint8_t *data;  // Dynamically allocated
+};
 
-// Echo loop example
-void uart_echo_loop(void) {
-    uart_init(27);
-    uart_puts("Ready\n");
-    for (;;) {
-        if (uart_available()) {
-            char c = uart_getc();
-            uart_putc(c);
+static inline NodeNetMessage nodenet0_read();
+static inline void nodenet0_free_message(NodeNetMessage msg);
+
+// Priority levels
+enum NodeNetPriority {
+    NODENET_PRIORITY_LOW = 0,
+    NODENET_PRIORITY_NORMAL = 1,
+    NODENET_PRIORITY_HIGH = 2
+};
+```
+
+**Echo Loop Example**:
+
+```cpp
+int main() {
+    // Initialize as node 0x01
+    nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
+    
+    // Listen for messages and echo back
+    while (1) {
+        if (nodenet0_has_message()) {
+            NodeNetMessage msg = nodenet0_read();
+            
+            // Echo unicast messages back to sender
+            if (msg.src_addr != 0) {  // Don't echo broadcasts
+                nodenet0_send(msg.src_addr, msg.data, msg.len);
+            }
+            
+            nodenet0_free_message(msg);
         }
-        // Clear error flags (sticky, write 1 to clear)
-        if (UART0_STATUS & (UART_RX_OVERRUN | UART_RX_FRAMEERR))
-            UART0_STATUS = UART_RX_OVERRUN | UART_RX_FRAMEERR;
     }
 }
 ```
+
+**Multi-Node Example** (node 0x01 queries node 0x02):
+
+```cpp
+int main() {
+    nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
+    
+    // Send request to node 0x02
+    nodenet0_send(0x02, "STATUS?", 7);
+    
+    // Wait for response (timeout = 1 second)
+    uint32_t deadline = get_cycles() + 25_000_000;
+    while (1) {
+        if (nodenet0_has_message()) {
+            NodeNetMessage msg = nodenet0_read();
+            
+            if (msg.src_addr == 0x02) {
+                // Got response from node 0x02
+                process_response(msg.data, msg.len);
+                nodenet0_free_message(msg);
+                break;
+            }
+            
+            nodenet0_free_message(msg);
+        }
+        
+        if (get_cycles() > deadline) {
+            // Timeout
+            break;
+        }
+    }
+}
+```
+
+**Protocol Details**:
+- **Baud Rate**: 1 Mb/s (25-cycle divisor @ 25 MHz)
+- **Encoding**: Nibble-parity (2× payload size)
+- **CRC**: XOR of all bytes
+- **Anti-Collision**: Auto-backoff per node address (50ms/addr broadcast, 2ms/addr unicast)
+- **Heartbeat**: ~10 seconds (configurable)
+- **Max Payload**: 2048 bytes (configurable)
+
+For full protocol specification, see [../src/wbDevices/README_NODENET.md](../src/wbDevices/README_NODENET.md).
+
+---
+
+### UART0 Removed
+
+**Note**: UART0 has been replaced by NodeNet485 at address `0x10006000`. The hardware pins (H16/H17) are now used for RS-485 communication instead of direct UART. If you need serial debugging, consider using I2C + a USB bridge adapter, or add a separate debug UART on unused pins.
 
 ---
 

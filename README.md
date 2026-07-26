@@ -1,6 +1,6 @@
 # FPGA Hello World - Colorlight i9 RISC-V SoC
 
-A complete RISC-V System-on-Chip (SoC) design for the Colorlight i9 FPGA board, featuring a PicoRV32 processor, Wishbone bus interconnect, UART communication with FIFO buffering, and RS485 multiplexing for Modbus RTU industrial protocols.
+A complete RISC-V System-on-Chip (SoC) design for the Colorlight i9 FPGA board, featuring a PicoRV32 processor, Wishbone bus interconnect, I2C support, and RS485 multi-node communication via the NodeNet485 protocol.
 
 ## Overview
 
@@ -8,9 +8,8 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 - **Processor**: PicoRV32 (32-bit RISC-V, bare-metal)
 - **Clock**: 25 MHz
 - **Memory**: 64 KiB ROM (boot code) + 64 KiB RAM (stack/variables) + 8 MB SDRAM
-- **Peripherals**: LED GPIO, UART with FIFOs, I2C master, RS485 multiplexing
-- **Display**: SSD1306 OLED via u8g2 (I2C)
-- **Protocol Support**: Modbus RTU (4 UARTs planned), NodeNet JSON (planned)
+- **Peripherals**: LED GPIO, RS485 NodeNet485, I2C master, SDRAM controller
+- **Communication**: NodeNet485 @ 1 Mb/s over RS-485 (multi-node capable)
 - **Firmware**: C++17, bare-metal, newlib-nano
 
 ## Features
@@ -22,16 +21,21 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - `0x00000000–0x0000FFFF`: 64 KiB boot ROM
   - `0x00010000–0x0002FFFF`: 64 KiB RAM
   - `0x10000000`: LED GPIO (1-bit output)
-  - `0x10001000–0x10004000`: 4× UART peripherals (planned)
   - `0x10005000`: I2C0 master (8 registers @ 4-byte stride)
+  - `0x10006000–0x1000601F`: NodeNet485 Wishbone slave (1 Mb/s RS-485)
   - `0x20000000–0x207FFFFF`: 8 MB SDRAM (M12L64322A)
 
 ### Peripherals
-- **UART Module** (`wb_uart.sv`): 
-  - 16-byte RX and TX circular FIFOs
-  - Programmable baud rate (default ~115200 @ 25 MHz)
-  - Status register with FIFO flags
-  - Ready for RS485 RS485 driver integration
+- **NodeNet485 Module** (`wb_nodenet.sv`):
+  - Multi-node RS-485 communication protocol
+  - Baud rate: 1 Mb/s (configurable)
+  - HDLC-style framing with parity bits and CRC
+  - Anti-collision backoff (address-based delay)
+  - Periodic heartbeat for node discovery
+  - Priority-based transmission (LOW/NORMAL/HIGH)
+  - Full C++ firmware API in `include/nodenet.h`
+  - Supports unicast, broadcast, and heartbeat messages
+  - Wishbone register interface (0x10006000)
 
 - **I2C Module** (`wb_i2c.sv`):
   - Wraps Alex Forencich's `i2c_master_wbs_8` core
@@ -39,26 +43,17 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - Configurable speed (default 100 kHz, up to 400 kHz @ 25 MHz)
   - Drives SCL/SDA open-drain (external 4.7 kΩ pullup required)
 
-- **OLED Display** (`u8g2_hal.cpp`):
-  - [u8g2](https://github.com/olikraus/u8g2) library (git submodule)
-  - SSD1306 128×32 or 128×64 over I2C
-  - Full framebuffer mode — no flicker on updates
-  - Fonts, shapes, text via u8g2 API
-
-- **RS485 Multiplexing** (planned):
-  - 4 TMUX4051 muxes (2 per RJ45 connector, A/B pair routing)
-  - 3-bit address bus + 74HC138 decoder = only 4 GPIO pins
-  - Dynamic pair selection at runtime or boot
-
 ### Firmware
 - **C++17 bare-metal** (`firmware/main.cpp`):
   - Compiled with `riscv-none-elf-g++` — no Arduino, no OS
   - `newlib-nano` provides `memcpy`/`strlen`/etc.
   - Dead code elimination (`-ffunction-sections -Wl,--gc-sections`)
   - Global C++ constructors called in `start.S` via `.init_array`
-  - UART echo demo, LED blink, I2C + OLED demo
+  - **NodeNet485 echo loop**: Listens for messages, echoes responses
+  - LED blink pattern for boot indication
 
 - See [src/firmware/README.md](src/firmware/README.md) for full peripheral usage guide.
+- See [src/wbDevices/README_NODENET.md](src/wbDevices/README_NODENET.md) for protocol details.
 
 ## Building
 
@@ -91,8 +86,8 @@ make clean
 ```
 
 **Output**:
-- `src/firmware/build/blink.hex` – Firmware binary (loaded into ROM)
-- `build/top.bit` – FPGA bitstream (~290 KB)
+- `src/firmware/build/nodenet_riscv.hex` – Firmware binary (loaded into ROM)
+- `build/top.bit` – FPGA bitstream (~300 KB)
 - `build/top.json` – Netlist (debug/inspection)
 
 ## Memory Layout

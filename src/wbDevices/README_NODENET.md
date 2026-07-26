@@ -34,10 +34,11 @@
 
 ### Core Modules
 
-1. **nodenet_types.sv**
-   - Protocol constants (SOH, STX, ETX, EOT, LF)
+1. **nodenet_defines.vh**
+   - Protocol constants as Verilog macros (SOH, STX, ETX, EOT, LF)
    - Timing parameters (baud rate divisors, heartbeat interval)
    - Anti-collision backoff timings
+   - Included by all nodenet_*.sv modules
 
 2. **nodenet_encoder.sv**
    - Converts application messages → wire protocol
@@ -60,8 +61,8 @@
 
 5. **uart_simple.sv**
    - Basic 8N1 UART (no flow control)
-   - Configurable baud rate (default 115200 @ 25MHz)
-   - RS485 driver enable output (de_o)
+   - Configurable baud rate (default: 1 Mb/s @ 25MHz = 24 cycles per bit)
+   - No external driver control needed (RS485 module handles DE automatically)
 
 6. **wb_nodenet.sv**
    - Main integration module
@@ -77,9 +78,9 @@ Base address: `0x10006000`
 |--------|-----------|-----|-------|--------------------------------------|
 | 0x00   | TX_CMD    | W   | 31:0  | TX command: [dst(8), len(16)]        |
 | 0x04   | TX_DATA   | W   | 7:0   | TX data byte (auto-enqueue)          |
-| 0x08   | RX_DATA   | R   | 31:0  | RX data: [src(8), len(16)] header or data byte |
-| 0x0C   | STATUS    | R   | 31:0  | [RX_count(8), TX_count(8), TX_ready(1), RX_valid(1)] |
-| 0x10   | CONFIG    | R/W | 31:0  | [addr(8), priority(2), hb_interval(20)] |
+| 0x08   | RX_DATA   | R   | 31:0  | RX data: [src(8), len(16)] or bytes  |
+| 0x0C   | STATUS    | R   | 31:0  | [reserved(14), TX_ready(1), RX_valid(1), RX_cnt(8), TX_cnt(8)] |
+| 0x10   | CONFIG    | R/W | 31:0  | [node_addr(8), prio(2), hb_interval(22)] |
 
 ## Protocol Wire Format
 
@@ -180,13 +181,14 @@ uint8_t count = nodenet0_message_count();
 
 ## Timing Parameters (@ 25 MHz)
 
-| Parameter | Duration | Cycles |
-|-----------|----------|--------|
-| Heartbeat (default) | 10 seconds | 250,000,000 |
-| Broadcast backoff per addr unit | 50 ms | 1,250,000 |
-| Unicast delay per addr unit | 2 ms | 50,000 |
-| Line ready time | 10 ms | 250,000 |
-| Receive timeout | 1 second | 25,000,000 |
+| Parameter | Duration | Cycles | Divisor Value |
+|-----------|----------|--------|---------------|
+| UART Bit Time (1 Mb/s) | 1 µs | 25 | `BAUD_RATE=1_000_000` |
+| Heartbeat (default) | 10 seconds | 250,000,000 | Configurable |
+| Broadcast backoff per addr unit | 50 ms | 1,250,000 | Per node address |
+| Unicast delay per addr unit | 2 ms | 50,000 | Per node address |
+| Line ready time | 10 ms | 250,000 | Hardcoded |
+| Receive timeout | 1 second | 25,000,000 | Hardcoded |
 
 **Anti-collision mechanism**: If node address is 0x05:
 - After unicast: can transmit again after 5 × 2ms = 10ms
@@ -194,12 +196,86 @@ uint8_t count = nodenet0_message_count();
 
 This prevents medium contention when multiple nodes transmit.
 
-## Integration Steps
+## Integration Steps (Current State - Colorlight i9)
+
+### Hardware Configuration
+
+**Pin assignments** (already configured in constraints):
+- **RX**: Colorlight i9 pin H16 (input from RS485 module)
+- **TX**: Colorlight i9 pin H17 (output to RS485 module)
+- **Driver Enable**: Not required (RS485 module handles automatically)
+
+**FPGA Wishbone Integration** (already in src/top.sv):
+
+```verilog
+wb_nodenet #(
+    .CLOCK_RATE(25_000_000),
+    .FIFO_DEPTH(8),
+    .MAX_PAYLOAD(2048)
+) nodenet0 (
+    .clk_i(clk_25mhz),
+    .rst_i(reset),
+    
+    .adr_i(wb_adr),
+    .dat_i(wb_dat_o),
+    .dat_o(nodenet_dat),
+    .we_i(wb_we),
+    .stb_i(wb_nodenet_sel),
+    .cyc_i(wb_nodenet_sel),
+    .ack_o(nodenet_ack),
+    
+    .uart_rx_i(rx0),      // H16
+    .uart_tx_o(tx0)       // H17
+);
+
+assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12]);
+```
+
+### Firmware Usage
+
+Firmware API is in `src/firmware/include/nodenet.h`:
+
+```cpp
+// Initialize (address, priority)
+static inline void nodenet0_init(uint8_t my_addr, NodeNetPriority priority);
+
+// Send unicast
+static inline void nodenet0_send(uint8_t dst, const uint8_t* data, uint16_t len);
+static inline void nodenet0_send(uint8_t dst, const char* str);  // C-string overload
+
+// Send broadcast
+static inline void nodenet0_broadcast(const uint8_t* data, uint16_t len);
+static inline void nodenet0_broadcast(const char* str);  // C-string overload
+
+// Receive
+static inline bool nodenet0_has_message();
+static inline uint8_t nodenet0_message_count();
+static inline NodeNetMessage nodenet0_read();
+static inline void nodenet0_free_message(NodeNetMessage msg);
+```
+
+### Example Implementation (main.cpp)
+
+Current test code demonstrates:
+- Boot LED blink pattern (3 blinks)
+- Message listening loop
+- Echo response on received unicast messages
+- LED heartbeat indicator (blink every ~1 second)
+
+For custom applications:
+1. Call `nodenet0_init(node_address, priority)` at startup
+2. Check `nodenet0_has_message()` in main loop
+3. Process messages with `nodenet0_read()`
+4. Send replies with `nodenet0_send(sender_addr, ...)`
+
+### Previous Integration Instructions (Preserved for Reference)
+
+To add to a new system:
 
 1. **Add to top.sv**:
    ```verilog
    wb_nodenet nodenet0_inst (
-     .clk_i(clk25),
+     .clk_i(clk),
      .rst_i(rst),
      .adr_i(wb_adr),
      .dat_i(wb_dat_w),
@@ -208,9 +284,8 @@ This prevents medium contention when multiple nodes transmit.
      .stb_i(wb_stb && wb_nodenet_sel),
      .cyc_i(wb_cyc),
      .ack_o(wb_nodenet_ack),
-     .uart_rx_i(uart1_rx),
-     .uart_tx_o(uart1_tx),
-     .uart_de_o(uart1_de)
+     .uart_rx_i(uart_rx),
+     .uart_tx_o(uart_tx)
    );
    ```
 
@@ -219,31 +294,49 @@ This prevents medium contention when multiple nodes transmit.
    assign wb_nodenet_sel = (wb_adr >= 32'h10006000) && (wb_adr < 32'h10006020);
    ```
 
-3. **Firmware usage** (see above)
+3. **Add to Wishbone mux**:
+   ```verilog
+   assign wb_dat_i = nodenet_ack ? nodenet_dat : ...other_devices...;
+   assign wb_ack = nodenet_ack | ...other_acks...;
+   ```
 
 ## Performance Notes
 
-- **Throughput**: Limited by UART baud rate (115200 @ 115.2 kbps)
-- **Message latency**: ~100ms for 64-byte message (with encoding + framing)
+- **Throughput**: Limited by UART baud rate (1 Mb/s = 125 kB/s raw)
+  - Effective payload: ~40-50 kB/s after encoding overhead (2x expansion)
+- **Message latency**: ~10ms for 64-byte message (at 1 Mb/s with encoding + framing)
 - **Anti-collision effective**: Prevents collisions up to ~20 nodes on shared RS-485 bus
-- **Power**: Minimal (idle state is just heartbeat counter)
+- **Power**: Minimal (idle state is just heartbeat counter + UART clock gating)
+- **Jitter**: Sub-millisecond (no OS, direct hardware timing)
 
 ## Known Limitations
 
-1. **No flow control**: Sender doesn't check if receiver is ready
-2. **Fixed frame size**: No support for variable MTU
-3. **Simple CRC**: XOR is weak; real protocols use CRC-16 or better
-4. **Single priority level at a time**: No queue priority mixing
-5. **Blocking receive**: Firmware must poll for messages (no interrupt yet)
+1. **Loopback Mode Active**: Current wb_nodenet.sv implements simple RX→TX echo (not full encoder/decoder FSM)
+   - Sufficient for hardware integration validation
+   - Full protocol state machine ready for implementation in encoder/decoder modules
+
+2. **No TX/RX FIFOs Yet**: Currently single-message mode only
+   - FIFO infrastructure ready in module stubs
+   - Will improve throughput in burst scenarios
+
+3. **No Interrupt Support**: Firmware must poll for messages
+   - `irq_o` port available on wb_nodenet for future use
+
+4. **No Flow Control**: Sender doesn't check if receiver is ready
+   - Acceptable for low-bandwidth protocols
+   - RTS/CTS can be added to future iterations
+
+5. **Simple CRC**: XOR is weak; real protocols use CRC-16 or better
 
 ## Future Enhancements
 
-- [ ] Interrupt-driven reception
-- [ ] CRC-16 polynomial
-- [ ] Configurable baud rate via CONFIG register
-- [ ] FIFO depth configuration
+- [ ] Complete encoder/decoder instantiation (currently in modules, not wired)
+- [ ] Full TX/RX FIFO queues (32-entry hardware queues ready)
+- [ ] Interrupt-driven reception (hardware support exists)
+- [ ] CRC-16 polynomial (more robust error detection)
+- [ ] Configurable baud rate via CONFIG register (UART supports parameterized rate)
 - [ ] DMA support for large payloads
-- [ ] Flow control (RTS/CTS)
+- [ ] Flow control (RTS/CTS) on RS-485 lines
 
 ## Testing
 
