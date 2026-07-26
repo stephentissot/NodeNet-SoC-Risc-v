@@ -1,18 +1,26 @@
 
 module top (
-    input  wire clk_25mhz,    
-    // led blink test
+    input  wire clk_25mhz,
+    // LED
     output wire led_d2,
-    // For uart0 instance    
+    // UART0
     input  wire rx0,
-    output wire tx0
-
+    output wire tx0,
+    // SDRAM (M12L64322A — CS_N=GND, CKE=VCC, DQM=GND on PCB)
+    output wire        sdram_clk,
+    output wire [10:0] sdram_a,
+    output wire [1:0]  sdram_ba,
+    inout  wire [31:0] sdram_dq,
+    output wire        sdram_ras_n,
+    output wire        sdram_cas_n,
+    output wire        sdram_we_n
 );
 
-    localparam [31:0] ROM_BASE = 32'h00000000;
-    localparam [31:0] RAM_BASE = 32'h00010000;
-    localparam [31:0] LED_ADDR = 32'h10000000;
-    localparam [31:0] UART0_BASE = 32'h10001000;
+    localparam [31:0] ROM_BASE   = 32'h0000_0000;
+    localparam [31:0] RAM_BASE   = 32'h0001_0000;
+    localparam [31:0] LED_ADDR   = 32'h1000_0000;
+    localparam [31:0] UART0_BASE = 32'h1000_1000;
+    localparam [31:0] SDRAM_BASE = 32'h2000_0000;  // 8MB: 0x20000000–0x207FFFFF
 
     wire reset;
     reg [3:0] reset_cnt = 0;
@@ -48,27 +56,32 @@ module top (
     wire        led_ack;
     wire [31:0] uart0_dat;
     wire        uart0_ack;
+    wire [31:0] sdram_dat;
+    wire        sdram_ack;
 
     wire wb_rom_sel;
     wire wb_ram_sel;
     wire wb_led_sel;
     wire wb_uart0_sel;
+    wire wb_sdram_sel;
 
-    assign wb_rom_sel = wb_cyc && wb_stb && (wb_adr[31:16] == ROM_BASE[31:16]);
-    assign wb_ram_sel = wb_cyc && wb_stb && (wb_adr[31:16] == RAM_BASE[31:16]);
-    assign wb_led_sel = wb_cyc && wb_stb && (wb_adr == LED_ADDR);
+    assign wb_rom_sel   = wb_cyc && wb_stb && (wb_adr[31:16] == ROM_BASE[31:16]);
+    assign wb_ram_sel   = wb_cyc && wb_stb && (wb_adr[31:16] == RAM_BASE[31:16]);
+    assign wb_led_sel   = wb_cyc && wb_stb && (wb_adr == LED_ADDR);
     assign wb_uart0_sel = wb_cyc && wb_stb && (wb_adr[31:12] == UART0_BASE[31:12]);
+    assign wb_sdram_sel = wb_cyc && wb_stb && (wb_adr[31:23] == SDRAM_BASE[31:23]);
 
-    assign wb_dat_i = rom_ack ? rom_dat :
-                      ram_ack ? ram_dat :
+    assign wb_dat_i = rom_ack   ? rom_dat   :
+                      ram_ack   ? ram_dat   :
                       uart0_ack ? uart0_dat :
-                      led_ack ? led_dat :
-                      32'h00000000;
-    assign wb_ack = rom_ack | ram_ack | led_ack | uart0_ack;
+                      led_ack   ? led_dat   :
+                      sdram_ack ? sdram_dat :
+                      32'h0000_0000;
+    assign wb_ack = rom_ack | ram_ack | led_ack | uart0_ack | sdram_ack;
     
     //assign led_d2 = wb_cyc;
 
-    wb_led #(
+    wb_gpio #(
         .ADDR(LED_ADDR)
     ) led0
     (
@@ -162,6 +175,32 @@ module top (
 
         .wbs_dat_o(ram_dat),
         .wbs_ack_o(ram_ack)
+    );
+
+    wb_sdram #(
+        .ADDR(SDRAM_BASE),
+        .CLK_FREQ_MHZ(25)
+    ) sdram0 (
+        .clk(clk_25mhz),
+        .rst(reset),
+
+        .wb_adr_i(wb_adr),
+        .wb_dat_i(wb_dat_o),
+        .wb_sel_i(wb_sel),
+        .wb_we_i(wb_we),
+        .wb_cyc_i(wb_sdram_sel),
+        .wb_stb_i(wb_sdram_sel),
+
+        .wb_dat_o(sdram_dat),
+        .wb_ack_o(sdram_ack),
+
+        .sdram_clk(sdram_clk),
+        .sdram_a(sdram_a),
+        .sdram_ba(sdram_ba),
+        .sdram_dq(sdram_dq),
+        .sdram_ras_n(sdram_ras_n),
+        .sdram_cas_n(sdram_cas_n),
+        .sdram_we_n(sdram_we_n)
     );
 
 endmodule
