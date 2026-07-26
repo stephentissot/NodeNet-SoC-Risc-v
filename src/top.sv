@@ -13,13 +13,17 @@ module top (
     inout  wire [31:0] sdram_dq,
     output wire        sdram_ras_n,
     output wire        sdram_cas_n,
-    output wire        sdram_we_n
+    output wire        sdram_we_n,
+    // I2C0 (open-drain, external 4.7 kΩ pullup to 3.3 V required)
+    inout  wire        i2c0_scl,
+    inout  wire        i2c0_sda
 );
 
     localparam [31:0] ROM_BASE   = 32'h0000_0000;
     localparam [31:0] RAM_BASE   = 32'h0001_0000;
     localparam [31:0] LED_ADDR   = 32'h1000_0000;
     localparam [31:0] UART0_BASE = 32'h1000_1000;
+    localparam [31:0] I2C0_BASE  = 32'h1000_5000;  // 4 KB page, 8 regs @ +0x00..+0x1C
     localparam [31:0] SDRAM_BASE = 32'h2000_0000;  // 8MB: 0x20000000–0x207FFFFF
 
     wire reset;
@@ -56,6 +60,8 @@ module top (
     wire        led_ack;
     wire [31:0] uart0_dat;
     wire        uart0_ack;
+    wire [31:0] i2c0_dat;
+    wire        i2c0_ack;
     wire [31:0] sdram_dat;
     wire        sdram_ack;
 
@@ -63,21 +69,24 @@ module top (
     wire wb_ram_sel;
     wire wb_led_sel;
     wire wb_uart0_sel;
+    wire wb_i2c0_sel;
     wire wb_sdram_sel;
 
     assign wb_rom_sel   = wb_cyc && wb_stb && (wb_adr[31:16] == ROM_BASE[31:16]);
     assign wb_ram_sel   = wb_cyc && wb_stb && (wb_adr[31:16] == RAM_BASE[31:16]);
     assign wb_led_sel   = wb_cyc && wb_stb && (wb_adr == LED_ADDR);
     assign wb_uart0_sel = wb_cyc && wb_stb && (wb_adr[31:12] == UART0_BASE[31:12]);
+    assign wb_i2c0_sel  = wb_cyc && wb_stb && (wb_adr[31:12] == I2C0_BASE[31:12]);
     assign wb_sdram_sel = wb_cyc && wb_stb && (wb_adr[31:23] == SDRAM_BASE[31:23]);
 
     assign wb_dat_i = rom_ack   ? rom_dat   :
                       ram_ack   ? ram_dat   :
                       uart0_ack ? uart0_dat :
+                      i2c0_ack  ? i2c0_dat  :
                       led_ack   ? led_dat   :
                       sdram_ack ? sdram_dat :
                       32'h0000_0000;
-    assign wb_ack = rom_ack | ram_ack | led_ack | uart0_ack | sdram_ack;
+    assign wb_ack = rom_ack | ram_ack | led_ack | uart0_ack | i2c0_ack | sdram_ack;
     
     //assign led_d2 = wb_cyc;
 
@@ -201,6 +210,27 @@ module top (
         .sdram_ras_n(sdram_ras_n),
         .sdram_cas_n(sdram_cas_n),
         .sdram_we_n(sdram_we_n)
+    );
+
+    wb_i2c #(
+        .ADDR            (I2C0_BASE),
+        .DEFAULT_PRESCALE(16'd62)   // 100 kHz @ 25 MHz
+    ) i2c0 (
+        .clk      (clk_25mhz),
+        .rst      (reset),
+
+        .wb_adr_i (wb_adr),
+        .wb_dat_i (wb_dat_o),
+        .wb_sel_i (wb_sel),
+        .wb_we_i  (wb_we),
+        .wb_cyc_i (wb_i2c0_sel),
+        .wb_stb_i (wb_i2c0_sel),
+
+        .wb_dat_o (i2c0_dat),
+        .wb_ack_o (i2c0_ack),
+
+        .i2c_scl  (i2c0_scl),
+        .i2c_sda  (i2c0_sda)
     );
 
 endmodule

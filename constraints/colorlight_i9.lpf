@@ -91,3 +91,7 @@ LOCATE COMP "rx0" SITE "H16";
 IOBUF PORT "rx0" IO_TYPE=LVCMOS33;
 LOCATE COMP "tx0" SITE "H17";
 IOBUF PORT "tx0" IO_TYPE=LVCMOS33;
+
+# I2C0 — pmodg[0..1] on Colorlight i9 (external 4.7 kΩ pullup to 3.3 V required)
+LOCATE COMP "i2c0_scl" SITE "H4"; IOBUF PORT "i2c0_scl" IO_TYPE=LVCMOS33;
+LOCATE COMP "i2c0_sda" SITE "G3"; IOBUF PORT "i2c0_sda" IO_TYPE=LVCMOS33;
