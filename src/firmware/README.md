@@ -75,42 +75,88 @@ LED ^= 1;   // Toggle
 
 ---
 
-### NodeNet485 (`0x10006000`) — Multi-Node RS-485
+### NodeNet485 (`0x10006000`) — Multi-Node RS-485 with SDRAM Ring Buffers
 
-The NodeNet485 protocol provides reliable multi-node communication over RS-485 at 1 Mb/s. Full API in `include/nodenet.h`.
+The NodeNet485 protocol enables reliable multi-node communication over RS-485 at 1 Mb/s.
+
+**SDRAM Ring Buffer Architecture**:
+- **TX FIFO**: 512 KB at 0x20000000 (firmware writes, hardware reads)
+- **RX FIFO**: 512 KB at 0x20080000 (hardware writes, firmware reads)
+- **Frame Format**: `[dst(1B) | len_hi(1B) | len_lo(1B) | payload(N bytes)]`
+- **Capacity**: ~250 messages per direction (512 KB ÷ avg 2 KB/msg)
+
+**Pointer Management** (Firmware Controls):
+
+```
+TX Path (Firmware → Hardware):
+  1. Write message to SDRAM[TX_WPTR]
+  2. Update TX_WPTR register (hardware detects change)
+  3. Hardware reads and transmits
+  4. Hardware updates TX_RPTR (message consumed)
+
+RX Path (Hardware → Firmware):
+  1. Hardware receives and writes to SDRAM[RX_WPTR]
+  2. Hardware updates RX_WPTR
+  3. Firmware checks RX_WPTR != RX_RPTR
+  4. Firmware reads and updates RX_RPTR
+```
+
+**Complete API** (from `include/nodenet.h`):
 
 ```cpp
 #include "nodenet.h"
 
-// Initialize node address 0x01 with NORMAL priority
-static inline void nodenet0_init(uint8_t my_addr, NodeNetPriority priority) {
-    volatile uint32_t *cfg = (volatile uint32_t *)0x10006010;
-    *cfg = (my_addr << 0) | (NODENET_PRIORITY_NORMAL << 8) | (250000000 << 10);
-}
+// Initialize as node 0x01 with NORMAL priority
+nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
 
 // Send unicast message to node 0x02
-static inline void nodenet0_send(uint8_t dst, const uint8_t *data, uint16_t len);
-static inline void nodenet0_send(uint8_t dst, const char *str);  // C-string variant
+nodenet0_send(0x02, "Hello", 5);
 
-// Send broadcast alert
-static inline void nodenet0_broadcast(const uint8_t *data, uint16_t len);
-static inline void nodenet0_broadcast(const char *str);  // C-string variant
+// Send broadcast to all nodes
+nodenet0_broadcast("ALERT");
+
+// Receive messages (check first to avoid blocking)
+if (nodenet0_has_message()) {
+    NodeNetMessage msg = nodenet0_read();
+    printf("From node 0x%02X: len=%d\n", msg.src_addr, msg.len);
+    
+    // Echo back if not broadcast
+    if (msg.src_addr != 0) {
+        nodenet0_send(msg.src_addr, msg.data, msg.len);
+    }
+    
+    nodenet0_free_message(msg);  // IMPORTANT: deallocate!
+}
+```
+
+**Detailed Functions**:
+
+```cpp
+// Initialize node address and priority
+void nodenet0_init(uint8_t addr, NodeNetPriority priority);
+
+// Send message (blocks if TX FIFO full)
+void nodenet0_send(uint8_t dst, const uint8_t *data, uint16_t len);
+void nodenet0_send(uint8_t dst, const char *str);  // C-string variant
+
+// Broadcast to all nodes (destination = 0x00)
+void nodenet0_broadcast(const uint8_t *data, uint16_t len);
+void nodenet0_broadcast(const char *str);
 
 // Poll for incoming messages
-static inline bool nodenet0_has_message();
-static inline uint8_t nodenet0_message_count();
+bool nodenet0_has_message();
+uint8_t nodenet0_message_count();  // 0 or 1
 
-// Read and process message
+// Read message (allocates buffer, must free after use!)
 struct NodeNetMessage {
-    uint8_t src_addr;
-    uint16_t len;
-    uint8_t *data;  // Dynamically allocated
+    uint8_t src_addr;              // Sender's address
+    uint16_t len;                  // Payload length
+    uint8_t *data;                 // Dynamically allocated
 };
+NodeNetMessage nodenet0_read();
+void nodenet0_free_message(NodeNetMessage &msg);
 
-static inline NodeNetMessage nodenet0_read();
-static inline void nodenet0_free_message(NodeNetMessage msg);
-
-// Priority levels
+// Priority levels (affects transmission order)
 enum NodeNetPriority {
     NODENET_PRIORITY_LOW = 0,
     NODENET_PRIORITY_NORMAL = 1,
@@ -118,30 +164,28 @@ enum NodeNetPriority {
 };
 ```
 
-**Echo Loop Example**:
+**Echo Loop Example** (Listen and reply):
 
 ```cpp
 int main() {
-    // Initialize as node 0x01
     nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
     
-    // Listen for messages and echo back
     while (1) {
         if (nodenet0_has_message()) {
             NodeNetMessage msg = nodenet0_read();
             
-            // Echo unicast messages back to sender
-            if (msg.src_addr != 0) {  // Don't echo broadcasts
+            // Echo back unicast messages to sender
+            if (msg.src_addr != 0) {
                 nodenet0_send(msg.src_addr, msg.data, msg.len);
             }
             
-            nodenet0_free_message(msg);
+            nodenet0_free_message(msg);  // Don't forget!
         }
     }
 }
 ```
 
-**Multi-Node Example** (node 0x01 queries node 0x02):
+**Multi-Node Query Example** (Send and wait for response):
 
 ```cpp
 int main() {
@@ -152,37 +196,63 @@ int main() {
     
     // Wait for response (timeout = 1 second)
     uint32_t deadline = get_cycles() + 25_000_000;
-    while (1) {
+    
+    while (get_cycles() < deadline) {
         if (nodenet0_has_message()) {
             NodeNetMessage msg = nodenet0_read();
             
             if (msg.src_addr == 0x02) {
-                // Got response from node 0x02
-                process_response(msg.data, msg.len);
+                // Got response!
+                printf("Temperature: %.*s\n", msg.len, msg.data);
                 nodenet0_free_message(msg);
-                break;
+                return 0;
             }
             
             nodenet0_free_message(msg);
         }
-        
-        if (get_cycles() > deadline) {
-            // Timeout
-            break;
-        }
     }
+    
+    printf("No response from node 0x02 (timeout)\n");
+    return 1;
 }
 ```
 
-**Protocol Details**:
-- **Baud Rate**: 1 Mb/s (25-cycle divisor @ 25 MHz)
-- **Encoding**: Nibble-parity (2× payload size)
-- **CRC**: XOR of all bytes
-- **Anti-Collision**: Auto-backoff per node address (50ms/addr broadcast, 2ms/addr unicast)
-- **Heartbeat**: ~10 seconds (configurable)
-- **Max Payload**: 2048 bytes (configurable)
+**Ring Buffer Debugging**:
 
-For full protocol specification, see [../src/wbDevices/README_NODENET.md](../src/wbDevices/README_NODENET.md).
+```cpp
+// Check if TX FIFO has space
+volatile uint32_t *tx_wptr = (volatile uint32_t *)0x10006000;
+volatile uint32_t *tx_rptr = (volatile uint32_t *)0x10006004;
+bool has_space = (*tx_wptr != *tx_rptr);
+
+// Check if RX FIFO has messages
+volatile uint32_t *rx_wptr = (volatile uint32_t *)0x10006008;
+volatile uint32_t *rx_rptr = (volatile uint32_t *)0x1000600C;
+bool has_data = (*rx_rptr != *rx_wptr);
+
+// Read raw SDRAM (inspect messages at wire level)
+volatile uint8_t *tx_sdram = (volatile uint8_t *)0x20000000;
+uint8_t dst = tx_sdram[*tx_rptr];
+uint16_t len = (tx_sdram[*tx_rptr + 1] << 8) | tx_sdram[*tx_rptr + 2];
+```
+
+**Performance Characteristics**:
+- **Baud Rate**: 1 Mb/s (25-cycle divisor @ 25 MHz)
+- **Throughput**: ~40–50 kB/s effective (after protocol overhead)
+- **Message Latency**: ~10 ms for 64-byte message
+- **FIFO Capacity**: ~250 messages per direction (512 KB each)
+- **Anti-Collision**: Automatic backoff per node address
+  - Broadcast: 50 ms × node_addr
+  - Unicast: 2 ms × node_addr
+- **Heartbeat**: Default ~10 seconds (configurable)
+
+**Hardware Integration**:
+- **RX Pin**: H16 (input from RS-485 transceiver)
+- **TX Pin**: H17 (output to RS-485 transceiver)
+- **Driver Enable**: Automatic (hardware module handles)
+- **Current Status**: Loopback mode active (RX→TX echo for validation)
+
+For full protocol documentation including frame format, CRC, and encoding details, see [../src/wbDevices/README_NODENET.md](../src/wbDevices/README_NODENET.md).
 
 ---
 

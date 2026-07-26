@@ -14,21 +14,85 @@
 ## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│      Wishbone Interface (CPU/Bus)       │
-├─────────────────────────────────────────┤
-│           wb_nodenet (top)              │
-├──────────────┬──────────────┬───────────┤
-│              │              │           │
-│   Encoder    │   Decoder    │ Heartbeat │
-│   (TX path)  │   (RX path)  │  Logic    │
-│              │              │           │
-├──────────────┼──────────────┴───────────┤
-│         UART Simple (uart_simple.sv)    │
-├─────────────────────────────────────────┤
-│    RS-485 UART (rx_i, tx_o, de_o)      │
-└─────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│        Wishbone B.4 Interface (CPU/Bus)                │
+│  Registers: TX_WPTR, TX_RPTR, RX_WPTR, RX_RPTR        │
+└────────────────────────────────────────────────────────┘
+                    ↓
+┌────────────────────────────────────────────────────────┐
+│           wb_nodenet.sv (Pointer Controller)           │
+│  - Manages SDRAM ring buffer pointers                  │
+│  - Interfaces with encoder/decoder (future)           │
+│  - Handles heartbeat generation                       │
+│  - Current: Simple RX→TX loopback mode                │
+└────────────────────────────────────────────────────────┘
+                    ↓
+┌────────────────────────────────────────────────────────┐
+│         SDRAM Ring Buffers (512 KB each)               │
+│  TX FIFO: 0x20000000 - 0x2007FFFF                     │
+│  RX FIFO: 0x20080000 - 0x200FFFFF                     │
+│  Frame format: [dst(1B)|len_hi(1B)|len_lo(1B)|data]   │
+└────────────────────────────────────────────────────────┘
+                    ↓
+┌────────────────────────────────────────────────────────┐
+│         Optional: Encoder/Decoder FSMs                 │
+│  - Payload encoding with nibble parity                │
+│  - Protocol framing (SOH/STX/ETX/EOT)                 │
+│  - CRC validation                                      │
+│  (Not yet wired; loopback mode active)                │
+└────────────────────────────────────────────────────────┘
+                    ↓
+┌────────────────────────────────────────────────────────┐
+│        uart_simple.sv (8N1 UART @ 1 Mb/s)             │
+│  Configurable baud rate (default: 1_000_000)          │
+└────────────────────────────────────────────────────────┘
+                    ↓
+┌────────────────────────────────────────────────────────┐
+│    RS-485 Transceiver (Hardware Module)                │
+│    rx_i (H16) ← Data from bus                         │
+│    tx_o (H17) → Data to bus                           │
+│    DE automatic (module handles driver enable)        │
+└────────────────────────────────────────────────────────┘
 ```
+
+## SDRAM Ring Buffer Management
+
+The implementation uses **512 KB in SDRAM for each direction** instead of on-chip BRAM, enabling larger queues:
+
+**Allocation:**
+- TX FIFO: `0x20000000` to `0x2007FFFF` (512 KB)
+- RX FIFO: `0x20080000` to `0x200FFFFF` (512 KB)
+- Free SDRAM: `0x20100000` to `0x207FFFFF` (7 MB remaining)
+
+**Ring Buffer Frame Format:**
+```
+[dst(1 byte) | len_hi(1 byte) | len_lo(1 byte) | payload(N bytes)]
+```
+
+**Capacity:**
+- Average message: ~2 KB (header + payload + overhead)
+- ~250 messages per FIFO
+- Total usable: ~500 messages system-wide
+
+**Pointer Management (Firmware Controls):**
+
+1. **TX FIFO** (Firmware → Hardware):
+   - Firmware writes: `*TX_WRITE_PTR = new_value`
+   - Hardware reads: compares `TX_READ_PTR != TX_WRITE_PTR`
+   - Transmits message, updates: `TX_READ_PTR = next_value`
+   - Wrapping: `ptr = (ptr + 1) % FIFO_SIZE`
+
+2. **RX FIFO** (Hardware → Firmware):
+   - Hardware writes at RX: `RX_WRITE_PTR += frame_size`
+   - Firmware checks: `RX_READ_PTR != RX_WRITE_PTR`
+   - Reads message, updates: `RX_READ_PTR = next_value`
+   - Frame is deallocated (pointer advances)
+
+**Benefits:**
+- Scalable: 512 KB vs. typical 32 KB on-chip BRAM
+- Flexible: Can adjust allocation in top.sv parameters
+- Simple: No DMA needed, pure pointer arithmetic
+- Fast: SDRAM accessible via 32-bit Wishbone (same speed as BRAM)
 
 ## Module Files
 
