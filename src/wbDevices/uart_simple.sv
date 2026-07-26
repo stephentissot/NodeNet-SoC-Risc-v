@@ -9,7 +9,7 @@
 
 module uart_simple #(
   parameter CLOCK_RATE = 25_000_000,
-  parameter BAUD_RATE = 115200
+  parameter BAUD_RATE = 1_000_000  // NodeNet485: 1 Mb/s
 ) (
   input wire clk,
   input wire rst_n,

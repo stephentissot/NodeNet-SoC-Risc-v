@@ -1,17 +1,9 @@
 /**
  * @file nodenet_decoder.sv
  * @brief NodeNet485 Protocol Decoder
- * 
- * Byte-by-byte reception and decoding:
- * 1. Searches for SOH marker
- * 2. Parses header (DST, SRC, LEN)
- * 3. Accumulates payload with nibble parity checking
- * 4. Validates CRC on ETX
- * 5. Filters by destination (my address or broadcast 0)
- * 6. Outputs decoded message to RX FIFO
  */
 
-`include "nodenet_types.sv"
+`include "src/wbDevices/nodenet_defines.vh"
 
 module nodenet_decoder (
   input wire clk,
@@ -64,7 +56,7 @@ module nodenet_decoder (
   
   // Timeout counter
   reg [31:0] timeout_counter;
-  wire timeout = (timeout_counter > nodenet_types::RECEIVE_TIMEOUT_CYCLES);
+  wire timeout = (timeout_counter > `NODENET_RECEIVE_TIMEOUT_CYCLES);
   
   assign rx_timeout_o = timeout && (state != IDLE);
   assign error_o = 1'b0;  // TODO: add error flags
@@ -96,7 +88,7 @@ module nodenet_decoder (
         
         case (state)
           IDLE: begin
-            if (rx_byte_i == nodenet_types::SOH) begin
+            if (rx_byte_i == `NODENET_SOH) begin
               state <= RX_DST;
               crc <= 8'b0;
             end
@@ -125,11 +117,11 @@ module nodenet_decoder (
           end
           
           WAIT_STX: begin
-            if (rx_byte_i == nodenet_types::STX) begin
+            if (rx_byte_i == `NODENET_STX) begin
               first_nibble <= 1'b1;
               state <= RX_PAYLOAD;
             end
-            else if (rx_byte_i == nodenet_types::EOT) begin
+            else if (rx_byte_i == `NODENET_EOT) begin
               // Heartbeat: no payload
               msg_src_addr_o <= src;
               msg_len_o <= 16'b0;
@@ -158,7 +150,7 @@ module nodenet_decoder (
                 end
               end
             end
-            else if (rx_byte_i == nodenet_types::ETX && payload_idx == payload_len) begin
+            else if (rx_byte_i == `NODENET_ETX && payload_idx == payload_len) begin
               state <= RX_CRC;
             end
             else begin
@@ -173,7 +165,7 @@ module nodenet_decoder (
           end
           
           RX_EOT: begin
-            if (rx_byte_i == nodenet_types::EOT) begin
+            if (rx_byte_i == `NODENET_EOT) begin
               state <= VALIDATE;
             end
             else begin

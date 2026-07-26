@@ -1,18 +1,9 @@
 /**
  * @file nodenet_encoder.sv
  * @brief NodeNet485 Protocol Encoder
- * 
- * Converts application messages into encoded wire format:
- * 1. Adds framing (3xLF, SOH, DST, SRC, LEN)
- * 2. Encodes payload with nibble encoding (parity bits in each nibble)
- * 3. Computes XOR CRC
- * 4. Adds ETX, CRC, EOT, 2xLF
- * 
- * Pipeline:
- *   Input: dst, src, payload + length → Output: encoded bitstream
  */
 
-`include "nodenet_types.sv"
+`include "src/wbDevices/nodenet_defines.vh"
 
 module nodenet_encoder (
   input wire clk,
@@ -95,13 +86,13 @@ module nodenet_encoder (
         end
         
         PREFIX_LF: begin
-          data_o <= nodenet_types::LF;
+          data_o <= `NODENET_LF;
           data_valid_o <= 1'b1;
           state <= PREFIX_SOH;
         end
         
         PREFIX_SOH: begin
-          data_o <= nodenet_types::SOH;
+          data_o <= `NODENET_SOH;
           data_valid_o <= 1'b1;
           state <= HDR_DST;
         end
@@ -131,7 +122,7 @@ module nodenet_encoder (
         end
         
         PREFIX_STX: begin
-          data_o <= nodenet_types::STX;
+          data_o <= `NODENET_STX;
           data_valid_o <= 1'b1;
           nibble_count <= 2'b0;
           state <= ENCODE_PAYLOAD;
@@ -159,7 +150,7 @@ module nodenet_encoder (
         end
         
         SUFFIX_ETX: begin
-          data_o <= nodenet_types::ETX;
+          data_o <= `NODENET_ETX;
           data_valid_o <= 1'b1;
           state <= SUFFIX_CRC;
         end
@@ -171,13 +162,13 @@ module nodenet_encoder (
         end
         
         SUFFIX_EOT: begin
-          data_o <= nodenet_types::EOT;
+          data_o <= `NODENET_EOT;
           data_valid_o <= 1'b1;
           state <= SUFFIX_LF;
         end
         
         SUFFIX_LF: begin
-          data_o <= nodenet_types::LF;
+          data_o <= `NODENET_LF;
           data_valid_o <= 1'b1;
           tx_complete_o <= 1'b1;
           state <= IDLE;

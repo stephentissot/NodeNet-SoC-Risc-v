@@ -1,14 +1,9 @@
 /**
  * @file nodenet_heartbeat.sv
  * @brief NodeNet485 Heartbeat Generator & Anti-Collision Timing
- * 
- * Manages:
- * - Periodic heartbeat generation
- * - Transmission delay calculation (anti-collision backoff)
- * - Transmission readiness check
  */
 
-`include "nodenet_types.sv"
+`include "src/wbDevices/nodenet_defines.vh"
 
 module nodenet_heartbeat #(
   parameter CLOCK_RATE = 25_000_000
@@ -36,8 +31,8 @@ module nodenet_heartbeat #(
   
   // Calculate backoff delay based on broadcast vs unicast
   assign computed_backoff = is_broadcast_i 
-    ? ({24'b0, node_addr} * nodenet_types::BROADCAST_DELAY_PER_ADDR)
-    : ({24'b0, node_addr} * nodenet_types::UNICAST_DELAY_PER_ADDR);
+    ? ({24'b0, node_addr} * `NODENET_BROADCAST_DELAY_PER_ADDR)
+    : ({24'b0, node_addr} * `NODENET_UNICAST_DELAY_PER_ADDR);
   
   assign next_transmit_allowed_o = transmit_allowed_timer;
   assign heartbeat_trigger_o = (heartbeat_timer >= heartbeat_interval_cycles);
