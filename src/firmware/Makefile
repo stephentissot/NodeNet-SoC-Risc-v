@@ -1,5 +1,11 @@
 CROSS=riscv-none-elf-
 
+# ─── Artifact identity ──────────────────────────────────────────────────────
+TARGET  = nodenet_riscv
+VERSION = 0.1.0
+# Git hash appended to version string (adds -dirty suffix on uncommitted changes)
+GIT_HASH := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
+
 # u8g2 library location
 U8G2_DIR=lib/u8g2/csrc
 U8G2_SRCS=$(wildcard $(U8G2_DIR)/*.c)
@@ -11,7 +17,8 @@ CFLAGS=-march=rv32im -mabi=ilp32 \
        -ffreestanding \
        -ffunction-sections \
        -fdata-sections \
-       -I$(U8G2_DIR)
+       -I$(U8G2_DIR) \
+       -DFIRMWARE_VERSION='"$(VERSION)-$(GIT_HASH)"'
 
 # C++ flags: no exceptions, no RTTI (keeps code small on bare-metal)
 # -I.            : src/firmware/ on include path (for i2c.h from lib/u8g2_hal/)
@@ -37,7 +44,7 @@ LDFLAGS=-T link.ld \
 
 BUILD=build
 
-all: $(BUILD)/blink.hex
+all: $(BUILD)/$(TARGET).hex
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -45,7 +52,7 @@ $(BUILD):
 $(BUILD)/u8g2: | $(BUILD)
 	mkdir -p $@
 
-$(BUILD)/blink.elf: $(BUILD)/start.o $(BUILD)/main.o $(BUILD)/u8g2_hal.o $(U8G2_OBJS) | $(BUILD)
+$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(BUILD)/main.o $(BUILD)/u8g2_hal.o $(U8G2_OBJS) | $(BUILD)
 	$(CROSS)g++ $(LDFLAGS) $^ -o $@
 
 $(BUILD)/start.o: start.S | $(BUILD)
@@ -61,7 +68,7 @@ $(BUILD)/u8g2_hal.o: lib/u8g2_hal/u8g2_hal.cpp | $(BUILD)
 $(BUILD)/u8g2/%.o: $(U8G2_DIR)/%.c | $(BUILD)/u8g2
 	$(CROSS)gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD)/blink.hex: $(BUILD)/blink.elf
+$(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 	$(CROSS)objcopy \
 		-O verilog \
 		$< \

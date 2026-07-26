@@ -8,7 +8,7 @@ BUILD=build
 
 LPF=constraints/colorlight_i9.lpf
 
-FIRMWARE_HEX=src/firmware/build/blink.hex
+FIRMWARE_HEX=src/firmware/build/nodenet_riscv.hex
 
 # Recursive source discovery
 rwildcard=$(foreach d,$(wildcard $1*),$(call rwildcard,$d/,$2) $(filter $(subst *,%,$2),$d))

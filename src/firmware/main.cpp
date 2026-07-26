@@ -50,7 +50,7 @@ int main(void)
     uint32_t led_state = 0;
 
     UART0_BAUD = 27;
-    uart0_puts("SoC boot ok\n");
+    uart0_puts("nodenet_riscv " FIRMWARE_VERSION "\n");
 
     while (1)
     {
