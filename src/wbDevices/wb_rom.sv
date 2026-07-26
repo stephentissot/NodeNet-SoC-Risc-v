@@ -17,7 +17,7 @@ module wb_rom #(
 
     initial begin
         $display("Loading firmware...");
-        $readmemh("../firmware/build/blink.hex", rom);
+        $readmemh("../firmware/build/nodenet_riscv.hex", rom);
     end
 
 

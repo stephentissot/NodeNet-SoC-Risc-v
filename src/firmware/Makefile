@@ -18,6 +18,7 @@ CFLAGS=-march=rv32im -mabi=ilp32 \
        -ffunction-sections \
        -fdata-sections \
        -I$(U8G2_DIR) \
+       -Iinclude \
        -DFIRMWARE_VERSION='"$(VERSION)-$(GIT_HASH)"'
 
 # C++ flags: no exceptions, no RTTI (keeps code small on bare-metal)
