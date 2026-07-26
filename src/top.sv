@@ -72,7 +72,6 @@ module top (
     wire wb_rom_sel;
     wire wb_ram_sel;
     wire wb_led_sel;
-    wire wb_uart0_sel;
     wire wb_i2c0_sel;
     wire wb_nodenet_sel;
     wire wb_sdram_sel;
@@ -80,7 +79,6 @@ module top (
     assign wb_rom_sel    = wb_cyc && wb_stb && (wb_adr[31:16] == ROM_BASE[31:16]);
     assign wb_ram_sel    = wb_cyc && wb_stb && (wb_adr[31:16] == RAM_BASE[31:16]);
     assign wb_led_sel    = wb_cyc && wb_stb && (wb_adr == LED_ADDR);
-    assign wb_uart0_sel  = wb_cyc && wb_stb && (wb_adr[31:12] == UART0_BASE[31:12]);
     assign wb_i2c0_sel   = wb_cyc && wb_stb && (wb_adr[31:12] == I2C0_BASE[31:12]);
     assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12]);
     assign wb_sdram_sel  = wb_cyc && wb_stb && (wb_adr[31:23] == SDRAM_BASE[31:23]);
@@ -117,8 +115,8 @@ module top (
     
     wb_nodenet #(
         .CLOCK_RATE(25_000_000),
-        .FIFO_DEPTH(8),
-        .MAX_PAYLOAD(2048)
+        .SDRAM_TX_BASE(32'h2000_0000),  // 512 KB TX FIFO
+        .SDRAM_RX_BASE(32'h2008_0000)   // 512 KB RX FIFO
     ) nodenet0
     (
         .clk_i(clk_25mhz),
