@@ -19,6 +19,19 @@ SECTIONS
         *(.rodata*)
     } > ROM
 
+    /* C++ global constructors/destructors (function pointer arrays) */
+    .init_array :
+    {
+        __init_array_start = .;
+        KEEP(*(.init_array*))
+        __init_array_end = .;
+    } > ROM
+
+    .fini_array :
+    {
+        KEEP(*(.fini_array*))
+    } > ROM
+
     .data :
     {
         *(.data*)

@@ -6,6 +6,14 @@ CFLAGS=-march=rv32im -mabi=ilp32 \
        -ffreestanding \
        -nostdlib
 
+# C++ flags: no exceptions, no RTTI (keeps code small on bare-metal)
+CXXFLAGS=$(CFLAGS) \
+         -std=c++17 \
+         -fno-exceptions \
+         -fno-rtti \
+         -fno-threadsafe-statics \
+         -fno-use-cxa-atexit
+
 LDFLAGS=-T link.ld \
         -nostdlib
 
@@ -17,13 +25,13 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 $(BUILD)/blink.elf: $(BUILD)/start.o $(BUILD)/main.o | $(BUILD)
-	$(CROSS)gcc $(LDFLAGS) $^ -o $@
+	$(CROSS)g++ $(LDFLAGS) $^ -o $@
 
 $(BUILD)/start.o: start.S | $(BUILD)
 	$(CROSS)gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD)/main.o: main.c | $(BUILD)
-	$(CROSS)gcc $(CFLAGS) -c $< -o $@
+$(BUILD)/main.o: main.cpp | $(BUILD)
+	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/blink.hex: $(BUILD)/blink.elf
 	$(CROSS)objcopy \

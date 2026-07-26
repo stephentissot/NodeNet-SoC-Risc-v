@@ -1,4 +1,9 @@
 #include <stdint.h>
+
+// Bare-metal C++ stubs (no libstdc++, no exceptions, no RTTI)
+// Called if a pure virtual function is invoked — should never happen in practice.
+extern "C" void __cxa_pure_virtual() { while (1); }
+
 #define LED (*(volatile uint32_t*)0x10000000)
 
 #define UART0_DATA   (*(volatile uint32_t*)0x10001000)
