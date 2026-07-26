@@ -262,7 +262,11 @@ For full protocol documentation including frame format, CRC, and encoding detail
 
 ---
 
-### SDRAM (`0x20000000`, 8 MB)
+### SDRAM (`0x20100000`, 7 MB available for application)
+
+⚠️ **SDRAM Allocation**: 
+- **0x20000000–0x200FFFFF (1 MB)** ← Reserved for NodeNet485 TX/RX FIFOs
+- **0x20100000–0x207FFFFF (7 MB)** ← Available for PicoRV32 application
 
 **Important**: the SDRAM controller performs a ~200 µs initialization at power-on. Do not access SDRAM before `sdram_wait_ready()` returns.
 
@@ -270,7 +274,7 @@ For full protocol documentation including frame format, CRC, and encoding detail
 #include "sdram.h"
 
 // Place large variables in SDRAM at link time
-// (linker assigns addresses automatically from 0x20000000)
+// (linker assigns addresses automatically from 0x20100000, after NodeNet485 buffers)
 SDRAM_DATA uint8_t  frame_buffer[128 * 64 / 8];  // 1 KB framebuffer
 SDRAM_DATA uint32_t modbus_log[4096];             // 16 KB log
 
@@ -281,26 +285,62 @@ int main() {
     // Zero-initialize (SDRAM content is undefined at power-on)
     __builtin_memset(frame_buffer, 0, sizeof(frame_buffer));
 
-    // Direct pointer access
-    volatile uint32_t *sdram = (volatile uint32_t *)SDRAM_BASE;
+    // Direct pointer access (in application region)
+    volatile uint32_t *sdram = (volatile uint32_t *)SDRAM_APP_BASE;
     sdram[0] = 0xDEADBEEF;
 
-    // Memory test
-    uint32_t errors = sdram_test(1024);  // Test first 4 KB
+    // Memory test (application region)
+    uint32_t errors = sdram_test(1024);  // Test first 4 KB of app region
     if (errors == 0) uart_puts("SDRAM OK\n");
 }
 ```
 
 **Allocating large buffers dynamically** (pointer arithmetic):
 ```cpp
-// Manual allocator from SDRAM (simple bump allocator)
-static uintptr_t sdram_ptr = SDRAM_BASE;
+// Manual allocator from SDRAM application region
+static uintptr_t sdram_ptr = SDRAM_APP_BASE;
 
 void* sdram_alloc(size_t bytes) {
     void* p = (void*)sdram_ptr;
     sdram_ptr += (bytes + 3) & ~3;  // align to 4 bytes
+    
+    // Safety check: don't allocate beyond 8 MB boundary
+    if (sdram_ptr > 0x20800000) return nullptr;
     return p;
 }
+```
+
+**SDRAM Regions (Memory Map)**:
+```
+Hardware: 8 MB total (M12L64322A SDRAM on Colorlight i9)
+├─ 0x20000000 ─ 0x200FFFFF (1 MB)  ← NodeNet485 TX/RX FIFOs (hardware managed)
+│  ├─ TX FIFO: 0x20000000 – 0x2007FFFF (512 KB)
+│  └─ RX FIFO: 0x20080000 – 0x200FFFFF (512 KB)
+└─ 0x20100000 ─ 0x207FFFFF (7 MB)  ← Application region (PicoRV32)
+   ├─ SDRAM_DATA variables (placed by linker)
+   ├─ Heap (manual allocation)
+   └─ Free space
+```
+
+**Constants in `sdram.h`**:
+```cpp
+#define SDRAM_NODENET_BASE  0x20000000UL    // NodeNet485 reserved start
+#define SDRAM_NODENET_SIZE  (1UL * 1024 * 1024)  // 1 MB
+#define SDRAM_APP_BASE      0x20100000UL    // Application region start
+#define SDRAM_APP_SIZE      (7UL * 1024 * 1024)  // 7 MB available
+#define SDRAM_BASE          SDRAM_APP_BASE  // Legacy: now points to app region
+#define SDRAM_SIZE          SDRAM_APP_SIZE  // Legacy: 7 MB (not 8 MB)
+```
+
+**Accessing NodeNet485 buffers directly** (if needed):
+```cpp
+// Direct inspection of TX FIFO (should never write here!)
+volatile uint8_t *tx_fifo = (volatile uint8_t *)SDRAM_NODENET_BASE;
+uint8_t first_msg_dst = tx_fifo[0];
+
+// Direct inspection of RX FIFO
+volatile uint8_t *rx_fifo = (volatile uint8_t *)(SDRAM_NODENET_BASE + 0x80000);
+uint8_t received_src = rx_fifo[0];
 ```
 
 ---

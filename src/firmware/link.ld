@@ -4,7 +4,15 @@ MEMORY
 {
     ROM(rx)   : ORIGIN = 0x00000000, LENGTH = 64K
     RAM(rw)   : ORIGIN = 0x00010000, LENGTH = 64K
-    SDRAM(rw) : ORIGIN = 0x20000000, LENGTH = 8M
+    /* SDRAM: 8 MB total
+     *   0x20000000–0x200FFFFF (1 MB) — Reserved for NodeNet485 (TX + RX FIFOs)
+     *   0x20100000–0x207FFFFF (7 MB) — Available for application (PicoRV32)
+     *
+     * The linker places SDRAM_DATA variables starting at 0x20100000 to avoid
+     * overwriting the NodeNet485 buffers. If you need to access the NodeNet485
+     * region directly, use raw pointers to the reserved zone above.
+     */
+    SDRAM(rw) : ORIGIN = 0x20100000, LENGTH = 7M
 }
 
 SECTIONS
