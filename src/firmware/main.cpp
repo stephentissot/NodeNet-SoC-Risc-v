@@ -1,75 +1,72 @@
-#include <stdint.h>
+#include <cstdint>
 #include "version.h"
+#include "nodenet.h"
 
 // Bare-metal C++ stubs (no libstdc++, no exceptions, no RTTI)
-// Called if a pure virtual function is invoked — should never happen in practice.
 extern "C" void __cxa_pure_virtual() { while (1); }
 
+// LED register
 #define LED (*(volatile uint32_t*)0x10000000)
 
-#define UART0_DATA   (*(volatile uint32_t*)0x10001000)
-#define UART0_STATUS (*(volatile uint32_t*)0x10001004)
-#define UART0_BAUD   (*(volatile uint32_t*)0x10001008)
-
-#define UART_STATUS_RX_FIFO_EMPTY    (1u << 0)
-#define UART_STATUS_RX_FIFO_FULL     (1u << 1)
-#define UART_STATUS_TX_FIFO_EMPTY    (1u << 2)
-#define UART_STATUS_TX_FIFO_FULL     (1u << 3)
-#define UART_STATUS_RX_OVERRUN       (1u << 4)
-#define UART_STATUS_RX_FRAMEERR      (1u << 5)
-
-void delay()
+// Simple delay function (@ 25 MHz)
+void delay_ms(uint32_t ms)
 {
-    for (volatile int i = 0; i < 100000; i++)
+    // Rough estimate: 25000 cycles ~= 1 ms @ 25 MHz
+    for (volatile uint32_t i = 0; i < ms * 25000; i++)
     {
-    }
-}
-
-static void uart0_putc(uint8_t value)
-{
-    while ((UART0_STATUS & UART_STATUS_TX_FIFO_FULL) != 0)
-    {
-    }
-
-    UART0_DATA = value;
-}
-
-static void uart0_puts(const char *text)
-{
-    while (*text)
-    {
-        if (*text == '\n')
-            uart0_putc('\r');
-
-        uart0_putc((uint8_t)*text);
-        text++;
     }
 }
 
 int main(void)
 {
+    // Blink LED to show boot
+    LED = 1;
+    delay_ms(200);
+    LED = 0;
+    delay_ms(200);
+    LED = 1;
+    delay_ms(200);
+    LED = 0;
+    
+    // Initialize NodeNet485
+    // This node is address 0x01
+    // In a multi-node setup, each board would have a different address
+    // and they'd communicate over RS485 at 1 Mb/s
+    nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
+    
+    // Main loop: blink LED and listen for NodeNet485 messages
     uint32_t led_state = 0;
-
-    UART0_BAUD = 27;
-    uart0_puts("nodenet_riscv " FIRMWARE_VERSION "\n");
-
+    uint32_t loop_count = 0;
+    
     while (1)
     {
+        // Blink LED every ~1 second
         LED = led_state;
-        led_state ^= 1u;
-        delay();
-
-        while ((UART0_STATUS & UART_STATUS_RX_FIFO_EMPTY) == 0)
+        if (++loop_count >= 100)
         {
-            uint8_t value = (uint8_t)UART0_DATA;
-
-            if (value == '\r')
-                uart0_putc('\n');
-
-            uart0_putc(value);
+            led_state ^= 1;
+            loop_count = 0;
         }
-
-        if (UART0_STATUS & (UART_STATUS_RX_OVERRUN | UART_STATUS_RX_FRAMEERR))
-            UART0_STATUS = UART_STATUS_RX_OVERRUN | UART_STATUS_RX_FRAMEERR;
+        
+        // Check for incoming NodeNet485 messages
+        // In a real application, you'd process these messages here
+        // For now, we just listen and echo them back as a demo
+        if (nodenet0_has_message())
+        {
+            NodeNetMessage msg = nodenet0_read();
+            
+            // Echo unicast messages back to sender
+            if (msg.src_addr != 0)  // Don't echo broadcasts
+            {
+                nodenet0_send(msg.src_addr, msg.data, msg.len);
+            }
+            
+            // Free the message buffer
+            nodenet0_free_message(msg);
+        }
+        
+        delay_ms(10);
     }
+    
+    return 0;
 }

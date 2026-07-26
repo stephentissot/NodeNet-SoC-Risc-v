@@ -42,6 +42,8 @@ SECTIONS
         *(.bss*)
     } > RAM
 
+    end = .;  /* Symbol for sbrk() — marks end of BSS/start of heap */
+
     _stack_top = ORIGIN(RAM) + LENGTH(RAM);
 
     /* SDRAM region — placed at 0x20000000, NOT initialized at boot.
