@@ -8,8 +8,10 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 - **Processor**: PicoRV32 (32-bit RISC-V, bare-metal)
 - **Clock**: 25 MHz
 - **Memory**: 64 KiB ROM (boot code) + 64 KiB RAM (stack/variables) + 8 MB SDRAM
-- **Peripherals**: LED GPIO, UART with FIFOs, RS485 multiplexing
-- **Protocol Support**: Modbus RTU (4 UARTs), NodeNet JSON (planned)
+- **Peripherals**: LED GPIO, UART with FIFOs, I2C master, RS485 multiplexing
+- **Display**: SSD1306 OLED via u8g2 (I2C)
+- **Protocol Support**: Modbus RTU (4 UARTs planned), NodeNet JSON (planned)
+- **Firmware**: C++17, bare-metal, newlib-nano
 
 ## Features
 
@@ -21,6 +23,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - `0x00010000–0x0002FFFF`: 64 KiB RAM
   - `0x10000000`: LED GPIO (1-bit output)
   - `0x10001000–0x10004000`: 4× UART peripherals (planned)
+  - `0x10005000`: I2C0 master (8 registers @ 4-byte stride)
   - `0x20000000–0x207FFFFF`: 8 MB SDRAM (M12L64322A)
 
 ### Peripherals
@@ -30,16 +33,32 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - Status register with FIFO flags
   - Ready for RS485 RS485 driver integration
 
+- **I2C Module** (`wb_i2c.sv`):
+  - Wraps Alex Forencich's `i2c_master_wbs_8` core
+  - Hardware command + write + read FIFOs (32 entries each)
+  - Configurable speed (default 100 kHz, up to 400 kHz @ 25 MHz)
+  - Drives SCL/SDA open-drain (external 4.7 kΩ pullup required)
+
+- **OLED Display** (`u8g2_hal.cpp`):
+  - [u8g2](https://github.com/olikraus/u8g2) library (git submodule)
+  - SSD1306 128×32 or 128×64 over I2C
+  - Full framebuffer mode — no flicker on updates
+  - Fonts, shapes, text via u8g2 API
+
 - **RS485 Multiplexing** (planned):
   - 4 TMUX4051 muxes (2 per RJ45 connector, A/B pair routing)
   - 3-bit address bus + 74HC138 decoder = only 4 GPIO pins
   - Dynamic pair selection at runtime or boot
 
 ### Firmware
-- **C Bootloader** (`firmware/main.c`):
-  - UART echo demo (loopback test)
-  - LED toggle via GPIO
-  - SysTick-based delay functions
+- **C++17 bare-metal** (`firmware/main.cpp`):
+  - Compiled with `riscv-none-elf-g++` — no Arduino, no OS
+  - `newlib-nano` provides `memcpy`/`strlen`/etc.
+  - Dead code elimination (`-ffunction-sections -Wl,--gc-sections`)
+  - Global C++ constructors called in `start.S` via `.init_array`
+  - UART echo demo, LED blink, I2C + OLED demo
+
+- See [src/firmware/README.md](src/firmware/README.md) for full peripheral usage guide.
 
 ## Building
 
@@ -47,8 +66,13 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 - Yosys (synthesis)
 - NextPNR (place & route)
 - ecppack (bitstream generation)
-- RISC-V GCC toolchain (for firmware)
+- RISC-V GCC toolchain (`riscv-none-elf-gcc` ≥ 12, with C++ support)
 - Make
+
+> **After cloning**, fetch the u8g2 submodule:
+> ```bash
+> git submodule update --init
+> ```
 
 ### Build Steps
 
@@ -84,6 +108,7 @@ Address Range             Size      Purpose
 0x10002000              12 B      UART1 (planned)
 0x10003000              12 B      UART2 (planned)
 0x10004000              12 B      UART3 (planned)
+0x10005000              32 B      I2C0 (8 regs × 4 bytes — see i2c.h)
 ─────────────────────────────────────────────────────────
 0x20000000–0x207FFFFF   8 MB      SDRAM (M12L64322A, external)
 ```
@@ -98,6 +123,12 @@ Address Range             Size      Purpose
 
 Each RJ45 exposes 4 twisted pairs; multiplexer allows any UART to route to any pair dynamically.
 
+### I2C (pmodg connector)
+- **SCL**: H4 (pmodg[0])
+- **SDA**: G3 (pmodg[1])
+- Requires external 4.7 kΩ pullup resistors to 3.3 V on both lines
+- Compatible with any I2C device: OLED, sensors, ADC, GPIO expanders…
+
 ### GPIO
 - **D2 LED**: GPIO output (indicates CPU activity)
 - **Multiplexer Control** (4 pins):
@@ -106,36 +137,47 @@ Each RJ45 exposes 4 twisted pairs; multiplexer allows any UART to route to any p
 
 ## Firmware Examples
 
-### UART Echo
-```c
-#define UART0_DATA     0x10001000
-#define UART0_STATUS   0x10001004
-#define UART_RX_EMPTY  (1u << 0)
-#define UART_TX_FULL   (1u << 3)
+See **[src/firmware/README.md](src/firmware/README.md)** for a full guide with code examples for every peripheral.
 
-volatile uint32_t *uart0_data   = (volatile uint32_t *)UART0_DATA;
-volatile uint32_t *uart0_status = (volatile uint32_t *)UART0_STATUS;
+### Quick-start: UART + LED
+```cpp
+#include <stdint.h>
 
-// Transmit
-void uart0_putc(char c) {
-    while (*uart0_status & UART_TX_FULL);  // Wait for space
-    *uart0_data = c;
+#define LED          (*(volatile uint32_t*)0x10000000)
+#define UART0_DATA   (*(volatile uint32_t*)0x10001000)
+#define UART0_STATUS (*(volatile uint32_t*)0x10001004)
+#define UART0_BAUD   (*(volatile uint32_t*)0x10001008)
+
+void uart_putc(char c) {
+    while (UART0_STATUS & (1u << 3));  // wait TX not full
+    UART0_DATA = c;
 }
 
-// Receive
-char uart0_getc(void) {
-    while (*uart0_status & UART_RX_EMPTY);  // Wait for data
-    return (char)(*uart0_data & 0xFF);
+int main() {
+    UART0_BAUD = 27;  // ~115200 baud @ 25 MHz
+    uart_putc('O'); uart_putc('K'); uart_putc('\n');
+    for (;;) { LED ^= 1; }
 }
 ```
 
-### Configure UART Baud Rate
-```c
-#define UART0_BAUD 0x10001008
+### Quick-start: OLED via u8g2
+```cpp
+#include "u8g2_hal.h"
 
-void uart0_init(uint16_t prescale) {
-    volatile uint32_t *uart0_baud = (volatile uint32_t *)UART0_BAUD;
-    *uart0_baud = prescale;  // Default 27 for ~115200 @ 25 MHz
+u8g2_t display;
+
+int main() {
+    u8g2_Setup_ssd1306_i2c_128x64_noname_f(
+        &display, U8G2_R0,
+        u8x8_byte_i2c_hw,
+        u8x8_gpio_delay_hw);
+    u8g2_InitDisplay(&display);
+    u8g2_SetPowerSave(&display, 0);
+    u8g2_ClearBuffer(&display);
+    u8g2_SetFont(&display, u8g2_font_ncenB08_tr);
+    u8g2_DrawStr(&display, 0, 12, "RISC-V SoC");
+    u8g2_SendBuffer(&display);
+    for (;;);
 }
 ```
 
@@ -167,12 +209,12 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
                            |
                       Wishbone B4
                            |
-      +--------+-----------+-----------+----------+
-      |        |           |           |          |
-   wb_rom   wb_ram      wb_uart     wb_gpio   wb_sdram
-                           |                     |
-                       uart.v (Alex)       M12L64322A
-                           |               (8MB SDRAM)
+      +--------+-----------+--------+----------+-------+
+      |        |           |        |          |       |
+   wb_rom   wb_ram      wb_uart  wb_gpio   wb_sdram wb_i2c
+                           |                  |        |
+                       uart.v (Alex)    M12L64322A  SSD1306
+                           |             (8MB SDRAM)  OLED
                     RS485 Transceiver
                            |
                     TMUX4051 Mux Array
@@ -189,13 +231,19 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
    - `wb_sdram`: 8 MB SDRAM (0x20000000)
    - `wb_uart`: UART with FIFOs (0x10001000+)
    - `wb_gpio`: GPIO output (0x10000000)
+   - `wb_i2c`: I2C master with FIFOs (0x10005000)
 4. **UART Core**: Wraps Alex Forencich's `uart.v` with Wishbone interface
-5. **RS485 Physical**: Transceiver converts CMOS ↔ RS485 differential signaling
-6. **Multiplexing**: TMUX4051 arrays route A/B pairs to correct RJ45 connectors
+5. **I2C Core**: Wraps Alex Forencich's `i2c_master_wbs_8` with Wishbone interface
+6. **RS485 Physical**: Transceiver converts CMOS ↔ RS485 differential signaling
+7. **Multiplexing**: TMUX4051 arrays route A/B pairs to correct RJ45 connectors
 
 ## Planned Enhancements
 
 - [x] 8 MB SDRAM controller (`wb_sdram.sv`) with auto-refresh and auto-precharge
+- [x] I2C master (`wb_i2c.sv`) — Wishbone wrapper around verilog-i2c
+- [x] u8g2 OLED display support (SSD1306 128×64 over I2C)
+- [x] C++17 firmware with newlib-nano and dead-code elimination
+- [x] SDRAM section in linker script (`sdram.h`, `SDRAM_DATA` macro)
 - [ ] UART1–4 implementation and testing
 - [ ] RS485 multiplexer firmware control
 - [ ] Modbus RTU library (master/slave modes)
@@ -212,6 +260,7 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
 - **TMUX4051 Multiplexers** (8 units, 2 per RJ45)
 - **74HC138 Decoder** (1 unit, for mux selection)
 - **RJ45 Connectors** (4 units)
+- **SSD1306 OLED Module** (I2C, 128×32 or 128×64) + 4.7 kΩ pullup resistors
 
 ## Testing
 
@@ -232,6 +281,8 @@ make flash
 
 - [PicoRV32 GitHub](https://github.com/YosysHQ/picorv32)
 - [Verilog UART IP (Alex Forencich)](https://github.com/alexforencich/verilog-uart) – Core UART module used in wb_uart.sv
+- [Verilog I2C IP (Alex Forencich)](https://github.com/alexforencich/verilog-i2c) – Core I2C module used in wb_i2c.sv
+- [u8g2 Graphics Library](https://github.com/olikraus/u8g2) – OLED display driver (git submodule)
 - [Wishbone B.4 Specification](https://cdn.opencores.org/downloads/wbspec_b4.pdf)
 - [LFE5U FPGA Datasheet](https://www.latticesemi.com/en/Products/FPGAs/ECP5)
 - [RISC-V Unprivileged ISA Manual](https://riscv.org/specifications/)
