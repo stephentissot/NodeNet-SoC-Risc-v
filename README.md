@@ -94,6 +94,32 @@ make
 
 # Clean all artifacts
 make clean
+
+# Program FPGA SRAM (volatile)
+make ram
+
+# Program SPI flash (persistent, includes unlock during write)
+make flash
+
+# Manual flash protection control
+make unlock-flash
+make lock-flash
+```
+
+If OpenOCD flash programming fails on your setup, you can switch the flash
+targets in `Makefile` to ecpdap. Reference commands:
+
+```make
+# ecpdap fallback examples (Colorlight i5/i9 style headers)
+# flash:
+# 	ecpdap flash unprotect
+# 	ecpdap flash write build/top.config
+#
+# unlock-flash:
+# 	ecpdap flash unprotect
+#
+# lock-flash:
+# 	ecpdap flash protect
 ```
 
 **Output**:

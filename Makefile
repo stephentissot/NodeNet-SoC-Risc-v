@@ -86,6 +86,10 @@ flash_image: $(BUILD)/$(TOP).bit
 
 
 # Program W25Q64 SPI Flash
+#
+# ecpdap fallback (if OpenOCD/jtagspi flow does not work on a given setup):
+#   ecpdap flash unprotect
+#   ecpdap flash write $(BUILD)/$(TOP).config
 flash: flash_image
 	openocd \
 		-f interface/cmsis-dap.cfg \
@@ -99,6 +103,8 @@ flash: flash_image
 
 # Disable flash protection before manual flash operations.
 # Note: availability depends on the OpenOCD flash driver stack.
+# ecpdap equivalent:
+#   ecpdap flash unprotect
 unlock-flash:
 	openocd \
 		-f interface/cmsis-dap.cfg \
@@ -112,6 +118,8 @@ unlock-flash:
 
 
 # Re-enable flash protection after programming if desired.
+# ecpdap equivalent:
+#   ecpdap flash protect
 lock-flash:
 	openocd \
 		-f interface/cmsis-dap.cfg \
