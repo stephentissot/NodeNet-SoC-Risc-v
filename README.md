@@ -1,6 +1,6 @@
-# FPGA Hello World - Colorlight i9 RISC-V SoC
+# NodeNet SoC Risc-v — Colorlight i9 Multi-Node Embedded System
 
-A complete RISC-V System-on-Chip (SoC) design for the Colorlight i9 FPGA board, featuring a PicoRV32 processor, Wishbone bus interconnect, I2C support, and RS485 multi-node communication via the NodeNet485 protocol.
+A complete RISC-V System-on-Chip (SoC) design for the Colorlight i9 FPGA board, featuring a PicoRV32 processor, Wishbone bus interconnect, persistent SPI flash storage, I2C peripherals, and distributed RS485 multi-node communication via the NodeNet485 protocol.
 
 ## Overview
 
