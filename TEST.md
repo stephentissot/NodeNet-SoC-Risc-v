@@ -78,9 +78,9 @@ Once the Colorlight i9 is programmed with the test bitstream:
 
 ### NodeNet485
 - **Purpose**: Verify RS-485 communication protocol
-- **Action**: Initializes node at address 0x01, sends self-test message
-- **Pass Criteria**: Receives echo back (or gracefully times out without error)
-- **Note**: May fail if no other nodes on RS-485 bus (expected behavior)
+- **Action**: Initializes node at address 0x01, sends a broadcast test frame, then watches TX completion and optional received traffic
+- **Pass Criteria**: TX mailbox drains without RX decode/overflow error; any valid reply also counts as pass
+- **Note**: In a single-node setup, this validates TX framing only. With other nodes or a PC sniffer/injector, it also validates receive decoding.
 
 ### Flash Protection
 - **Purpose**: Verify boot region is protected from accidental overwrites
@@ -107,10 +107,13 @@ Once the Colorlight i9 is programmed with the test bitstream:
   - SSD1306 I2C address is 0x3C (default for 128×64)
   - OLED powered (3.3 V)
 
-### "NodeNet485: FAIL" (expected in single-node setup)
-- **Cause**: No other nodes on RS-485 bus to echo message
-- **Expected**: Test may timeout gracefully without error
-- **Fix**: Add another Colorlight i9 or RS-485 device to bus
+### "NodeNet485: FAIL"
+- **Cause**: TX never drained, or the decoder reported timeout / framing / overflow
+- **Check**:
+  - H16/H17 wiring to RS485 transceiver
+  - 1 Mb/s support on the connected nodes/sniffer
+  - Shared ground and correct A/B polarity on the bus
+  - Another node or PC tool is not flooding malformed frames
 
 ### "Flash protect: FAIL"
 - **Cause**: Boot region protection check failed

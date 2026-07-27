@@ -7,7 +7,7 @@ A complete RISC-V System-on-Chip (SoC) design for the Colorlight i9 FPGA board, 
 This project demonstrates a scalable embedded systems design on a cost-effective FPGA:
 - **Processor**: PicoRV32 (32-bit RISC-V, bare-metal)
 - **Clock**: 25 MHz
-- **Memory**: 64 KiB ROM (boot code) + 64 KiB RAM (stack/variables) + 8 MB SDRAM (1 MB NodeNet485, 7 MB app)
+- **Memory**: 64 KiB ROM (boot code) + 64 KiB RAM (stack/variables) + 8 MB SDRAM (application/external data)
 - **Peripherals**: LED GPIO, RS485 NodeNet485, I2C master, SDRAM controller
 - **Communication**: NodeNet485 @ 1 Mb/s over RS-485 (multi-node capable)
 - **Firmware**: C++17, bare-metal, newlib-nano
@@ -22,19 +22,21 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - `0x00010000–0x0001FFFF`: 64 KiB RAM (stack, BSS, heap)
   - `0x10000000`: LED GPIO (1-bit output)
   - `0x10005000`: I2C0 master (8 registers @ 4-byte stride)
-  - `0x10006000`: NodeNet485 RS-485 (6 registers, 1 Mb/s)
-  - `0x20000000–0x207FFFFF`: 8 MB SDRAM (1 MB NodeNet485, 7 MB app)
+  - `0x10006000`: NodeNet485 RS-485 mailbox (7 registers, 1 Mb/s)
+  - `0x20000000–0x207FFFFF`: 8 MB SDRAM (application / framebuffer / logs)
 
 ### Peripherals
 - **NodeNet485 Module** (`wb_nodenet.sv`):
   - Multi-node RS-485 communication protocol
-  - Baud rate: 1 Mb/s (configurable)
+  - Baud rate: 1 Mb/s
   - HDLC-style framing with parity bits and CRC
+  - Mailbox-based Wishbone interface for TX/RX messages
   - Anti-collision backoff (address-based delay)
   - Periodic heartbeat for node discovery
   - Priority-based transmission (LOW/NORMAL/HIGH)
   - Full C++ firmware API in `include/nodenet.h`
   - Supports unicast, broadcast, and heartbeat messages
+  - RX decode error reporting and TX scheduling status
   - Wishbone register interface (0x10006000)
 
 - **I2C Module** (`wb_i2c.sv`):
@@ -108,13 +110,10 @@ Address Range               Size      Purpose
 ────────────────────────────────────────────────────────────
 0x10000000                4 B      LED GPIO (bit [0] = LED output)
 0x10005000                32 B     I2C0 master (8 regs @ 4-byte stride)
-0x10006000–0x1000601F     32 B     NodeNet485 (RS485, 1 Mb/s)
+0x10006000–0x1000601B     28 B     NodeNet485 mailbox (RS485, 1 Mb/s)
 0x10007000                32 B     SPI Flash controller (W25Q64)
 ────────────────────────────────────────────────────────────
-0x20000000–0x200FFFFF     1 MB     SDRAM — NodeNet485 reserved
-                                    (TX: 0x20000000–0x2007FFFF)
-                                    (RX: 0x20080000–0x200FFFFF)
-0x20100000–0x207FFFFF     7 MB     SDRAM — Application (PicoRV32)
+0x20000000–0x207FFFFF     8 MB     SDRAM — Application / buffers / logs
 ────────────────────────────────────────────────────────────
 0x00000000–0x1FFFFF       2 MB     SPI Flash — FPGA boot config (PROTECTED)
 0x200000–0x203FFF         16 KB    SPI Flash — Parameter storage
@@ -129,7 +128,7 @@ Address Range               Size      Purpose
 - **Protocol**: Multi-node RS-485 with HDLC framing, anti-collision, heartbeat
 - **Transceiver**: Any RS-485 module with auto-switching (MAX485, SN65HVD11, etc.)
 - **Multi-Node**: Up to 20 nodes on shared bus with address-based scheduling
-- **Features**: Parity-encoded payload (2x expansion), XOR CRC, priority levels (LOW/NORMAL/HIGH)
+- **Features**: Parity-encoded payload (2x expansion), XOR CRC, priority levels (LOW/NORMAL/HIGH), heartbeat
 
 ### I2C (pmodg connector)
 - **SCL**: H4 (pmodg[0])
@@ -151,24 +150,25 @@ Address Range               Size      Purpose
 
 See **[src/firmware/README.md](src/firmware/README.md)** for a full guide with code examples for every peripheral.
 
-### Quick-start: UART + LED
+### Quick-start: NodeNet echo
 ```cpp
 #include <stdint.h>
+#include "nodenet.h"
 
 #define LED          (*(volatile uint32_t*)0x10000000)
-#define UART0_DATA   (*(volatile uint32_t*)0x10001000)
-#define UART0_STATUS (*(volatile uint32_t*)0x10001004)
-#define UART0_BAUD   (*(volatile uint32_t*)0x10001008)
-
-void uart_putc(char c) {
-    while (UART0_STATUS & (1u << 3));  // wait TX not full
-    UART0_DATA = c;
-}
 
 int main() {
-    UART0_BAUD = 27;  // ~115200 baud @ 25 MHz
-    uart_putc('O'); uart_putc('K'); uart_putc('\n');
-    for (;;) { LED ^= 1; }
+  nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
+  for (;;) {
+    if (nodenet0_has_message()) {
+      NodeNetMessage msg = nodenet0_read();
+      if (msg.src_addr != 0) {
+        nodenet0_send(msg.src_addr, msg.data, msg.len);
+      }
+      nodenet0_free_message(msg);
+    }
+    LED ^= 1;
+  }
 }
 ```
 
@@ -207,7 +207,7 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
   - Interconnect: ~1K LUT
   - ROM (64 KiB): 32 blocks
   - RAM (64 KiB): 32 blocks
-  - UART0 + FIFOs: ~300 LUT
+  - NodeNet485 transport + UART: ~300 LUT
   - SDRAM controller: ~400 LUT
   - GPIO: ~50 LUT
   - **Total: ~35% of available resources**
@@ -223,11 +223,11 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
                            |
       +--------+-----------+--------+----------+-------+
       |        |           |        |          |       |
-   wb_rom   wb_ram      wb_uart  wb_gpio   wb_sdram wb_i2c
-                           |                  |        |
-                       uart.v (Alex)    M12L64322A  SSD1306
-                           |             (8MB SDRAM)  OLED
-                    RS485 Transceiver
+         wb_rom   wb_ram   wb_nodenet wb_gpio   wb_sdram wb_i2c
+              |            |          |        |
+               uart_simple   LED D2  M12L64322A  SSD1306
+              |                    (8MB SDRAM) OLED
+            RS485 Transceiver
                            |
                     TMUX4051 Mux Array
                            |
@@ -241,10 +241,10 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
    - `wb_rom`: 64 KiB boot ROM (0x00000000)
    - `wb_ram`: 64 KiB RAM (0x00010000)
    - `wb_sdram`: 8 MB SDRAM (0x20000000)
-   - `wb_uart`: UART with FIFOs (0x10001000+)
+  - `wb_nodenet`: NodeNet485 mailbox transport (0x10006000)
    - `wb_gpio`: GPIO output (0x10000000)
    - `wb_i2c`: I2C master with FIFOs (0x10005000)
-4. **UART Core**: Wraps Alex Forencich's `uart.v` with Wishbone interface
+4. **NodeNet Transport**: Mailbox-driven TX/RX framing, decode, and heartbeat scheduling
 5. **I2C Core**: Wraps Alex Forencich's `i2c_master_wbs_8` with Wishbone interface
 6. **RS485 Physical**: Transceiver converts CMOS ↔ RS485 differential signaling
 7. **Multiplexing**: TMUX4051 arrays route A/B pairs to correct RJ45 connectors
@@ -256,6 +256,7 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
 - [x] u8g2 OLED display support (SSD1306 128×64 over I2C)
 - [x] C++17 firmware with newlib-nano and dead-code elimination
 - [x] SDRAM section in linker script (`sdram.h`, `SDRAM_DATA` macro)
+- [x] NodeNet485 mailbox transport with TX/RX framing and heartbeat
 - [ ] UART1–4 implementation and testing
 - [ ] RS485 multiplexer firmware control
 - [ ] Modbus RTU library (master/slave modes)

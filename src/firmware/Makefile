@@ -12,7 +12,8 @@ MAIN_SRC ?= main.cpp
 # u8g2 library location
 U8G2_DIR=lib/u8g2/csrc
 U8G2_SRCS=$(wildcard $(U8G2_DIR)/*.c)
-U8G2_OBJS=$(patsubst $(U8G2_DIR)/%.c,$(BUILD)/u8g2/%.o,$(U8G2_SRCS))
+U8G2_CACHE=.cache/u8g2
+U8G2_OBJS=$(patsubst $(U8G2_DIR)/%.c,$(U8G2_CACHE)/%.o,$(U8G2_SRCS))
 
 CFLAGS=-march=rv32im -mabi=ilp32 \
        -Wall \
@@ -53,7 +54,7 @@ all: $(BUILD)/$(TARGET).hex
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/u8g2: | $(BUILD)
+$(U8G2_CACHE):
 	mkdir -p $@
 
 $(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(BUILD)/main.o $(BUILD)/u8g2_hal.o $(U8G2_OBJS) | $(BUILD)
@@ -68,8 +69,9 @@ $(BUILD)/main.o: $(MAIN_SRC) | $(BUILD)
 $(BUILD)/u8g2_hal.o: lib/u8g2_hal/u8g2_hal.cpp | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
-# u8g2 C sources (compiled with gcc, not g++)
-$(BUILD)/u8g2/%.o: $(U8G2_DIR)/%.c | $(BUILD)/u8g2
+# u8g2 C sources are cached outside $(BUILD) so a normal clean does not force
+# recompiling the whole graphics library on the next firmware rebuild.
+$(U8G2_CACHE)/%.o: $(U8G2_DIR)/%.c | $(U8G2_CACHE)
 	$(CROSS)gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
@@ -80,3 +82,6 @@ $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 
 clean:
 	rm -rf $(BUILD)
+
+distclean: clean
+	rm -rf .cache

@@ -16,30 +16,22 @@
 ```
 ┌────────────────────────────────────────────────────────┐
 │        Wishbone B.4 Interface (CPU/Bus)                │
-│  Registers: TX_WPTR, TX_RPTR, RX_WPTR, RX_RPTR        │
+│  Registers: TX_CMD, TX_DATA, RX_HDR, RX_DATA, STATUS  │
 └────────────────────────────────────────────────────────┘
                     ↓
 ┌────────────────────────────────────────────────────────┐
-│           wb_nodenet.sv (Pointer Controller)           │
-│  - Manages SDRAM ring buffer pointers                  │
-│  - Interfaces with encoder/decoder (future)           │
+│         wb_nodenet.sv (Mailbox Transport)              │
+│  - Stages one TX message from firmware                 │
+│  - Buffers one decoded RX message for firmware         │
 │  - Handles heartbeat generation                       │
-│  - Current: Simple RX→TX loopback mode                │
+│  - Schedules anti-collision delay before TX           │
 └────────────────────────────────────────────────────────┘
                     ↓
 ┌────────────────────────────────────────────────────────┐
-│         SDRAM Ring Buffers (512 KB each)               │
-│  TX FIFO: 0x20000000 - 0x2007FFFF                     │
-│  RX FIFO: 0x20080000 - 0x200FFFFF                     │
-│  Frame format: [dst(1B)|len_hi(1B)|len_lo(1B)|data]   │
-└────────────────────────────────────────────────────────┘
-                    ↓
-┌────────────────────────────────────────────────────────┐
-│         Optional: Encoder/Decoder FSMs                 │
+│           Encoder/Decoder FSMs                          │
 │  - Payload encoding with nibble parity                │
 │  - Protocol framing (SOH/STX/ETX/EOT)                 │
 │  - CRC validation                                      │
-│  (Not yet wired; loopback mode active)                │
 └────────────────────────────────────────────────────────┘
                     ↓
 ┌────────────────────────────────────────────────────────┐
@@ -55,44 +47,25 @@
 └────────────────────────────────────────────────────────┘
 ```
 
-## SDRAM Ring Buffer Management
+## Mailbox Transport Model
 
-The implementation uses **512 KB in SDRAM for each direction** instead of on-chip BRAM, enabling larger queues:
+The current implementation is intentionally **self-contained**: `wb_nodenet.sv` has no SDRAM master port, so it exposes a small mailbox-style transport over Wishbone instead of pretending to use external memory.
 
-**Allocation:**
-- TX FIFO: `0x20000000` to `0x2007FFFF` (512 KB)
-- RX FIFO: `0x20080000` to `0x200FFFFF` (512 KB)
-- Free SDRAM: `0x20100000` to `0x207FFFFF` (7 MB remaining)
+**TX mailbox:**
+- Firmware writes one header to `TX_CMD`
+- Firmware streams payload bytes through `TX_DATA`
+- Firmware sets `CONTROL.bit0` to schedule transmission
 
-**Ring Buffer Frame Format:**
-```
-[dst(1 byte) | len_hi(1 byte) | len_lo(1 byte) | payload(N bytes)]
-```
+**RX mailbox:**
+- Hardware decodes and validates the next received frame
+- Header appears in `RX_HDR`
+- Payload bytes are drained from `RX_DATA`
+- Reading the last byte automatically frees the RX mailbox
 
 **Capacity:**
-- Average message: ~2 KB (header + payload + overhead)
-- ~250 messages per FIFO
-- Total usable: ~500 messages system-wide
-
-**Pointer Management (Firmware Controls):**
-
-1. **TX FIFO** (Firmware → Hardware):
-   - Firmware writes: `*TX_WRITE_PTR = new_value`
-   - Hardware reads: compares `TX_READ_PTR != TX_WRITE_PTR`
-   - Transmits message, updates: `TX_READ_PTR = next_value`
-   - Wrapping: `ptr = (ptr + 1) % FIFO_SIZE`
-
-2. **RX FIFO** (Hardware → Firmware):
-   - Hardware writes at RX: `RX_WRITE_PTR += frame_size`
-   - Firmware checks: `RX_READ_PTR != RX_WRITE_PTR`
-   - Reads message, updates: `RX_READ_PTR = next_value`
-   - Frame is deallocated (pointer advances)
-
-**Benefits:**
-- Scalable: 512 KB vs. typical 32 KB on-chip BRAM
-- Flexible: Can adjust allocation in top.sv parameters
-- Simple: No DMA needed, pure pointer arithmetic
-- Fast: SDRAM accessible via 32-bit Wishbone (same speed as BRAM)
+- One staged TX message at a time
+- One staged RX message at a time
+- Maximum payload length: 2048 bytes
 
 ## Module Files
 
@@ -131,7 +104,7 @@ The implementation uses **512 KB in SDRAM for each direction** instead of on-chi
 6. **wb_nodenet.sv**
    - Main integration module
    - Wishbone B.4 interface
-   - Orchestrates TX/RX state machine
+   - Orchestrates TX/RX state machine and mailbox registers
    - Register map and control
 
 ## Wishbone Register Map
@@ -140,11 +113,21 @@ Base address: `0x10006000`
 
 | Offset | Name       | R/W | Bits  | Purpose                              |
 |--------|-----------|-----|-------|--------------------------------------|
-| 0x00   | TX_CMD    | W   | 31:0  | TX command: [dst(8), len(16)]        |
-| 0x04   | TX_DATA   | W   | 7:0   | TX data byte (auto-enqueue)          |
-| 0x08   | RX_DATA   | R   | 31:0  | RX data: [src(8), len(16)] or bytes  |
-| 0x0C   | STATUS    | R   | 31:0  | [reserved(14), TX_ready(1), RX_valid(1), RX_cnt(8), TX_cnt(8)] |
-| 0x10   | CONFIG    | R/W | 31:0  | [node_addr(8), prio(2), hb_interval(22)] |
+| 0x00   | TX_CMD    | R/W | 31:0  | `[dst(31:24) | len(15:0)]`           |
+| 0x04   | TX_DATA   | R/W | 7:0   | Write payload bytes / read load count |
+| 0x08   | RX_HDR    | R   | 31:0  | `[src(31:24) | rx_valid(16) | len]`  |
+| 0x0C   | RX_DATA   | R   | 7:0   | Read next received payload byte      |
+| 0x10   | CONFIG    | R/W | 31:0  | `[hb_interval(31:10) | prio(9:8) | addr]` |
+| 0x14   | CONTROL   | W   | 2:0   | `bit0=trigger_tx bit1=clear_rx bit2=queue_heartbeat` |
+| 0x18   | STATUS    | R   | 31:0  | TX/RX state, UART ready, error flags |
+
+**Key STATUS bits:**
+- `bit31`: RX overflow
+- `bit30`: RX decode or timeout error
+- `bit27`: TX pending after software trigger
+- `bit26`: TX active on the wire
+- `bit25`: UART ready for the next encoded byte
+- `bit24`: RX mailbox contains a complete decoded frame
 
 ## Protocol Wire Format
 
@@ -181,12 +164,12 @@ No payload, no STX/ETX, just immediate EOT after length.
 
 ```
 IDLE
- ├─ [heartbeat_trigger] → generate heartbeat message
- ├─ [app calls send()] → queue to TX FIFO
+ ├─ [heartbeat_trigger] → queue heartbeat frame
+ ├─ [app calls send()] → stage TX mailbox
  │
 WAITING_TRANSMISSION
  ├─ Broadcast (dst==0) → delay addr × 50ms
- └─ Unicast         → delay 10ms
+ └─ Unicast         → delay 10ms + addr × 2ms
  │
 TRANSMITTING
  └─ Send encoded bytes via UART
@@ -213,7 +196,7 @@ RX_EOT                 (expect 0x04)
  │
 VALIDATE
  ├─ [CRC match && (dst == my_addr || dst == 0)]
- │  └─ Push to RX FIFO
+ │  └─ Publish RX mailbox
  │
 IDLE (searching for next SOH)
 ```
@@ -315,7 +298,7 @@ static inline void nodenet0_broadcast(const char* str);  // C-string overload
 static inline bool nodenet0_has_message();
 static inline uint8_t nodenet0_message_count();
 static inline NodeNetMessage nodenet0_read();
-static inline void nodenet0_free_message(NodeNetMessage msg);
+static inline void nodenet0_free_message(NodeNetMessage& msg);
 ```
 
 ### Example Implementation (main.cpp)

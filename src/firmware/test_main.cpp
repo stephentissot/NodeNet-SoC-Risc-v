@@ -5,7 +5,7 @@
  * Tests all peripherals and displays results on OLED via I2C:
  * - LED GPIO (D2)
  * - I2C0 master (OLED SSD1306)
- * - NodeNet485 RS-485 communication
+ * - NodeNet485 RS-485 transport (TX framing + optional RX validation)
  * - SPI Flash (W25Q64) read/write/protect
  * 
  * OLED Display Layout:
@@ -103,7 +103,7 @@ bool test_i2c(void) {
     return true;  // Already tested by OLED init
 }
 
-/** Test NodeNet485 RS-485 communication */
+/** Test NodeNet485 RS-485 transport */
 bool test_nodenet(void) {
     // Initialize NodeNet485 (this node is address 0x01)
     nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
@@ -111,8 +111,8 @@ bool test_nodenet(void) {
     // Delay to allow initialization
     delay_ms(100);
     
-    // Loopback is no longer hardwired in hardware, so validate that the
-    // transmit mailbox drains and treat an actual reply as a bonus.
+    // Validate that the transport can queue and drain a real broadcast frame.
+    // Any valid incoming frame during the observation window is treated as a bonus.
     const char* test_msg = "TEST";
     nodenet0_broadcast((const uint8_t*)test_msg, 4);
 

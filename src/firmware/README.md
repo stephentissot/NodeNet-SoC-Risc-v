@@ -75,30 +75,30 @@ LED ^= 1;   // Toggle
 
 ---
 
-### NodeNet485 (`0x10006000`) — Multi-Node RS-485 with SDRAM Ring Buffers
+### NodeNet485 (`0x10006000`) — Multi-Node RS-485 Mailbox Transport
 
 The NodeNet485 protocol enables reliable multi-node communication over RS-485 at 1 Mb/s.
 
-**SDRAM Ring Buffer Architecture**:
-- **TX FIFO**: 512 KB at 0x20000000 (firmware writes, hardware reads)
-- **RX FIFO**: 512 KB at 0x20080000 (hardware writes, firmware reads)
-- **Frame Format**: `[dst(1B) | len_hi(1B) | len_lo(1B) | payload(N bytes)]`
-- **Capacity**: ~250 messages per direction (512 KB ÷ avg 2 KB/msg)
+**Mailbox Register Model**:
+- **TX staging**: firmware writes one message into TX command/data registers
+- **RX mailbox**: hardware exposes one decoded message header and a byte stream reader
+- **Frame encoding/decoding** happens inside `wb_nodenet.sv`
+- **Capacity**: one staged TX message and one decoded RX message at a time
 
-**Pointer Management** (Firmware Controls):
+**Register Flow** (Firmware Controls):
 
 ```
 TX Path (Firmware → Hardware):
-  1. Write message to SDRAM[TX_WPTR]
-  2. Update TX_WPTR register (hardware detects change)
-  3. Hardware reads and transmits
-  4. Hardware updates TX_RPTR (message consumed)
+    1. Write TX_CMD = [dst | len]
+    2. Write payload bytes through TX_DATA
+    3. Write CONTROL.bit0 to trigger transmission
+    4. Hardware schedules, frames, and transmits over UART
 
 RX Path (Hardware → Firmware):
-  1. Hardware receives and writes to SDRAM[RX_WPTR]
-  2. Hardware updates RX_WPTR
-  3. Firmware checks RX_WPTR != RX_RPTR
-  4. Firmware reads and updates RX_RPTR
+    1. Hardware receives, decodes, and validates a frame
+    2. Hardware exposes source + length through RX_HDR
+    3. Firmware checks RX valid bit
+    4. Firmware drains payload bytes through RX_DATA
 ```
 
 **Complete API** (from `include/nodenet.h`):
@@ -217,30 +217,24 @@ int main() {
 }
 ```
 
-**Ring Buffer Debugging**:
+**Mailbox Debugging**:
 
 ```cpp
-// Check if TX FIFO has space
-volatile uint32_t *tx_wptr = (volatile uint32_t *)0x10006000;
-volatile uint32_t *tx_rptr = (volatile uint32_t *)0x10006004;
-bool has_space = (*tx_wptr != *tx_rptr);
+uint32_t status = nodenet_status();
+bool tx_busy = (status & (NODENET_STATUS_TX_PENDING | NODENET_STATUS_TX_ACTIVE)) != 0;
+bool rx_ready = (status & NODENET_STATUS_RX_VALID) != 0;
+bool rx_error = (status & (NODENET_STATUS_RX_ERROR | NODENET_STATUS_RX_OVERFLOW)) != 0;
 
-// Check if RX FIFO has messages
-volatile uint32_t *rx_wptr = (volatile uint32_t *)0x10006008;
-volatile uint32_t *rx_rptr = (volatile uint32_t *)0x1000600C;
-bool has_data = (*rx_rptr != *rx_wptr);
-
-// Read raw SDRAM (inspect messages at wire level)
-volatile uint8_t *tx_sdram = (volatile uint8_t *)0x20000000;
-uint8_t dst = tx_sdram[*tx_rptr];
-uint16_t len = (tx_sdram[*tx_rptr + 1] << 8) | tx_sdram[*tx_rptr + 2];
+uint32_t header = *(volatile uint32_t *)NODENET_RX_HDR;
+uint8_t src = header >> 24;
+uint16_t len = header & 0xFFFF;
 ```
 
 **Performance Characteristics**:
 - **Baud Rate**: 1 Mb/s (25-cycle divisor @ 25 MHz)
 - **Throughput**: ~40–50 kB/s effective (after protocol overhead)
 - **Message Latency**: ~10 ms for 64-byte message
-- **FIFO Capacity**: ~250 messages per direction (512 KB each)
+- **Mailbox Capacity**: one staged TX message + one decoded RX message
 - **Anti-Collision**: Automatic backoff per node address
   - Broadcast: 50 ms × node_addr
   - Unicast: 2 ms × node_addr
@@ -250,7 +244,7 @@ uint16_t len = (tx_sdram[*tx_rptr + 1] << 8) | tx_sdram[*tx_rptr + 2];
 - **RX Pin**: H16 (input from RS-485 transceiver)
 - **TX Pin**: H17 (output to RS-485 transceiver)
 - **Driver Enable**: Automatic (hardware module handles)
-- **Current Status**: Loopback mode active (RX→TX echo for validation)
+- **Current Status**: Functional TX/RX framing with mailbox-based Wishbone API
 
 For full protocol documentation including frame format, CRC, and encoding details, see [../src/wbDevices/README_NODENET.md](../src/wbDevices/README_NODENET.md).
 
@@ -262,11 +256,10 @@ For full protocol documentation including frame format, CRC, and encoding detail
 
 ---
 
-### SDRAM (`0x20100000`, 7 MB available for application)
+### SDRAM (`0x20000000`, 8 MB available for application)
 
-⚠️ **SDRAM Allocation**: 
-- **0x20000000–0x200FFFFF (1 MB)** ← Reserved for NodeNet485 TX/RX FIFOs
-- **0x20100000–0x207FFFFF (7 MB)** ← Available for PicoRV32 application
+⚠️ **SDRAM Allocation**:
+- **0x20000000–0x207FFFFF (8 MB)** ← Available for PicoRV32 application and large buffers
 
 **Important**: the SDRAM controller performs a ~200 µs initialization at power-on. Do not access SDRAM before `sdram_wait_ready()` returns.
 
@@ -274,7 +267,7 @@ For full protocol documentation including frame format, CRC, and encoding detail
 #include "sdram.h"
 
 // Place large variables in SDRAM at link time
-// (linker assigns addresses automatically from 0x20100000, after NodeNet485 buffers)
+// (linker assigns addresses automatically from SDRAM_APP_BASE)
 SDRAM_DATA uint8_t  frame_buffer[128 * 64 / 8];  // 1 KB framebuffer
 SDRAM_DATA uint32_t modbus_log[4096];             // 16 KB log
 
@@ -313,11 +306,8 @@ void* sdram_alloc(size_t bytes) {
 **SDRAM Regions (Memory Map)**:
 ```
 Hardware: 8 MB total (M12L64322A SDRAM on Colorlight i9)
-├─ 0x20000000 ─ 0x200FFFFF (1 MB)  ← NodeNet485 TX/RX FIFOs (hardware managed)
-│  ├─ TX FIFO: 0x20000000 – 0x2007FFFF (512 KB)
-│  └─ RX FIFO: 0x20080000 – 0x200FFFFF (512 KB)
-└─ 0x20100000 ─ 0x207FFFFF (7 MB)  ← Application region (PicoRV32)
-   ├─ SDRAM_DATA variables (placed by linker)
+└─ 0x20000000 ─ 0x207FFFFF (8 MB)  ← Application region (PicoRV32)
+    ├─ SDRAM_DATA variables (placed by linker)
    ├─ Heap (manual allocation)
    └─ Free space
 ```
