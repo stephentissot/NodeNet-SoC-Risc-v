@@ -80,6 +80,7 @@ module nodenet_decoder (
       error_o <= 1'b0;
     end
     else begin
+      msg_valid_o <= 1'b0;
       msg_data_valid_o <= 1'b0;
       msg_complete_o <= 1'b0;
       error_o <= 1'b0;

@@ -71,21 +71,34 @@
 // 100 kHz @ 25 MHz → 62
 // 400 kHz @ 25 MHz → 15
 
+#define I2C_TIMEOUT_LOOPS 1000000u
+
 // ─── Inline helpers ──────────────────────────────────────────────────────────
 
-static inline void i2c0_wait_busy(void) {
-    while (!(I2C0_FIFO & I2C_FIFO_CMD_EMPTY));
-    while (  I2C0_STATUS & I2C_STATUS_BUSY  );
+static inline bool i2c0_wait_busy(void) {
+    uint32_t timeout = I2C_TIMEOUT_LOOPS;
+    while (!(I2C0_FIFO & I2C_FIFO_CMD_EMPTY) && timeout--) {}
+    if (timeout == 0) return false;
+
+    timeout = I2C_TIMEOUT_LOOPS;
+    while ((I2C0_STATUS & I2C_STATUS_BUSY) && timeout--) {}
+    return timeout != 0;
 }
 
-static inline void i2c0_push_data(uint8_t data) {
-    while (I2C0_FIFO & I2C_FIFO_WR_FULL);
+static inline bool i2c0_push_data(uint8_t data) {
+    uint32_t timeout = I2C_TIMEOUT_LOOPS;
+    while ((I2C0_FIFO & I2C_FIFO_WR_FULL) && timeout--) {}
+    if (timeout == 0) return false;
     I2C0_DATA = data;
+    return true;
 }
 
-static inline void i2c0_push_cmd(uint8_t cmd) {
-    while (I2C0_FIFO & I2C_FIFO_CMD_FULL);
+static inline bool i2c0_push_cmd(uint8_t cmd) {
+    uint32_t timeout = I2C_TIMEOUT_LOOPS;
+    while ((I2C0_FIFO & I2C_FIFO_CMD_FULL) && timeout--) {}
+    if (timeout == 0) return false;
     I2C0_CMD = cmd;
+    return true;
 }
 
 /**
@@ -102,32 +115,36 @@ static inline void i2c0_init(uint16_t prescale) {
  * @param addr  7-bit device address
  * @param buf   data bytes to send
  * @param len   number of bytes
- * @return 0 on success, 1 if slave NACK'd
+ * @return 0 on success, 1 if slave NACK'd, 2 on timeout
  */
 static inline int i2c0_write(uint8_t addr, const uint8_t *buf, uint8_t len) {
     if (len == 0) return 0;
+
+    if (I2C0_STATUS & I2C_STATUS_MISS_ACK) {
+        I2C0_STATUS = I2C_STATUS_MISS_ACK; // Clear stale sticky bit
+    }
 
     I2C0_ADDR = addr;
 
     if (len == 1) {
         // Single byte: START | WRITE | STOP in one command
-        i2c0_push_data(buf[0]);
-        i2c0_push_cmd(I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP);
+        if (!i2c0_push_data(buf[0])) return 2;
+        if (!i2c0_push_cmd(I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP)) return 2;
     } else {
         // First byte
-        i2c0_push_data(buf[0]);
-        i2c0_push_cmd(I2C_CMD_START | I2C_CMD_WRITE);
+        if (!i2c0_push_data(buf[0])) return 2;
+        if (!i2c0_push_cmd(I2C_CMD_START | I2C_CMD_WRITE)) return 2;
         // Middle bytes
         for (uint8_t i = 1; i < len - 1; i++) {
-            i2c0_push_data(buf[i]);
-            i2c0_push_cmd(I2C_CMD_WRITE);
+            if (!i2c0_push_data(buf[i])) return 2;
+            if (!i2c0_push_cmd(I2C_CMD_WRITE)) return 2;
         }
         // Last byte with STOP
-        i2c0_push_data(buf[len - 1]);
-        i2c0_push_cmd(I2C_CMD_WRITE | I2C_CMD_STOP);
+        if (!i2c0_push_data(buf[len - 1])) return 2;
+        if (!i2c0_push_cmd(I2C_CMD_WRITE | I2C_CMD_STOP)) return 2;
     }
 
-    i2c0_wait_busy();
+    if (!i2c0_wait_busy()) return 2;
 
     if (I2C0_STATUS & I2C_STATUS_MISS_ACK) {
         I2C0_STATUS = I2C_STATUS_MISS_ACK; // W1C
@@ -141,10 +158,14 @@ static inline int i2c0_write(uint8_t addr, const uint8_t *buf, uint8_t len) {
  * @param addr  7-bit device address
  * @param buf   output buffer
  * @param len   number of bytes to read
- * @return 0 on success, 1 if slave NACK'd
+ * @return 0 on success, 1 if slave NACK'd, 2 on timeout
  */
 static inline int i2c0_read(uint8_t addr, uint8_t *buf, uint8_t len) {
     if (len == 0) return 0;
+
+    if (I2C0_STATUS & I2C_STATUS_MISS_ACK) {
+        I2C0_STATUS = I2C_STATUS_MISS_ACK; // Clear stale sticky bit
+    }
 
     I2C0_ADDR = addr;
 
@@ -152,17 +173,25 @@ static inline int i2c0_read(uint8_t addr, uint8_t *buf, uint8_t len) {
     for (uint8_t i = 0; i < len; i++) {
         uint8_t cmd = (i == 0) ? (I2C_CMD_START | I2C_CMD_READ) : I2C_CMD_READ;
         if (i == len - 1) cmd |= I2C_CMD_STOP;
-        i2c0_push_cmd(cmd);
+        if (!i2c0_push_cmd(cmd)) return 2;
     }
 
     // Read bytes as they arrive
     for (uint8_t i = 0; i < len; i++) {
-        while (I2C0_FIFO & I2C_FIFO_RD_EMPTY);
+        uint32_t timeout = I2C_TIMEOUT_LOOPS;
+        while ((I2C0_FIFO & I2C_FIFO_RD_EMPTY) && timeout--) {}
+        if (timeout == 0) return 2;
         buf[i] = (uint8_t)(I2C0_DATA & 0xFF);
     }
 
-    i2c0_wait_busy();
-    return (I2C0_STATUS & I2C_STATUS_MISS_ACK) ? 1 : 0;
+    if (!i2c0_wait_busy()) return 2;
+
+    if (I2C0_STATUS & I2C_STATUS_MISS_ACK) {
+        I2C0_STATUS = I2C_STATUS_MISS_ACK; // W1C
+        return 1;
+    }
+
+    return 0;
 }
 
 #endif /* I2C_H */

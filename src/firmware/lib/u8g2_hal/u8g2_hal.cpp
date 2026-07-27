@@ -78,14 +78,20 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
         // The hardware stalls automatically when FIFOs are full.
         const uint8_t *data = static_cast<const uint8_t *>(arg_ptr);
         for (uint8_t i = 0; i < arg_int; i++) {
-            i2c0_push_data(data[i]);
+            if (!i2c0_push_data(data[i])) {
+                s_tx_started = false;
+                return 0;
+            }
 
             uint8_t cmd = I2C_CMD_WRITE;
             if (!s_tx_started) {
                 cmd |= I2C_CMD_START;
                 s_tx_started = true;
             }
-            i2c0_push_cmd(cmd);
+            if (!i2c0_push_cmd(cmd)) {
+                s_tx_started = false;
+                return 0;
+            }
         }
         break;
     }
@@ -93,10 +99,16 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
     case U8X8_MSG_BYTE_END_TRANSFER:
         // Issue STOP to close the I2C frame
         if (s_tx_started) {
-            i2c0_push_cmd(I2C_CMD_STOP);
+            if (!i2c0_push_cmd(I2C_CMD_STOP)) {
+                s_tx_started = false;
+                return 0;
+            }
         }
         // Block until the hardware has physically finished
-        i2c0_wait_busy();
+        if (!i2c0_wait_busy()) {
+            s_tx_started = false;
+            return 0;
+        }
         s_tx_started = false;
         break;
 

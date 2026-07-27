@@ -1,12 +1,14 @@
 /**
  * @file nodenet.h
- * @brief NodeNet485 Wishbone Driver with SDRAM Ring Buffers
+ * @brief NodeNet485 Wishbone Driver (MMIO Mailbox)
  * 
  * Overview
  * ════════
  * This is the firmware API for the NodeNet485 multi-node RS-485 protocol.
- * Messages are queued in SDRAM ring buffers (512 KB each direction) managed
- * by firmware pointer arithmetic.
+ * Hardware exposes a mailbox register model over Wishbone:
+ *   - TX staging registers (destination, length, payload bytes)
+ *   - RX header/data reader for one decoded message at a time
+ * Framing/CRC/encoding are handled in RTL.
  * 
  * Quick Start
  * ═══════════
@@ -18,53 +20,26 @@
  *     nodenet0_free_message(msg);                  // Deallocate
  *   }
  * 
- * Ring Buffer Mechanics
+ * Mailbox Register Flow
  * ═════════════════════
- * 
- * TX FIFO (Firmware writes, Hardware reads):
- *   Firmware:                          Hardware:
- *   1. Write to SDRAM[TX_WPTR]   →    4. Read from SDRAM[TX_RPTR]
- *   2. Update TX_WPTR register   →    5. Transmit via UART
- *   3. Check TX_RPTR changed              6. Update TX_RPTR register
- * 
- * RX FIFO (Hardware writes, Firmware reads):
- *   Hardware:                          Firmware:
- *   1. Receive from UART         →    3. Read from SDRAM[RX_RPTR]
- *   2. Write to SDRAM[RX_WPTR]   →    4. Update RX_RPTR register
- *         Update RX_WPTR register
- * 
- * Frame Format in Ring Buffer
- * ════════════════════════════
- * Each message in SDRAM is stored as:
- *   [dst(1 byte) | len_hi(1 byte) | len_lo(1 byte) | payload(N bytes)]
- * 
- * Example: Send "Hi" to node 0x02:
- *   [0x02 | 0x00 | 0x02 | 'H' | 'i']  ← 5 bytes total in ring buffer
- * 
- * Capacity
- * ════════
- * - TX FIFO: 512 KB starting at 0x20000000
- * - RX FIFO: 512 KB starting at 0x20080000
- * - Typical message: 2 KB (header + payload)
- * - Typical capacity: ~250 messages per direction
- * 
- * Pointer Wrapping
- * ════════════════
- * Ring buffers wrap around when reaching FIFO_SIZE:
- *   new_ptr = (old_ptr + size) % FIFO_SIZE
- * 
- * Example: FIFO_SIZE = 512 KB (0x80000 bytes)
- *   ptr = 0x7FFF0 (near end)
- *   msg_len = 0x20
- *   new_ptr = (0x7FFF0 + 0x20) % 0x80000 = 0x10 (wraps to start)
+ * TX path:
+ *   1. Write TX_CMD = [dst | len]
+ *   2. Write payload bytes to TX_DATA
+ *   3. Trigger CONTROL.bit0
+ *   4. Hardware schedules/encodes/transmits
+ *
+ * RX path:
+ *   1. Poll RX valid bit (RX_HDR[16])
+ *   2. Read src/len from RX_HDR
+ *   3. Read len bytes from RX_DATA
+ *   4. Mailbox auto-clears when last byte is read
  * 
  * Debugging Tips
  * ══════════════
- * 1. Check TX FIFO status:  wptr = *(uint32_t*)0x10006000, rptr = *(uint32_t*)0x10006004
- * 2. Check RX FIFO status:  wptr = *(uint32_t*)0x10006008, rptr = *(uint32_t*)0x1000600C
- * 3. Read raw SDRAM:        *(uint8_t*)(0x20000000 + offset) for TX inspection
- * 4. Monitor wire protocol: Logic analyzer on H16 (RX), H17 (TX)
- * 5. Test loopback:         Currently active - send should immediately echo
+ * 1. Inspect NODENET_STATUS for RX/TX/error bits
+ * 2. Inspect NODENET_RX_HDR for [src, valid, len]
+ * 3. Monitor wire protocol on H16 (RX), H17 (TX)
+ * 4. Inject known frames and verify CRC/error flags
  */
 
 #ifndef NODENET_H

@@ -70,6 +70,7 @@ module top (
     wire        nodenet_ack;
     wire [31:0] flash_dat;
     wire        flash_ack;
+    wire        flash_spi_clk;
     wire [31:0] sdram_dat;
     wire        sdram_ack;
 
@@ -258,10 +259,17 @@ module top (
         .we_i(wb_we),
         .ack_o(flash_ack),
         
-        // SCK is generated internally; not exposed as a GPIO pin
+        // SCK is routed to the dedicated USRMCLK network below
+        .spi_clk_o(flash_spi_clk),
         .spi_mosi_o(flash_mosi),
         .spi_miso_i(flash_miso),
         .spi_cs_n_o(flash_cs_n)
+    );
+
+    // ECP5 dedicated user clock path to the configuration flash SCK pin.
+    USRMCLK flash_usrmclk (
+        .USRMCLKI(flash_spi_clk),
+        .USRMCLKTS(1'b0)
     );
 
 endmodule

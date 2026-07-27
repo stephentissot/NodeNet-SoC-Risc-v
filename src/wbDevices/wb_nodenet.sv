@@ -22,7 +22,7 @@ module wb_nodenet #(
   input  wire [3:0] sel_i,
   input  wire cyc_i,
   input  wire stb_i,
-  output wire ack_o,
+  output reg ack_o,
   input  wire uart_rx_i,
   output wire uart_tx_o
 );
@@ -94,6 +94,8 @@ module wb_nodenet #(
 
   wire rst_n = ~rst_i;
   wire wb_valid = cyc_i && stb_i;
+  reg wb_valid_d;
+  wire wb_fire = wb_valid && !wb_valid_d;
   wire [2:0] reg_index = adr_i[4:2];
 
   reg [7:0] node_addr;
@@ -147,8 +149,6 @@ module wb_nodenet #(
 
   wire heartbeat_trigger;
   wire [31:0] unused_next_transmit_allowed;
-
-  assign ack_o = wb_valid;
 
   uart_simple #(
     .CLOCK_RATE(CLOCK_RATE),
@@ -227,7 +227,12 @@ module wb_nodenet #(
       rx_error_sticky <= 1'b0;
       dat_o <= 32'h0000_0000;
       uart_tx_data <= 8'hFF;
+      ack_o <= 1'b0;
+      wb_valid_d <= 1'b0;
     end else begin
+      wb_valid_d <= wb_valid;
+      ack_o <= wb_fire;
+
       if (tx_cooldown_counter != 32'h0000_0000)
         tx_cooldown_counter <= tx_cooldown_counter - 32'h0000_0001;
 
@@ -263,7 +268,7 @@ module wb_nodenet #(
         tx_cooldown_counter <= compute_tx_delay(8'h00, prio);
       end
 
-      if (wb_valid) begin
+      if (wb_fire) begin
         if (we_i) begin
           case (reg_index)
             REG_TX_CMD: begin
