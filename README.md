@@ -112,6 +112,13 @@ make unlock-flash
 make lock-flash
 ```
 
+CPU profile note:
+- Default build is configured in fast mode for PicoRV32 in [src/top.sv](src/top.sv) with:
+  - `.BARREL_SHIFTER(1)`
+  - `.ENABLE_FAST_MUL(1)`
+  - `.ENABLE_DIV(1)`
+- To switch back to the normal/smaller CPU profile, set those three parameters to `0` in [src/top.sv](src/top.sv) and rebuild (`make clean; make`).
+
 If OpenOCD flash programming fails on your setup, you can switch the flash
 targets in `Makefile` to ecpdap. Reference commands:
 
