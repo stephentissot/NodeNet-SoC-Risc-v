@@ -22,6 +22,8 @@
 #include "version.h"
 #include "nodenet.h"
 #include "flash.h"
+#include "sdram.h"
+#include "i2c.h"
 #include "u8g2.h"
 #include "u8g2_hal.h"
 
@@ -37,6 +39,16 @@ extern "C" void __cxa_pure_virtual() { while (1); }
 /** Simple delay function (@ 25 MHz) */
 void delay_ms(uint32_t ms) {
     for (volatile uint32_t i = 0; i < ms * 25000; i++) {}
+}
+
+void blink_code(uint8_t code, uint32_t gap_ms) {
+    for (uint8_t i = 0; i < code; ++i) {
+        LED = 1;
+        delay_ms(120);
+        LED = 0;
+        delay_ms(180);
+    }
+    delay_ms(gap_ms);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -99,8 +111,19 @@ bool test_led(void) {
 
 /** Test I2C0 — verify OLED responds */
 bool test_i2c(void) {
-    // If OLED initialized and displayed, I2C is working
-    return true;  // Already tested by OLED init
+    // Controller-level check independent of any external device presence.
+    // Program a known prescale and verify read-back through Wishbone.
+    const uint16_t expected = 62;  // 100 kHz @ 25 MHz
+    i2c0_init(expected);
+
+    uint16_t readback = (uint16_t)((I2C0_PRESC_HI << 8) | (I2C0_PRESC_LO & 0xFF));
+    return readback == expected;
+}
+
+/** Test SDRAM read/write path */
+bool test_sdram(void) {
+    sdram_wait_ready();
+    return sdram_test(256) == 0;
 }
 
 /** Test NodeNet485 RS-485 transport */
@@ -205,20 +228,26 @@ int main(void) {
     oled_print_test(line++, "I2C0 (OLED)", i2c_ok);
     if (i2c_ok) pass_count++;
     total_count++;
+
+    // Test 3: SDRAM
+    bool sdram_ok = test_sdram();
+    oled_print_test(line++, "SDRAM", sdram_ok);
+    if (sdram_ok) pass_count++;
+    total_count++;
     
-    // Test 3: NodeNet485
+    // Test 4: NodeNet485
     bool nodenet_ok = test_nodenet();
     oled_print_test(line++, "NodeNet485", nodenet_ok);
     if (nodenet_ok) pass_count++;
     total_count++;
     
-    // Test 4: SPI Flash protection
+    // Test 5: SPI Flash protection
     bool flash_ok = test_flash();
     oled_print_test(line++, "Flash protect", flash_ok);
     if (flash_ok) pass_count++;
     total_count++;
     
-    // Test 5: Flash parameters
+    // Test 6: Flash parameters
     bool flash_param_ok = test_flash_params();
     oled_print_test(line++, "Flash params", flash_param_ok);
     if (flash_param_ok) pass_count++;
@@ -230,15 +259,29 @@ int main(void) {
     snprintf(summary, sizeof(summary), "Result: %d/%d PASS", pass_count, total_count);
     oled_print_line(line, summary);
     
+    // Failure code for quick diagnosis without OLED
+    // 1=LED, 2=I2C, 3=SDRAM, 4=NodeNet, 5=Flash protect, 6=Flash params
+    uint8_t fail_code = 0;
+    if (!led_ok) fail_code = 1;
+    else if (!i2c_ok) fail_code = 2;
+    else if (!sdram_ok) fail_code = 3;
+    else if (!nodenet_ok) fail_code = 4;
+    else if (!flash_ok) fail_code = 5;
+    else if (!flash_param_ok) fail_code = 6;
+
     // Overall status
-    LED = pass_count == total_count ? 1 : 0;  // LED on if all pass
+    LED = (fail_code == 0) ? 1 : 0;
     
     oled_show();
     
-    // Wait for observation (LED blink every 2 seconds)
+    // Wait for observation
     while (1) {
-        delay_ms(2000);
-        LED ^= 1;  // Toggle LED every 2 seconds
+        if (fail_code == 0) {
+            delay_ms(2000);
+            LED ^= 1;  // Healthy heartbeat
+        } else {
+            blink_code(fail_code, 1000);
+        }
     }
     
     return 0;

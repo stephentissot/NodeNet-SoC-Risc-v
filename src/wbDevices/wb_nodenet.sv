@@ -1,12 +1,5 @@
 /**
  * @file wb_nodenet.sv
- * @brief NodeNet485 Wishbone B.4 Slave with SDRAM Ring Buffers
- * 
- * High-level Overview:
- * ────────────────────
- * This module implements a multi-node message passing protocol over RS-485 at 1 Mb/s.
-/**
- * @file wb_nodenet.sv
  * @brief NodeNet485 Wishbone B.4 Slave with MMIO mailboxes
  *
  * The original design described SDRAM-backed FIFOs, but this block has no
@@ -18,10 +11,7 @@
 `include "src/wbDevices/nodenet_defines.vh"
 
 module wb_nodenet #(
-  parameter [31:0] CLOCK_RATE = 25_000_000,
-  parameter [31:0] SDRAM_TX_BASE = 32'h20000000,
-  parameter [31:0] SDRAM_RX_BASE = 32'h20080000,
-  parameter [31:0] SDRAM_FIFO_SIZE = 32'h80000
+  parameter [31:0] CLOCK_RATE = 25_000_000
 ) (
   input  wire clk_i,
   input  wire rst_i,

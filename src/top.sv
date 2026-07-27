@@ -121,9 +121,7 @@ module top (
     );
     
     wb_nodenet #(
-        .CLOCK_RATE(25_000_000),
-        .SDRAM_TX_BASE(32'h2000_0000),  // 512 KB TX FIFO
-        .SDRAM_RX_BASE(32'h2008_0000)   // 512 KB RX FIFO
+        .CLOCK_RATE(25_000_000)
     ) nodenet0
     (
         .clk_i(clk_25mhz),

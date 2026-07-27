@@ -7,6 +7,7 @@ The Colorlight i9 SoC includes a comprehensive **test firmware** (`test_main.cpp
 Test coverage:
 - ✓ LED GPIO (D2 blink)
 - ✓ I2C0 master (SSD1306 OLED communication)
+- ✓ SDRAM controller (read/write validation)
 - ✓ NodeNet485 RS-485 communication
 - ✓ SPI Flash read/write/protection
 
@@ -16,11 +17,11 @@ By default, the project builds with `main.cpp` (NodeNet485 echo loop). To build 
 
 ```bash
 # Using bash (recommended for Unix-like environment):
-cd d:\FPGA\projects\colorlight_blink
+cd d:\FPGA\projects\NodeNet-SoC-RiscV
 bash -c "make clean && make -C src/firmware MAIN_SRC=test_main.cpp && make all"
 
 # Or using PowerShell on Windows (with subshell):
-cd d:\FPGA\projects\colorlight_blink
+cd d:\FPGA\projects\NodeNet-SoC-RiscV
 powershell -Command {& make clean; make -C src/firmware -e MAIN_SRC=test_main.cpp; make all}
 
 # Or modify src/firmware/Makefile to use test_main.cpp by default (not recommended for CI)
@@ -54,15 +55,21 @@ Once the Colorlight i9 is programmed with the test bitstream:
    Colorlight i9 Test Suite
    LED: OK
    I2C0 (OLED): OK
+  SDRAM: OK
    NodeNet485: OK/FAIL
    Flash protect: OK
    Flash params: OK
-   Result: 5/5 PASS
+  Result: 6/6 PASS
    ```
 3. **LED behavior**:
-   - If all tests pass: LED stays ON
-   - If any test fails: LED stays OFF
-   - After results displayed: LED blinks every 2 seconds for observation
+  - If all tests pass: LED heartbeat (toggle every 2 seconds)
+  - If a test fails: LED blinks a failure code repeatedly
+    - 1 blink: LED test
+    - 2 blinks: I2C/OLED test
+    - 3 blinks: SDRAM test
+    - 4 blinks: NodeNet test
+    - 5 blinks: Flash protection test
+    - 6 blinks: Flash parameter test
 
 ## Test Descriptions
 
@@ -75,6 +82,11 @@ Once the Colorlight i9 is programmed with the test bitstream:
 - **Purpose**: Verify I2C master communication with SSD1306
 - **Action**: Initializes OLED display and writes test results
 - **Pass Criteria**: OLED displays text without errors
+
+### SDRAM
+- **Purpose**: Verify external SDRAM init + read/write path
+- **Action**: Waits for SDRAM controller readiness, then runs a small word-pattern test
+- **Pass Criteria**: No mismatch during read-back
 
 ### NodeNet485
 - **Purpose**: Verify RS-485 communication protocol
@@ -98,6 +110,14 @@ Once the Colorlight i9 is programmed with the test bitstream:
 - **Pass Criteria**: Values match exactly
 
 ## Troubleshooting
+
+### Day-1 Bring-up Checklist (No Instruments Needed)
+
+1. Program RAM with test firmware (`MAIN_SRC=test_main.cpp`).
+2. Confirm D2 LED changes state within 2-3 seconds after reset.
+3. If OLED is connected, check the 6 test lines and final 6/6 summary.
+4. If OLED is not connected, use LED code blinks to identify first failing stage.
+5. After all pass, rebuild default firmware (`make clean; make all`) and reflash.
 
 ### "I2C0 (OLED): FAIL"
 - **Cause**: OLED not responding on I2C
