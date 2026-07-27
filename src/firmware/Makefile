@@ -10,11 +10,15 @@ GIT_HASH := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 # Main source file (can be overridden: make MAIN_SRC=test_main.cpp)
 MAIN_SRC ?= main.cpp
 
+# Persistent cache root for third-party library objects/archives.
+# Reuse this pattern if more vendored libraries need expensive rebuilds later.
+CACHE_ROOT=.cache
+
 # u8g2 library location
 U8G2_DIR=lib/u8g2/csrc
 U8G2_SRCS=$(wildcard $(U8G2_DIR)/*.c)
-U8G2_CACHE=.cache/u8g2
-U8G2_LIB=.cache/libu8g2.a
+U8G2_CACHE=$(CACHE_ROOT)/u8g2
+U8G2_LIB=$(CACHE_ROOT)/libu8g2.a
 U8G2_OBJS=$(patsubst $(U8G2_DIR)/%.c,$(U8G2_CACHE)/%.o,$(U8G2_SRCS))
 
 CFLAGS=-march=rv32im -mabi=ilp32 \
@@ -89,4 +93,4 @@ clean:
 	rm -rf $(BUILD)
 
 distclean: clean
-	rm -rf .cache
+	rm -rf $(CACHE_ROOT)

@@ -3,6 +3,7 @@ build/
 xpacks/
 node_modules/
 src/firmware/build/
+src/firmware/.cache/
 
 # Fichiers de build
 *.o
