@@ -169,6 +169,20 @@ Address Range               Size      Purpose
 - **Transceiver**: Any RS-485 module with auto-switching (MAX485, SN65HVD11, etc.)
 - **Multi-Node**: Up to 20 nodes on shared bus with address-based scheduling
 - **Features**: Parity-encoded payload (2x expansion), XOR CRC, priority levels (LOW/NORMAL/HIGH), heartbeat
+- **Connector topology**: 2x RJ45 in daisy-chain (IN/OUT), wired pin-to-pin between connectors
+
+NodeNet RJ45 pinout (both connectors):
+
+| RJ45 Pin | Signal |
+|---|---|
+| 1 | +12V |
+| 2 | +12V |
+| 3 | RS485 A |
+| 4 | GND |
+| 5 | GND |
+| 6 | RS485 B |
+| 7 | GND |
+| 8 | GND |
 
 ### I2C (pmodg connector)
 - **SCL**: H4 (pmodg[0])
@@ -299,6 +313,17 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
 - [x] NodeNet485 mailbox transport with TX/RX framing and heartbeat
 - [ ] UART1–4 implementation and testing
 - [ ] RS485 multiplexer firmware control
+- [ ] `wb_gpio` control bit for RS485 120R termination switch (74LVC1G66GW,125)
+- [ ] Modbus V1 front-end: 4x RS485 modules + 8x TMUX4051 (2 per RS485 channel)
+- [ ] TMUX EN selector control (3-bit bus + EN pulse via 74HC138/74LVC138 class device)
+- [ ] `wb_gpiopwm` peripheral + firmware API (PKLCS1212E4001-R1 buzzer)
+- [ ] TMP117 board temperature sensor + firmware I2C driver/API
+- [ ] Display validation: OLED over I2C and LCD over SPI (select final path after tests)
+- [ ] Evaluate and select more robust 1 Mb/s transceivers for Modbus and NodeNet
+- [ ] Dual Ethernet breakout using i9 onboard Broadcom PHYs (2x RJ45 with magnetics)
+- [ ] RJ45 LEDs integration and firmware-controlled blink policy (link/activity/status)
+- [ ] ESP32 module SPI coprocessor for web API and MQTT bridge
+- [ ] Power option study: use ESP32 module 3.3V rail vs dedicated 12V->3.3V buck
 - [ ] Modbus RTU library (master/slave modes)
 - [ ] NodeNet JSON protocol wrapper (UART4)
 - [ ] SPI slave interface for ESP32 co-processor
