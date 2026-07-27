@@ -7,7 +7,7 @@ A complete RISC-V System-on-Chip (SoC) design for the Colorlight i9 FPGA board, 
 This project demonstrates a scalable embedded systems design on a cost-effective FPGA:
 - **Processor**: PicoRV32 (32-bit RISC-V, bare-metal)
 - **Clock**: 25 MHz
-- **Memory**: 64 KiB ROM (boot code) + 64 KiB RAM (stack/variables) + 8 MB SDRAM
+- **Memory**: 64 KiB ROM (boot code) + 64 KiB RAM (stack/variables) + 8 MB SDRAM (1 MB NodeNet485, 7 MB app)
 - **Peripherals**: LED GPIO, RS485 NodeNet485, I2C master, SDRAM controller
 - **Communication**: NodeNet485 @ 1 Mb/s over RS-485 (multi-node capable)
 - **Firmware**: C++17, bare-metal, newlib-nano
@@ -19,11 +19,11 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 - **PicoRV32 Core**: Open-source RISC-V ISA, ~6K LUT footprint
 - **Memory Map**:
   - `0x00000000–0x0000FFFF`: 64 KiB boot ROM
-  - `0x00010000–0x0002FFFF`: 64 KiB RAM
+  - `0x00010000–0x0001FFFF`: 64 KiB RAM (stack, BSS, heap)
   - `0x10000000`: LED GPIO (1-bit output)
   - `0x10005000`: I2C0 master (8 registers @ 4-byte stride)
-  - `0x10006000–0x1000601F`: NodeNet485 Wishbone slave (1 Mb/s RS-485)
-  - `0x20000000–0x207FFFFF`: 8 MB SDRAM (M12L64322A)
+  - `0x10006000`: NodeNet485 RS-485 (6 registers, 1 Mb/s)
+  - `0x20000000–0x207FFFFF`: 8 MB SDRAM (1 MB NodeNet485, 7 MB app)
 
 ### Peripherals
 - **NodeNet485 Module** (`wb_nodenet.sv`):
@@ -41,8 +41,13 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - Wraps Alex Forencich's `i2c_master_wbs_8` core
   - Hardware command + write + read FIFOs (32 entries each)
   - Configurable speed (default 100 kHz, up to 400 kHz @ 25 MHz)
-  - Drives SCL/SDA open-drain (external 4.7 kΩ pullup required)
+  - Drives SCL/SDA open-drain (external 4.7 kΩ pullup required)  - Wishbone address: 0x10005000
 
+- **SPI Flash Module** (`wb_flash.sv`, planned):
+  - Wishbone interface to on-board SPI flash (M95128, 256 Kbit = 32 KB)
+  - Arbitrary read/write at sector level (256 bytes/sector)
+  - C++ firmware API for parameter storage (like Arduino preferences)
+  - Wear-leveling on write to extend flash lifetime
 ### Firmware
 - **C++17 bare-metal** (`firmware/main.cpp`):
   - Compiled with `riscv-none-elf-g++` — no Arduino, no OS
@@ -93,30 +98,30 @@ make clean
 ## Memory Layout
 
 ```
-Address Range             Size      Purpose
-─────────────────────────────────────────────────────────
-0x00000000–0x0000FFFF   64 KiB    Boot ROM (firmware binary)
-0x00010000–0x0002FFFF   64 KiB    RAM (stack, BSS, heap)
-─────────────────────────────────────────────────────────
-0x10000000              4 B       LED GPIO (bit [0] = LED output)
-0x10001000              12 B      UART0 (DATA @ +0x0, STATUS @ +0x4, BAUD @ +0x8)
-0x10002000              12 B      UART1 (planned)
-0x10003000              12 B      UART2 (planned)
-0x10004000              12 B      UART3 (planned)
-0x10005000              32 B      I2C0 (8 regs × 4 bytes — see i2c.h)
-─────────────────────────────────────────────────────────
-0x20000000–0x207FFFFF   8 MB      SDRAM (M12L64322A, external)
+Address Range               Size      Purpose
+────────────────────────────────────────────────────────────
+0x00000000–0x0000FFFF     64 KiB   Boot ROM (firmware binary)
+0x00010000–0x0001FFFF     64 KiB   RAM (stack, BSS, heap)
+────────────────────────────────────────────────────────────
+0x10000000                4 B      LED GPIO (bit [0] = LED output)
+0x10005000                32 B     I2C0 master (8 regs @ 4-byte stride)
+0x10006000–0x1000601F     32 B     NodeNet485 (RS485, 1 Mb/s)
+────────────────────────────────────────────────────────────
+0x20000000–0x200FFFFF     1 MB     SDRAM — NodeNet485 reserved
+                                    (TX: 0x20000000–0x2007FFFF)
+                                    (RX: 0x20080000–0x200FFFFF)
+0x20100000–0x207FFFFF     7 MB     SDRAM — Application (PicoRV32)
 ```
 
 ## Device Pinout
 
-### RJ45 Connectors (Modbus RS485)
-- **RJ45_0**: UART0 (pair 0–3 routed via TMUX0)
-- **RJ45_1**: UART1 (pair 0–3 routed via TMUX1)
-- **RJ45_2**: UART2 (pair 0–3 routed via TMUX2)
-- **RJ45_3**: UART3 (pair 0–3 routed via TMUX3)
-
-Each RJ45 exposes 4 twisted pairs; multiplexer allows any UART to route to any pair dynamically.
+### RS485 (NodeNet485 Protocol)
+- **Pins**: H16 (RX), H17 (TX)
+- **Baud Rate**: 1 Mb/s (fixed, configurable via UART parameter)
+- **Protocol**: Multi-node RS-485 with HDLC framing, anti-collision, heartbeat
+- **Transceiver**: Any RS-485 module with auto-switching (MAX485, SN65HVD11, etc.)
+- **Multi-Node**: Up to 20 nodes on shared bus with address-based scheduling
+- **Features**: Parity-encoded payload (2x expansion), XOR CRC, priority levels (LOW/NORMAL/HIGH)
 
 ### I2C (pmodg connector)
 - **SCL**: H4 (pmodg[0])
@@ -125,10 +130,7 @@ Each RJ45 exposes 4 twisted pairs; multiplexer allows any UART to route to any p
 - Compatible with any I2C device: OLED, sensors, ADC, GPIO expanders…
 
 ### GPIO
-- **D2 LED**: GPIO output (indicates CPU activity)
-- **Multiplexer Control** (4 pins):
-  - 3× Address lines (A0–A2) – shared across all 8 muxes
-  - 1× Decoder select (8-way demux via 74HC138)
+- **D2 LED**: GPIO output at 0x10000000 (bit [0] = LED state)
 
 ## Firmware Examples
 
