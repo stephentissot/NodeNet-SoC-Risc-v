@@ -1,4 +1,5 @@
 CROSS=riscv-none-elf-
+AR=$(CROSS)ar
 
 # ─── Artifact identity ──────────────────────────────────────────────────────
 TARGET  = nodenet_riscv
@@ -13,6 +14,7 @@ MAIN_SRC ?= main.cpp
 U8G2_DIR=lib/u8g2/csrc
 U8G2_SRCS=$(wildcard $(U8G2_DIR)/*.c)
 U8G2_CACHE=.cache/u8g2
+U8G2_LIB=.cache/libu8g2.a
 U8G2_OBJS=$(patsubst $(U8G2_DIR)/%.c,$(U8G2_CACHE)/%.o,$(U8G2_SRCS))
 
 CFLAGS=-march=rv32im -mabi=ilp32 \
@@ -57,7 +59,7 @@ $(BUILD):
 $(U8G2_CACHE):
 	mkdir -p $@
 
-$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(BUILD)/main.o $(BUILD)/u8g2_hal.o $(U8G2_OBJS) | $(BUILD)
+$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(BUILD)/main.o $(BUILD)/u8g2_hal.o $(U8G2_LIB) | $(BUILD)
 	$(CROSS)g++ $(LDFLAGS) $^ -o $@
 
 $(BUILD)/start.o: start.S | $(BUILD)
@@ -73,6 +75,9 @@ $(BUILD)/u8g2_hal.o: lib/u8g2_hal/u8g2_hal.cpp | $(BUILD)
 # recompiling the whole graphics library on the next firmware rebuild.
 $(U8G2_CACHE)/%.o: $(U8G2_DIR)/%.c | $(U8G2_CACHE)
 	$(CROSS)gcc $(CFLAGS) -c $< -o $@
+
+$(U8G2_LIB): $(U8G2_OBJS)
+	$(AR) rcs $@ $^
 
 $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 	$(CROSS)objcopy \
