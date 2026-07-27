@@ -53,7 +53,7 @@ src/firmware/
 | Address Range | Size | Description |
 |--------------|------|-------------|
 | `0x00000000–0x0000FFFF` | 64 KiB | **Boot ROM** — firmware binary |
-| `0x00010000–0x0002FFFF` | 64 KiB | **RAM** — stack, BSS, initialized data |
+| `0x00010000–0x0001FFFF` | 64 KiB | **RAM** — stack, BSS, initialized data |
 | `0x10000000` | 4 B | **LED GPIO** |
 | `0x10005000` | 32 B | **I2C0** |
 | `0x10006000` | 32 B | **NodeNet485** (RS-485 @ 1 Mb/s) |
@@ -135,7 +135,7 @@ if (nodenet0_has_message()) {
 // Initialize node address and priority
 void nodenet0_init(uint8_t addr, NodeNetPriority priority);
 
-// Send message (blocks if TX FIFO full)
+// Send message (blocks while TX mailbox is busy)
 void nodenet0_send(uint8_t dst, const uint8_t *data, uint16_t len);
 void nodenet0_send(uint8_t dst, const char *str);  // C-string variant
 
@@ -267,7 +267,7 @@ For full protocol documentation including frame format, CRC, and encoding detail
 #include "sdram.h"
 
 // Place large variables in SDRAM at link time
-// (linker assigns addresses automatically from SDRAM_APP_BASE)
+// (linker assigns addresses automatically from SDRAM_BASE)
 SDRAM_DATA uint8_t  frame_buffer[128 * 64 / 8];  // 1 KB framebuffer
 SDRAM_DATA uint32_t modbus_log[4096];             // 16 KB log
 
@@ -278,20 +278,20 @@ int main() {
     // Zero-initialize (SDRAM content is undefined at power-on)
     __builtin_memset(frame_buffer, 0, sizeof(frame_buffer));
 
-    // Direct pointer access (in application region)
-    volatile uint32_t *sdram = (volatile uint32_t *)SDRAM_APP_BASE;
+    // Direct pointer access (full SDRAM region)
+    volatile uint32_t *sdram = (volatile uint32_t *)SDRAM_BASE;
     sdram[0] = 0xDEADBEEF;
 
     // Memory test (application region)
-    uint32_t errors = sdram_test(1024);  // Test first 4 KB of app region
+    uint32_t errors = sdram_test(1024);  // Test first 4 KB
     if (errors == 0) uart_puts("SDRAM OK\n");
 }
 ```
 
 **Allocating large buffers dynamically** (pointer arithmetic):
 ```cpp
-// Manual allocator from SDRAM application region
-static uintptr_t sdram_ptr = SDRAM_APP_BASE;
+// Manual allocator from SDRAM base
+static uintptr_t sdram_ptr = SDRAM_BASE;
 
 void* sdram_alloc(size_t bytes) {
     void* p = (void*)sdram_ptr;
@@ -314,23 +314,8 @@ Hardware: 8 MB total (M12L64322A SDRAM on Colorlight i9)
 
 **Constants in `sdram.h`**:
 ```cpp
-#define SDRAM_NODENET_BASE  0x20000000UL    // NodeNet485 reserved start
-#define SDRAM_NODENET_SIZE  (1UL * 1024 * 1024)  // 1 MB
-#define SDRAM_APP_BASE      0x20100000UL    // Application region start
-#define SDRAM_APP_SIZE      (7UL * 1024 * 1024)  // 7 MB available
-#define SDRAM_BASE          SDRAM_APP_BASE  // Legacy: now points to app region
-#define SDRAM_SIZE          SDRAM_APP_SIZE  // Legacy: 7 MB (not 8 MB)
-```
-
-**Accessing NodeNet485 buffers directly** (if needed):
-```cpp
-// Direct inspection of TX FIFO (should never write here!)
-volatile uint8_t *tx_fifo = (volatile uint8_t *)SDRAM_NODENET_BASE;
-uint8_t first_msg_dst = tx_fifo[0];
-
-// Direct inspection of RX FIFO
-volatile uint8_t *rx_fifo = (volatile uint8_t *)(SDRAM_NODENET_BASE + 0x80000);
-uint8_t received_src = rx_fifo[0];
+#define SDRAM_BASE  0x20000000UL
+#define SDRAM_SIZE  (8UL * 1024 * 1024)
 ```
 
 ---

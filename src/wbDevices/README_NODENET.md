@@ -67,6 +67,17 @@ The current implementation is intentionally **self-contained**: `wb_nodenet.sv` 
 - One staged RX message at a time
 - Maximum payload length: 2048 bytes
 
+## SDRAM Usage Clarification
+
+`wb_nodenet.sv` does **not** read or write external SDRAM.
+
+- No TX FIFO in SDRAM
+- No RX FIFO in SDRAM
+- No concurrent SDRAM access path from NodeNet hardware
+
+All NodeNet message buffering is internal to `wb_nodenet.sv` and exposed through
+MMIO mailbox registers only.
+
 ## Module Files
 
 ### Core Modules
@@ -256,9 +267,7 @@ This prevents medium contention when multiple nodes transmit.
 
 ```verilog
 wb_nodenet #(
-    .CLOCK_RATE(25_000_000),
-    .FIFO_DEPTH(8),
-    .MAX_PAYLOAD(2048)
+   .CLOCK_RATE(25_000_000)
 ) nodenet0 (
     .clk_i(clk_25mhz),
     .rst_i(reset),

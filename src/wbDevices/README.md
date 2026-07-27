@@ -409,162 +409,37 @@ i2c0_read(0x48, &result, 1);
 
 ---
 
-### 7. `wb_nodenet.sv` – NodeNet485 Multi-Node RS-485 with SDRAM Ring Buffers
+### 7. `wb_nodenet.sv` – NodeNet485 Multi-Node RS-485 with MMIO Mailboxes
 
-**Purpose**: Wishbone B.4 slave implementing NodeNet485, a multi-node message passing protocol over RS-485 @ 1 Mb/s. Uses SDRAM ring buffers (512 KB TX + 512 KB RX) instead of on-chip BRAM for scalable queue capacity.
+**Purpose**: Wishbone B.4 slave implementing NodeNet485 over RS-485 @ 1 Mb/s with a mailbox-style register interface.
 
-**Address**: `0x10006000–0x1000601F` (5-bit register space)
+**Address**: `0x10006000–0x1000601B` (7 registers)
 
-**SDRAM Ring Buffers**:
-| Buffer | Address Range | Size | Purpose |
-|--------|---------------|------|---------|
-| TX FIFO | 0x20000000–0x2007FFFF | 512 KB | Messages queued by firmware for transmission |
-| RX FIFO | 0x20080000–0x200FFFFF | 512 KB | Messages received from RS-485 line |
-| Free | 0x20100000–0x207FFFFF | 7 MB | Available for application data |
-
-**Ring Buffer Frame Format**:
-```
-[dst(1 byte) | len_hi(1 byte) | len_lo(1 byte) | payload(N bytes)]
-```
-
-Example: Send "Hi" to node 0x02 → stored as `[0x02 | 0x00 | 0x02 | 'H' | 'i']` (5 bytes total)
-
-**Capacity**: ~250 messages per FIFO (assuming 2 KB average message size)
+**Important**: The current `wb_nodenet.sv` implementation does **not** access external SDRAM. TX/RX buffering is internal to the module and exposed via MMIO registers.
 
 **Register Map**:
 
-| Offset | Name | R/W | Bits | Purpose |
-|--------|------|-----|------|---------|
-| 0x00 | TX_WRITE_PTR | R/W | [31:0] | Firmware updates after writing message to TX SDRAM |
-| 0x04 | TX_READ_PTR | R/W | [31:0] | Hardware updates after transmitting; firmware clears |
-| 0x08 | RX_WRITE_PTR | R/W | [31:0] | Hardware updates after receiving; firmware may check |
-| 0x0C | RX_READ_PTR | R/W | [31:0] | Firmware updates after reading message from RX SDRAM |
-| 0x10 | CONFIG | R/W | [7:0]=addr, [9:8]=prio, [31:10]=hb_interval | Node address, priority, heartbeat config |
-| 0x14 | CONTROL | W | [0]=trigger_tx | Trigger immediate transmission (reserved) |
-| 0x18 | STATUS | R | [23]=rx_valid, [22]=tx_active, [21:18]=tx_avail, [17:14]=rx_avail | Status flags |
+| Offset | Name | R/W | Purpose |
+|--------|------|-----|---------|
+| 0x00 | TX_CMD | R/W | `[dst(31:24) | len(15:0)]` |
+| 0x04 | TX_DATA | R/W | Write payload bytes / read load count |
+| 0x08 | RX_HDR | R | `[src(31:24) | rx_valid(16) | len(15:0)]` |
+| 0x0C | RX_DATA | R | Read next received payload byte |
+| 0x10 | CONFIG | R/W | `[hb_interval(31:10) | prio(9:8) | addr(7:0)]` |
+| 0x14 | CONTROL | W | `bit0=trigger_tx bit1=clear_rx bit2=queue_heartbeat` |
+| 0x18 | STATUS | R | TX/RX state flags and sticky errors |
 
-**Parameters**:
+**Mailbox Capacity**:
+- One staged TX message
+- One staged RX message
+- Maximum payload length: 2048 bytes
 
-```systemverilog
-parameter [31:0] CLOCK_RATE = 25_000_000;     // 25 MHz
-parameter [31:0] SDRAM_TX_BASE = 32'h20000000;  // TX ring buffer base
-parameter [31:0] SDRAM_RX_BASE = 32'h20080000;  // RX ring buffer base
-parameter [31:0] SDRAM_FIFO_SIZE = 32'h80000;   // 512 KB each
-```
+**Hardware Pins**:
+- RX: H16 (input from RS-485 transceiver)
+- TX: H17 (output to RS-485 transceiver)
+- Driver Enable: automatic via transceiver module
 
-**Features**:
-- **UART Interface**: `uart_simple.sv` @ 1 Mb/s (24 cycles/bit @ 25 MHz)
-- **No Driver Enable**: RS-485 transceiver module handles DE automatically
-- **Scalable Queues**: 512 KB per direction (vs. typical 32 KB on-chip BRAM)
-- **Flexible Allocation**: User-configurable SDRAM regions via parameters
-- **Pointer-based Access**: Firmware controls ring buffer pointers via Wishbone
-- **Anti-Collision**: Automatic backoff (broadcast 50ms/addr, unicast 2ms/addr)
-- **Heartbeat**: Default ~10 seconds, configurable via CONFIG register
-- **Priority Scheduling**: LOW/NORMAL/HIGH transmission priority
-
-**Pointer Management** (Firmware Controls):
-
-TX Path (Firmware → Hardware):
-```
-1. Firmware writes message to SDRAM[TX_WRITE_PTR]
-2. Firmware updates TX_WRITE_PTR register
-3. Hardware detects TX_WRITE_PTR != TX_READ_PTR
-4. Hardware reads and transmits via UART
-5. Hardware updates TX_READ_PTR (message consumed)
-```
-
-RX Path (Hardware → Firmware):
-```
-1. Hardware receives bytes from UART
-2. Hardware writes to SDRAM[RX_WRITE_PTR]
-3. Hardware updates RX_WRITE_PTR register
-4. Firmware checks RX_READ_PTR != RX_WRITE_PTR
-5. Firmware reads from SDRAM[RX_READ_PTR]
-6. Firmware updates RX_READ_PTR (message consumed)
-```
-
-**Pointer Wrapping** (Circular Buffer):
-```c
-new_ptr = (old_ptr + size) % FIFO_SIZE
-
-// Example: FIFO_SIZE = 512 KB (0x80000 bytes)
-// ptr = 0x7FFF0, msg_len = 0x20
-// new_ptr = (0x7FFF0 + 0x20) % 0x80000 = 0x10  ← wraps to start
-```
-
-**Baud Rate Configuration**:
-- Divisor = `CLOCK_RATE / BAUD_RATE`
-- 1 Mb/s @ 25 MHz = 25 cycles/bit (default in uart_simple.sv)
-
-**Usage Example** (via `nodenet.h` C++ API):
-
-```cpp
-#include "nodenet.h"
-
-// Initialize node 0x01 with NORMAL priority
-nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
-
-// Send unicast message to node 0x02
-nodenet0_send(0x02, "Hello", 5);
-
-// Send broadcast alert to all nodes
-nodenet0_broadcast("SYSTEM_RESET");
-
-// Receive and echo messages
-while (1) {
-    if (nodenet0_has_message()) {
-        NodeNetMessage msg = nodenet0_read();
-        
-        // Echo back to sender (skip broadcasts)
-        if (msg.src_addr != 0) {
-            nodenet0_send(msg.src_addr, msg.data, msg.len);
-        }
-        
-        nodenet0_free_message(msg);  // Free allocated buffer
-    }
-}
-```
-
-**Hardware Pins** (Colorlight i9 UART pins):
-- RX → H16 (input from RS-485 transceiver)
-- TX → H17 (output to RS-485 transceiver)
-- Driver Enable: Not needed (hardware module handles automatically)
-
-**Performance**:
-- **Throughput**: ~40–50 kB/s effective (after protocol overhead)
-- **Message Latency**: ~10 ms for 64-byte message @ 1 Mb/s
-- **Anti-Collision**: Effective for 1–20 nodes on shared RS-485 bus
-- **Jitter**: Sub-millisecond (bare-metal, no OS)
-- **FIFO Capacity**: ~250 messages per direction (512 KB ÷ avg 2 KB/msg)
-
-**Current Implementation Status**:
-- ✅ Wishbone register interface complete (pointer management)
-- ✅ SDRAM ring buffer allocation configured
-- ✅ Firmware C++ API fully implemented (nodenet.h)
-- ✅ UART @ 1 Mb/s configured (H16/H17 pins)
-- ⏳ Loopback mode active (RX→TX echo for validation)
-- ⏳ Full encoder/decoder FSM (available but not yet wired)
-- ⏳ Hardware transmission logic (pending full FSM integration)
-
-**Debugging Tips**:
-1. Check TX FIFO: Read `TX_WRITE_PTR` and `TX_READ_PTR` to see if hardware is consuming messages
-2. Check RX FIFO: Read `RX_WRITE_PTR` and `RX_READ_PTR` to see if hardware is producing messages
-3. Inspect SDRAM: Use debugger to read raw bytes at 0x20000000 (TX) and 0x20080000 (RX)
-4. Monitor wire protocol: Logic analyzer on H16 (RX) and H17 (TX) pins
-5. Test loopback: Current mode echoes RX→TX immediately; any sent data should come back
-
-**Future Enhancements**:
-- Wire up full encoder/decoder FSM for protocol validation
-- Implement interrupt-driven message notification
-- Add timeout handling in firmware busy-wait loops
-- Implement CRC-16 polynomial (currently XOR only)
-- Add performance monitoring registers (byte counts, error flags)
-
-For full protocol specification and detailed API documentation, see [README_NODENET.md](README_NODENET.md).
-
----
-
-For detailed protocol specification and state machine diagrams, see [README_NODENET.md](README_NODENET.md).
+For full protocol details, state machines, and firmware API usage, see [README_NODENET.md](README_NODENET.md).
 
 ---
 

@@ -31,6 +31,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - Baud rate: 1 Mb/s
   - HDLC-style framing with parity bits and CRC
   - Mailbox-based Wishbone interface for TX/RX messages
+  - Internal message buffering (no external SDRAM FIFO usage)
   - Anti-collision backoff (address-based delay)
   - Periodic heartbeat for node discovery
   - Priority-based transmission (LOW/NORMAL/HIGH)
@@ -113,7 +114,7 @@ Address Range               Size      Purpose
 0x10006000–0x1000601B     28 B     NodeNet485 mailbox (RS485, 1 Mb/s)
 0x10007000                32 B     SPI Flash controller (W25Q64)
 ────────────────────────────────────────────────────────────
-0x20000000–0x207FFFFF     8 MB     SDRAM — Application / buffers / logs
+0x20000000–0x207FFFFF     8 MB     SDRAM — Fully available to firmware (app/buffers/logs)
 ────────────────────────────────────────────────────────────
 0x00000000–0x1FFFFF       2 MB     SPI Flash — FPGA boot config (PROTECTED)
 0x200000–0x203FFF         16 KB    SPI Flash — Parameter storage

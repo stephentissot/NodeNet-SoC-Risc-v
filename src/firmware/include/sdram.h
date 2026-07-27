@@ -7,22 +7,20 @@
  * before the SDRAM is accessible.
  *
  * SDRAM Allocation:
- *   0x20000000–0x200FFFFF (1 MB) — Reserved for NodeNet485 (TX + RX FIFOs)
- *   0x20100000–0x207FFFFF (7 MB) — Available for application (SDRAM_DATA variables)
+ *   0x20000000–0x207FFFFF (8 MB) — Available for application (SDRAM_DATA variables)
  *
  * Usage — place a variable in SDRAM:
  *
  *   #include "sdram.h"
  *
- *   SDRAM_DATA uint8_t  large_buffer[512 * 1024];  // Placed at 0x20100000+
+ *   SDRAM_DATA uint8_t  large_buffer[512 * 1024];  // Placed at 0x20000000+
  *   SDRAM_DATA uint32_t modbus_log[4096];
  *   SDRAM_DATA StaticJsonDocument<65536> json_doc;  // C++ only
  *
- * The linker assigns exact addresses automatically (starts at 0x20100000).
+ * The linker assigns exact addresses automatically (starts at 0x20000000).
  * Variables are placed in order of declaration across translation units.
  *
  * NOTE: Do NOT access SDRAM_DATA variables before calling sdram_wait_ready().
- * NOTE: NodeNet485 buffers are at 0x20000000 and handled separately.
  */
 
 #ifndef SDRAM_H
@@ -48,32 +46,13 @@ extern char _sdram_end;
 
 /* ── SDRAM Allocation ────────────────────────────────────────────────────── */
 
-/** NodeNet485 reserved region (1 MB).
- *  TX FIFO: 0x20000000–0x2007FFFF (512 KB)
- *  RX FIFO: 0x20080000–0x200FFFFF (512 KB)
- *  Do NOT allocate SDRAM_DATA variables here; they will be placed in the
- *  application region automatically by the linker.
- */
-#define SDRAM_NODENET_BASE  0x20000000UL
-#define SDRAM_NODENET_SIZE  (1UL * 1024 * 1024)  // 1 MB reserved
+/** Full SDRAM window exposed by wb_sdram. */
+#define SDRAM_BASE  0x20000000UL
+#define SDRAM_SIZE  (8UL * 1024 * 1024)
 
-/** Application region (7 MB) — where SDRAM_DATA variables are placed.
- *  PicoRV32 application code and SDRAM_DATA variables start here.
- *  Access this region safely; it does not conflict with NodeNet485 buffers.
- */
-#define SDRAM_APP_BASE  0x20100000UL
-#define SDRAM_APP_SIZE  (7UL * 1024 * 1024)  // 7 MB for application
-
-/** Legacy: Base address of SDRAM window (now points to application region).
- *  For backwards compatibility, SDRAM_BASE now refers to the application area.
- *  Direct raw SDRAM access should use SDRAM_APP_BASE or SDRAM_NODENET_BASE.
- */
-#define SDRAM_BASE  SDRAM_APP_BASE
-
-/** Legacy: Total accessible SDRAM size (now 7 MB for application only).
- *  The full 8 MB is present on hardware, but 1 MB is reserved for NodeNet485.
- */
-#define SDRAM_SIZE  SDRAM_APP_SIZE
+/* Backward-compatible aliases. */
+#define SDRAM_APP_BASE  SDRAM_BASE
+#define SDRAM_APP_SIZE  SDRAM_SIZE
 
 /* ── Initialization wait ─────────────────────────────────────────────────── */
 
