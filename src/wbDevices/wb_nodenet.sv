@@ -5,51 +5,17 @@
  * High-level Overview:
  * ────────────────────
  * This module implements a multi-node message passing protocol over RS-485 at 1 Mb/s.
- * Instead of on-chip BRAM FIFOs (limited to ~32-50 KB), we use SDRAM ring buffers
- * (512 KB TX + 512 KB RX) managed by firmware pointers.
- * 
- * Architecture:
- * ─────────────
- *   Wishbone Bus
- *       ↓ (register reads/writes)
- *   Pointer Registers (TX_WPTR, TX_RPTR, RX_WPTR, RX_RPTR)
- *       ↓
- *   SDRAM Ring Buffers
- *       ↓
- *   UART Interface (1 Mb/s)
- *       ↓
- *   RS-485 Transceiver
- * 
- * Ring Buffer Operations:
- * ──────────────────────
- *   TX Path (Firmware → Hardware → RS-485):
- *     1. Firmware writes message to SDRAM at TX_WPTR
- *     2. Firmware updates TX_WPTR register
- *     3. Hardware detects TX_WPTR != TX_READ_PTR
- *     4. Hardware reads from SDRAM at TX_READ_PTR
- *     5. Hardware transmits via UART
- *     6. Hardware updates TX_READ_PTR (message consumed)
- * 
- *   RX Path (RS-485 → Hardware → Firmware):
- *     1. Hardware receives bytes from UART
- *     2. Hardware writes to SDRAM at RX_WPTR
- *     3. Hardware updates RX_WPTR
- *     4. Firmware checks RX_RPTR != RX_WPTR
- *     5. Firmware reads from SDRAM at RX_RPTR
- *     6. Firmware updates RX_RPTR (message consumed)
- * 
- * Current Status:
- * ───────────────
- *   - Pointer registers fully implemented
- *   - Simple loopback mode active (RX→TX echo for testing)
- *   - Encoder/Decoder FSMs available but not yet wired
- *   - Ready for full protocol implementation
- * 
- * @param CLOCK_RATE     System clock in Hz (25 MHz default)
- * @param SDRAM_TX_BASE  TX FIFO start address (0x20000000 default)
- * @param SDRAM_RX_BASE  RX FIFO start address (0x20080000 default)
- * @param SDRAM_FIFO_SIZE Size of each FIFO (512 KB each)
+/**
+ * @file wb_nodenet.sv
+ * @brief NodeNet485 Wishbone B.4 Slave with MMIO mailboxes
+ *
+ * The original design described SDRAM-backed FIFOs, but this block has no
+ * direct SDRAM master port. This implementation finalizes the peripheral as a
+ * self-contained mailbox transport that the firmware can drive entirely through
+ * Wishbone registers while still exercising the real wire protocol.
  */
+
+`include "src/wbDevices/nodenet_defines.vh"
 
 module wb_nodenet #(
   parameter [31:0] CLOCK_RATE = 25_000_000,
@@ -57,181 +23,492 @@ module wb_nodenet #(
   parameter [31:0] SDRAM_RX_BASE = 32'h20080000,
   parameter [31:0] SDRAM_FIFO_SIZE = 32'h80000
 ) (
-  // ════════════════════════════════════════════════════════════════════════
-  // Wishbone B.4 Interface
-  // ════════════════════════════════════════════════════════════════════════
-  
-  input  wire clk_i,                // System clock (25 MHz)
-  input  wire rst_i,                // Reset (active high)
-  
-  // Address bus (32-bit, split into 5-bit register offset)
+  input  wire clk_i,
+  input  wire rst_i,
   input  wire [31:0] adr_i,
-  
-  // Data: From master to slave (write operations)
   input  wire [31:0] dat_i,
-  
-  // Data: From slave to master (read operations)
   output reg  [31:0] dat_o,
-  
-  // Write enable: 1 = write, 0 = read
   input  wire we_i,
-  
-  // Byte select (typically all 1's for 32-bit access)
-  input  wire sel_i,
-  
-  // Cycle signal (transaction in progress)
+  input  wire [3:0] sel_i,
   input  wire cyc_i,
-  
-  // Strobe signal (this cycle is selected)
   input  wire stb_i,
-  
-  // Acknowledge (slave ready with data)
   output wire ack_o,
-  
-  // ════════════════════════════════════════════════════════════════════════
-  // RS-485 UART Interface
-  // ════════════════════════════════════════════════════════════════════════
-  
-  input  wire uart_rx_i,            // Receive from RS-485 transceiver
-  output wire uart_tx_o             // Transmit to RS-485 transceiver
+  input  wire uart_rx_i,
+  output wire uart_tx_o
 );
 
-  // ════════════════════════════════════════════════════════════════════════
-  // Configuration Registers (backed by Wishbone)
-  // ════════════════════════════════════════════════════════════════════════
-  
-  // Node address (0x01 - 0xFF, 0x00 is broadcast)
-  reg [7:0]  node_addr;
-  
-  // Heartbeat interval in clock cycles
-  // Default: 250_000_000 cycles @ 25 MHz = 10 seconds
-  reg [31:0] heartbeat_interval;
-  
-  // Message priority (LOW=0, NORMAL=1, HIGH=2)
-  reg [1:0]  prio;
-  
-  // ════════════════════════════════════════════════════════════════════════
-  // Ring Buffer Pointer Registers (User-Visible via Wishbone)
-  // ════════════════════════════════════════════════════════════════════════
-  
-  // TX FIFO: Firmware writes pointers, hardware reads
-  reg [31:0] tx_write_ptr;          // Firmware advances after writing message
-  reg [31:0] tx_read_ptr;           // Hardware advances after transmitting
-  
-  // RX FIFO: Hardware writes pointers, firmware reads
-  reg [31:0] rx_write_ptr;          // Hardware advances after receiving message
-  reg [31:0] rx_read_ptr;           // Firmware advances after reading message
-  
-  // ════════════════════════════════════════════════════════════════════════
-  // Status Flags
-  // ════════════════════════════════════════════════════════════════════════
-  
-  reg tx_active;                    // TX in progress
-  reg rx_valid;                     // RX message available
-  
-  // ════════════════════════════════════════════════════════════════════════
-  // Initialization
-  // ════════════════════════════════════════════════════════════════════════
-  
-  initial begin
-    node_addr <= 8'h01;
-    heartbeat_interval <= 32'd250_000_000;
-    prio <= 2'b01;
-    tx_write_ptr <= 32'h0;
-    tx_read_ptr <= 32'h0;
-    rx_write_ptr <= 32'h0;
-    rx_read_ptr <= 32'h0;
-    tx_active <= 1'b0;
-    rx_valid <= 1'b0;
-    dat_o <= 32'h0;
-  end
-  
-  // ════════════════════════════════════════════════════════════════════════
-  // Wishbone Address Decoding
-  // ════════════════════════════════════════════════════════════════════════
-  
-  // Extract 5-bit register offset from address bus
-  // Allows 32 registers (0x00-0x1F)
-  wire [4:0] addr = adr_i[4:0];
-  
-  // Transaction valid: cycle && strobe
+  localparam integer MAX_PAYLOAD = `NODENET_MAX_PAYLOAD_SIZE;
+
+  localparam [2:0]
+    REG_TX_CMD  = 3'd0,
+    REG_TX_DATA = 3'd1,
+    REG_RX_HDR  = 3'd2,
+    REG_RX_DATA = 3'd3,
+    REG_CONFIG  = 3'd4,
+    REG_CONTROL = 3'd5,
+    REG_STATUS  = 3'd6;
+
+  localparam [3:0]
+    TX_IDLE       = 4'd0,
+    TX_PREFIX_LF  = 4'd1,
+    TX_PREFIX_SOH = 4'd2,
+    TX_HDR_DST    = 4'd3,
+    TX_HDR_SRC    = 4'd4,
+    TX_LEN_HI     = 4'd5,
+    TX_LEN_LO     = 4'd6,
+    TX_STX        = 4'd7,
+    TX_PAYLOAD_HI = 4'd8,
+    TX_PAYLOAD_LO = 4'd9,
+    TX_ETX        = 4'd10,
+    TX_CRC        = 4'd11,
+    TX_EOT        = 4'd12,
+    TX_SUFFIX_LF  = 4'd13;
+
+  function [7:0] encode_nibble_high;
+    input [7:0] byte_in;
+    reg [7:0] high_nib;
+    begin
+      high_nib = byte_in & 8'hF0;
+      encode_nibble_high = high_nib | ((~high_nib & 8'hF0) >> 4);
+    end
+  endfunction
+
+  function [7:0] encode_nibble_low;
+    input [7:0] byte_in;
+    reg [7:0] low_nib;
+    begin
+      low_nib = byte_in & 8'h0F;
+      encode_nibble_low = low_nib | ((~low_nib) << 4);
+    end
+  endfunction
+
+  function [31:0] compute_tx_delay;
+    input [7:0] dst_addr;
+    input [1:0] prio_sel;
+    reg [31:0] delay_cycles;
+    begin
+      if (dst_addr == 8'h00)
+        delay_cycles = {24'h0, node_addr} * `NODENET_BROADCAST_DELAY_PER_ADDR;
+      else
+        delay_cycles = `NODENET_LINE_READY_CYCLES + ({24'h0, node_addr} * `NODENET_UNICAST_DELAY_PER_ADDR);
+
+      case (prio_sel)
+        2'b10: delay_cycles = delay_cycles >> 1;
+        2'b00: delay_cycles = delay_cycles + (delay_cycles >> 1);
+        default: begin end
+      endcase
+
+      compute_tx_delay = delay_cycles;
+    end
+  endfunction
+
+  wire rst_n = ~rst_i;
   wire wb_valid = cyc_i && stb_i;
-  
-  // ════════════════════════════════════════════════════════════════════════
-  // Loopback Mode (Current Implementation)
-  // ════════════════════════════════════════════════════════════════════════
-  
-  // For now: RX data echoes to TX immediately (loopback for testing)
-  // This allows basic hardware validation without protocol encoder/decoder
-  // TODO: Replace with full encoder/decoder FSM when available
-  assign uart_tx_o = uart_rx_i;
-  
-  // ════════════════════════════════════════════════════════════════════════
-  // Wishbone Acknowledge (Always ready - no wait states)
-  // ════════════════════════════════════════════════════════════════════════
-  
+  wire [2:0] reg_index = adr_i[4:2];
+
+  reg [7:0] node_addr;
+  reg [31:0] heartbeat_interval;
+  reg [1:0] prio;
+
+  reg [7:0] tx_stage_dst;
+  reg [15:0] tx_stage_len;
+  reg [15:0] tx_load_count;
+  reg tx_stage_valid;
+  reg tx_pending;
+  reg tx_pending_is_heartbeat;
+  reg tx_active;
+  reg [7:0] tx_frame_dst;
+  reg [15:0] tx_frame_len;
+  reg [15:0] tx_stream_idx;
+  reg [7:0] tx_crc;
+  reg [7:0] tx_current_byte;
+  reg [3:0] tx_state;
+  reg [31:0] tx_cooldown_counter;
+  reg last_tx_was_broadcast;
+
+  reg [7:0] rx_src;
+  reg [15:0] rx_len;
+  reg [15:0] rx_read_idx;
+  reg [15:0] rx_build_count;
+  reg rx_valid;
+  reg rx_overflow;
+  reg rx_error_sticky;
+
+  reg [7:0] tx_buffer [0:MAX_PAYLOAD-1];
+  reg [7:0] rx_buffer [0:MAX_PAYLOAD-1];
+
+  reg [7:0] uart_tx_data;
+  reg uart_tx_valid;
+  reg message_sent_pulse;
+
+  wire [7:0] uart_rx_data;
+  wire uart_rx_valid;
+  wire uart_tx_ready;
+  wire uart_de;
+
+  wire decoder_msg_valid;
+  wire [7:0] decoder_msg_src;
+  wire [15:0] decoder_msg_len;
+  wire [7:0] decoder_msg_data;
+  wire decoder_msg_data_valid;
+  wire decoder_msg_complete;
+  wire decoder_timeout;
+  wire decoder_error;
+
+  wire heartbeat_trigger;
+  wire [31:0] unused_next_transmit_allowed;
+
   assign ack_o = wb_valid;
-  
-  // ════════════════════════════════════════════════════════════════════════
-  // Register Access Logic (Read/Write)
-  // ════════════════════════════════════════════════════════════════════════
-  
+
+  uart_simple #(
+    .CLOCK_RATE(CLOCK_RATE),
+    .BAUD_RATE(1_000_000)
+  ) nodenet_uart (
+    .clk(clk_i),
+    .rst_n(rst_n),
+    .rx_i(uart_rx_i),
+    .rx_data_o(uart_rx_data),
+    .rx_valid_o(uart_rx_valid),
+    .tx_o(uart_tx_o),
+    .tx_data_i(uart_tx_data),
+    .tx_valid_i(uart_tx_valid),
+    .tx_ready_o(uart_tx_ready),
+    .de_o(uart_de)
+  );
+
+  nodenet_decoder nodenet_rx (
+    .clk(clk_i),
+    .rst_n(rst_n),
+    .my_addr_i(node_addr),
+    .rx_byte_valid_i(uart_rx_valid),
+    .rx_byte_i(uart_rx_data),
+    .msg_valid_o(decoder_msg_valid),
+    .msg_src_addr_o(decoder_msg_src),
+    .msg_len_o(decoder_msg_len),
+    .msg_data_o(decoder_msg_data),
+    .msg_data_valid_o(decoder_msg_data_valid),
+    .msg_complete_o(decoder_msg_complete),
+    .rx_timeout_o(decoder_timeout),
+    .error_o(decoder_error)
+  );
+
+  nodenet_heartbeat #(
+    .CLOCK_RATE(CLOCK_RATE)
+  ) nodenet_hb (
+    .clk(clk_i),
+    .rst_n(rst_n),
+    .heartbeat_interval_cycles(heartbeat_interval),
+    .node_addr(node_addr),
+    .message_sent_i(message_sent_pulse),
+    .is_broadcast_i(last_tx_was_broadcast),
+    .heartbeat_trigger_o(heartbeat_trigger),
+    .next_transmit_allowed_o(unused_next_transmit_allowed)
+  );
+
   always @(posedge clk_i) begin
+    uart_tx_valid <= 1'b0;
+    message_sent_pulse <= 1'b0;
+
     if (rst_i) begin
-      // Reset all registers to default values
       node_addr <= 8'h01;
-      heartbeat_interval <= 32'd250_000_000;
+      heartbeat_interval <= `NODENET_HEARTBEAT_DEFAULT_CYCLES;
       prio <= 2'b01;
-      tx_write_ptr <= 32'h0;
-      tx_read_ptr <= 32'h0;
-      rx_write_ptr <= 32'h0;
-      rx_read_ptr <= 32'h0;
+      tx_stage_dst <= 8'h00;
+      tx_stage_len <= 16'h0000;
+      tx_load_count <= 16'h0000;
+      tx_stage_valid <= 1'b0;
+      tx_pending <= 1'b0;
+      tx_pending_is_heartbeat <= 1'b0;
       tx_active <= 1'b0;
+      tx_frame_dst <= 8'h00;
+      tx_frame_len <= 16'h0000;
+      tx_stream_idx <= 16'h0000;
+      tx_crc <= 8'h00;
+      tx_current_byte <= 8'h00;
+      tx_state <= TX_IDLE;
+      tx_cooldown_counter <= 32'h0000_0000;
+      last_tx_was_broadcast <= 1'b0;
+      rx_src <= 8'h00;
+      rx_len <= 16'h0000;
+      rx_read_idx <= 16'h0000;
+      rx_build_count <= 16'h0000;
       rx_valid <= 1'b0;
-      dat_o <= 32'h0;
-    end else if (wb_valid) begin
-      if (we_i) begin
-        // ──────────────────────────────────────────────────────────────────
-        // WRITE Operations (Firmware → Hardware)
-        // ──────────────────────────────────────────────────────────────────
-        case (addr)
-          5'h0: tx_write_ptr <= dat_i;    // TX_WRITE_PTR: Firmware updates after writing
-          5'h1: tx_read_ptr <= dat_i;     // TX_READ_PTR: Firmware clears after TX complete
-          5'h2: rx_write_ptr <= dat_i;    // RX_WRITE_PTR: Usually not written by firmware
-          5'h3: rx_read_ptr <= dat_i;     // RX_READ_PTR: Firmware advances after reading
-          5'h4: begin
-            // CONFIG: [node_addr(8), prio(2), hb_interval(22)]
-            // Setting node address and priority
-            node_addr <= dat_i[7:0];
-            prio <= dat_i[9:8];
-            heartbeat_interval <= dat_i[31:10] << 10;
+      rx_overflow <= 1'b0;
+      rx_error_sticky <= 1'b0;
+      dat_o <= 32'h0000_0000;
+      uart_tx_data <= 8'hFF;
+    end else begin
+      if (tx_cooldown_counter != 32'h0000_0000)
+        tx_cooldown_counter <= tx_cooldown_counter - 32'h0000_0001;
+
+      if (decoder_msg_data_valid) begin
+        if (!rx_valid && (rx_build_count < MAX_PAYLOAD)) begin
+          rx_buffer[rx_build_count] <= decoder_msg_data;
+          rx_build_count <= rx_build_count + 16'h0001;
+        end else begin
+          rx_overflow <= 1'b1;
+        end
+      end
+
+      if (decoder_msg_complete) begin
+        if (decoder_msg_valid && !rx_valid && (decoder_msg_len <= MAX_PAYLOAD)) begin
+          rx_src <= decoder_msg_src;
+          rx_len <= decoder_msg_len;
+          rx_read_idx <= 16'h0000;
+          rx_valid <= 1'b1;
+        end else if (decoder_msg_valid) begin
+          rx_overflow <= 1'b1;
+        end
+        rx_build_count <= 16'h0000;
+      end
+
+      if (decoder_timeout || decoder_error) begin
+        rx_build_count <= 16'h0000;
+        rx_error_sticky <= 1'b1;
+      end
+
+      if (heartbeat_trigger && !tx_stage_valid && !tx_pending && !tx_active) begin
+        tx_pending <= 1'b1;
+        tx_pending_is_heartbeat <= 1'b1;
+        tx_cooldown_counter <= compute_tx_delay(8'h00, prio);
+      end
+
+      if (wb_valid) begin
+        if (we_i) begin
+          case (reg_index)
+            REG_TX_CMD: begin
+              if (!tx_active && !tx_pending) begin
+                tx_stage_dst <= dat_i[31:24];
+                tx_stage_len <= dat_i[15:0];
+                tx_load_count <= 16'h0000;
+                tx_stage_valid <= (dat_i[15:0] <= MAX_PAYLOAD);
+                tx_pending_is_heartbeat <= 1'b0;
+              end
+            end
+
+            REG_TX_DATA: begin
+              if (tx_stage_valid && !tx_active && !tx_pending && (tx_load_count < tx_stage_len) && (tx_load_count < MAX_PAYLOAD)) begin
+                tx_buffer[tx_load_count] <= dat_i[7:0];
+                tx_load_count <= tx_load_count + 16'h0001;
+              end
+            end
+
+            REG_CONFIG: begin
+              node_addr <= dat_i[7:0];
+              prio <= dat_i[9:8];
+              heartbeat_interval <= {dat_i[31:10], 10'b0};
+            end
+
+            REG_CONTROL: begin
+              if (dat_i[1]) begin
+                rx_valid <= 1'b0;
+                rx_read_idx <= 16'h0000;
+                rx_overflow <= 1'b0;
+                rx_error_sticky <= 1'b0;
+                rx_build_count <= 16'h0000;
+              end
+
+              if (dat_i[2] && !tx_stage_valid && !tx_pending && !tx_active) begin
+                tx_pending <= 1'b1;
+                tx_pending_is_heartbeat <= 1'b1;
+                tx_cooldown_counter <= compute_tx_delay(8'h00, prio);
+              end
+
+              if (dat_i[0] && tx_stage_valid && !tx_pending && !tx_active && (tx_load_count == tx_stage_len)) begin
+                tx_pending <= 1'b1;
+                tx_pending_is_heartbeat <= 1'b0;
+                tx_cooldown_counter <= compute_tx_delay(tx_stage_dst, prio);
+              end
+            end
+
+            default: begin end
+          endcase
+        end else begin
+          case (reg_index)
+            REG_TX_CMD: begin
+              dat_o <= {tx_stage_dst, tx_stage_valid, tx_pending, tx_active, 5'b0, tx_stage_len};
+            end
+
+            REG_TX_DATA: begin
+              dat_o <= {16'h0000, tx_load_count};
+            end
+
+            REG_RX_HDR: begin
+              dat_o <= {rx_src, 7'b0, rx_valid, rx_len};
+            end
+
+            REG_RX_DATA: begin
+              dat_o <= rx_valid ? {24'h000000, rx_buffer[rx_read_idx]} : 32'h0000_0000;
+
+              if (rx_valid) begin
+                if (rx_read_idx + 16'h0001 >= rx_len) begin
+                  rx_valid <= 1'b0;
+                  rx_read_idx <= 16'h0000;
+                end else begin
+                  rx_read_idx <= rx_read_idx + 16'h0001;
+                end
+              end
+            end
+
+            REG_CONFIG: begin
+              dat_o <= {heartbeat_interval[31:10], prio, node_addr};
+            end
+
+            REG_CONTROL: begin
+              dat_o <= 32'h0000_0000;
+            end
+
+            REG_STATUS: begin
+              dat_o <= {
+                rx_overflow,
+                rx_error_sticky,
+                heartbeat_trigger,
+                (tx_cooldown_counter != 32'h0000_0000),
+                tx_pending,
+                tx_active,
+                uart_tx_ready,
+                rx_valid,
+                tx_stage_valid,
+                (tx_stage_valid && (tx_load_count == tx_stage_len)),
+                uart_de,
+                decoder_timeout,
+                decoder_error,
+                3'b000,
+                prio,
+                tx_load_count[15:0]
+              };
+            end
+
+            default: begin
+              dat_o <= 32'h0000_0000;
+            end
+          endcase
+        end
+      end
+
+      if (!tx_active && tx_pending && (tx_cooldown_counter == 32'h0000_0000)) begin
+        tx_pending <= 1'b0;
+        tx_active <= 1'b1;
+        tx_state <= TX_PREFIX_LF;
+        tx_stream_idx <= 16'h0000;
+
+        if (tx_pending_is_heartbeat) begin
+          tx_frame_dst <= 8'h00;
+          tx_frame_len <= 16'h0000;
+          tx_crc <= node_addr;
+          last_tx_was_broadcast <= 1'b1;
+        end else begin
+          tx_frame_dst <= tx_stage_dst;
+          tx_frame_len <= tx_stage_len;
+          tx_crc <= tx_stage_dst ^ node_addr ^ tx_stage_len[15:8] ^ tx_stage_len[7:0];
+          last_tx_was_broadcast <= (tx_stage_dst == 8'h00);
+        end
+      end
+
+      if (tx_active && uart_tx_ready) begin
+        case (tx_state)
+          TX_PREFIX_LF: begin
+            uart_tx_data <= `NODENET_LF;
+            uart_tx_valid <= 1'b1;
+            tx_state <= TX_PREFIX_SOH;
           end
-          5'h5: begin
-            // CONTROL: [reserved(31), trigger_tx(1)]
-            // Writing 1 triggers immediate transmission (for future use)
-            if (dat_i[0]) tx_active <= 1'b1;
+
+          TX_PREFIX_SOH: begin
+            uart_tx_data <= `NODENET_SOH;
+            uart_tx_valid <= 1'b1;
+            tx_state <= TX_HDR_DST;
           end
-        endcase
-      end else begin
-        // ──────────────────────────────────────────────────────────────────
-        // READ Operations (Hardware → Firmware)
-        // ──────────────────────────────────────────────────────────────────
-        case (addr)
-          5'h0: dat_o <= tx_write_ptr;              // TX_WRITE_PTR: Read current position
-          5'h1: dat_o <= tx_read_ptr;               // TX_READ_PTR: Read HW consumption
-          5'h2: dat_o <= rx_write_ptr;              // RX_WRITE_PTR: Read HW production
-          5'h3: dat_o <= rx_read_ptr;               // RX_READ_PTR: Read current consumption
-          5'h4: dat_o <= {heartbeat_interval[21:0], prio, node_addr};  // CONFIG
-          5'h5: begin
-            // STATUS: [reserved(22), rx_valid(1), tx_active(1), tx_avail(4), rx_avail(4)]
-            // Shows FIFO occupancy indicators
-            dat_o <= {22'h0, 
-                      rx_valid,                                    // Bit 23: RX has data
-                      tx_active,                                   // Bit 22: TX in progress
-                      (tx_write_ptr != tx_read_ptr) ? 4'hF : 4'h0, // Bits 21-18: TX FIFO non-empty
-                      (rx_write_ptr != rx_read_ptr) ? 4'hF : 4'h0};// Bits 17-14: RX FIFO non-empty
+
+          TX_HDR_DST: begin
+            uart_tx_data <= tx_frame_dst;
+            uart_tx_valid <= 1'b1;
+            tx_state <= TX_HDR_SRC;
           end
-          default: dat_o <= 32'h0;
+
+          TX_HDR_SRC: begin
+            uart_tx_data <= node_addr;
+            uart_tx_valid <= 1'b1;
+            tx_state <= TX_LEN_HI;
+          end
+
+          TX_LEN_HI: begin
+            uart_tx_data <= tx_frame_len[15:8];
+            uart_tx_valid <= 1'b1;
+            tx_state <= TX_LEN_LO;
+          end
+
+          TX_LEN_LO: begin
+            uart_tx_data <= tx_frame_len[7:0];
+            uart_tx_valid <= 1'b1;
+            tx_state <= TX_STX;
+          end
+
+          TX_STX: begin
+            uart_tx_data <= `NODENET_STX;
+            uart_tx_valid <= 1'b1;
+
+            if (tx_frame_len == 16'h0000)
+              tx_state <= TX_ETX;
+            else
+              tx_state <= TX_PAYLOAD_HI;
+          end
+
+          TX_PAYLOAD_HI: begin
+            tx_current_byte <= tx_buffer[tx_stream_idx];
+            uart_tx_data <= encode_nibble_high(tx_buffer[tx_stream_idx]);
+            uart_tx_valid <= 1'b1;
+            tx_state <= TX_PAYLOAD_LO;
+          end
+
+          TX_PAYLOAD_LO: begin
+            uart_tx_data <= encode_nibble_low(tx_current_byte);
+            uart_tx_valid <= 1'b1;
+            tx_crc <= tx_crc ^ tx_current_byte;
+
+            if (tx_stream_idx + 16'h0001 >= tx_frame_len) begin
+              tx_stream_idx <= 16'h0000;
+              tx_state <= TX_ETX;
+            end else begin
+              tx_stream_idx <= tx_stream_idx + 16'h0001;
+              tx_state <= TX_PAYLOAD_HI;
+            end
+          end
+
+          TX_ETX: begin
+            uart_tx_data <= `NODENET_ETX;
+            uart_tx_valid <= 1'b1;
+            tx_state <= TX_CRC;
+          end
+
+          TX_CRC: begin
+            uart_tx_data <= tx_crc;
+            uart_tx_valid <= 1'b1;
+            tx_state <= TX_EOT;
+          end
+
+          TX_EOT: begin
+            uart_tx_data <= `NODENET_EOT;
+            uart_tx_valid <= 1'b1;
+            tx_state <= TX_SUFFIX_LF;
+          end
+
+          TX_SUFFIX_LF: begin
+            uart_tx_data <= `NODENET_LF;
+            uart_tx_valid <= 1'b1;
+            tx_state <= TX_IDLE;
+            tx_active <= 1'b0;
+            tx_stage_valid <= 1'b0;
+            tx_pending_is_heartbeat <= 1'b0;
+            tx_stage_dst <= 8'h00;
+            tx_stage_len <= 16'h0000;
+            tx_load_count <= 16'h0000;
+            message_sent_pulse <= 1'b1;
+          end
+
+          default: begin
+            tx_state <= TX_IDLE;
+            tx_active <= 1'b0;
+          end
         endcase
       end
     end

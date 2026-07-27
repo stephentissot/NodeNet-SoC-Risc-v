@@ -26,7 +26,7 @@ module nodenet_decoder (
   
   // Status
   output wire rx_timeout_o,
-  output wire error_o
+  output reg error_o
 );
 
   // State machine for reception
@@ -59,7 +59,6 @@ module nodenet_decoder (
   wire timeout = (timeout_counter > `NODENET_RECEIVE_TIMEOUT_CYCLES);
   
   assign rx_timeout_o = timeout && (state != IDLE);
-  assign error_o = 1'b0;  // TODO: add error flags
   
   // Nibble parity checker: verify that (b | (inverse_pattern)) is correct
   function is_valid_encoded_nibble(input [7:0] byte_in);
@@ -78,10 +77,12 @@ module nodenet_decoder (
       msg_complete_o <= 1'b0;
       first_nibble <= 1'b1;
       crc <= 8'b0;
+      error_o <= 1'b0;
     end
     else begin
       msg_data_valid_o <= 1'b0;
       msg_complete_o <= 1'b0;
+      error_o <= 1'b0;
       
       if (rx_byte_valid_i) begin
         timeout_counter <= 32'b0;  // Reset on byte arrival
@@ -155,6 +156,7 @@ module nodenet_decoder (
             end
             else begin
               // Error: invalid nibble or ETX mismatch
+              error_o <= 1'b1;
               state <= IDLE;
             end
           end
@@ -169,6 +171,7 @@ module nodenet_decoder (
               state <= VALIDATE;
             end
             else begin
+              error_o <= 1'b1;
               state <= IDLE;
             end
           end
@@ -180,6 +183,9 @@ module nodenet_decoder (
               msg_complete_o <= 1'b1;
               msg_valid_o <= 1'b1;
             end
+            else begin
+              error_o <= 1'b1;
+            end
             state <= IDLE;
           end
           
@@ -188,6 +194,11 @@ module nodenet_decoder (
       end
       else begin
         timeout_counter <= timeout_counter + 32'b1;
+        if (timeout && (state != IDLE)) begin
+          error_o <= 1'b1;
+          state <= IDLE;
+          first_nibble <= 1'b1;
+        end
       end
     end
   end

@@ -111,21 +111,28 @@ bool test_nodenet(void) {
     // Delay to allow initialization
     delay_ms(100);
     
-    // Try to send a test message (loopback to self)
+    // Loopback is no longer hardwired in hardware, so validate that the
+    // transmit mailbox drains and treat an actual reply as a bonus.
     const char* test_msg = "TEST";
-    nodenet0_send(0x01, (const uint8_t*)test_msg, 4);
-    
-    // Wait for response
-    for (int i = 0; i < 50; i++) {  // ~500 ms timeout
+    nodenet0_broadcast((const uint8_t*)test_msg, 4);
+
+    for (int i = 0; i < 100; i++) {  // ~1 s timeout
+        uint32_t status = nodenet_status();
+
         if (nodenet0_has_message()) {
             NodeNetMessage msg = nodenet0_read();
             nodenet0_free_message(msg);
-            return true;  // Got message back
+            return true;
         }
+
+        if ((status & (NODENET_STATUS_TX_PENDING | NODENET_STATUS_TX_ACTIVE)) == 0) {
+            return (status & (NODENET_STATUS_RX_ERROR | NODENET_STATUS_RX_OVERFLOW)) == 0;
+        }
+
         delay_ms(10);
     }
-    
-    return false;  // No response (may be expected without other nodes)
+
+    return false;
 }
 
 /** Test SPI Flash read/write with boot protection */

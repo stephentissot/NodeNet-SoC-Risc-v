@@ -77,29 +77,29 @@
 // Hardware Registers (Wishbone B.4 Slave at 0x10006000)
 // ═══════════════════════════════════════════════════════════════════════════
 
-#define NODENET_BASE      0x10006000
+#define NODENET_BASE      0x10006000u
 
-// Ring buffer pointer registers (32-bit each)
-#define NODENET_TX_WPTR   (NODENET_BASE + 0x00)   // TX write pointer (fw controls)
-#define NODENET_TX_RPTR   (NODENET_BASE + 0x04)   // TX read pointer (hw updates)
-#define NODENET_RX_WPTR   (NODENET_BASE + 0x08)   // RX write pointer (hw updates)
-#define NODENET_RX_RPTR   (NODENET_BASE + 0x0C)   // RX read pointer (fw controls)
+// Mailbox registers
+#define NODENET_TX_CMD    (NODENET_BASE + 0x00u)   // [dst(31:24) | len(15:0)]
+#define NODENET_TX_DATA   (NODENET_BASE + 0x04u)   // write one payload byte per access
+#define NODENET_RX_HDR    (NODENET_BASE + 0x08u)   // [src(31:24) | rx_valid(16) | len(15:0)]
+#define NODENET_RX_DATA   (NODENET_BASE + 0x0Cu)   // read one payload byte per access
+#define NODENET_CONFIG    (NODENET_BASE + 0x10u)   // [hb_interval(31:10) | prio(9:8) | addr(7:0)]
+#define NODENET_CONTROL   (NODENET_BASE + 0x14u)   // bit0=trigger_tx bit1=clear_rx bit2=queue_heartbeat
+#define NODENET_STATUS    (NODENET_BASE + 0x18u)
 
-// Configuration and control registers
-#define NODENET_CONFIG    (NODENET_BASE + 0x10)   // Node address + priority
-#define NODENET_CONTROL   (NODENET_BASE + 0x14)   // Trigger signals
-#define NODENET_STATUS    (NODENET_BASE + 0x18)   // Status flags
+#define NODENET_MAX_PAYLOAD_SIZE 2048u
 
-// ═══════════════════════════════════════════════════════════════════════════
-// SDRAM Ring Buffer Configuration
-// ═══════════════════════════════════════════════════════════════════════════
-
-#define SDRAM_BASE        0x20000000
-
-// Physical SDRAM locations (1 MB reserved for NodeNet485)
-#define NODENET_TX_FIFO   (SDRAM_BASE + 0x00000)    // TX: 0x20000000 - 0x2007FFFF
-#define NODENET_RX_FIFO   (SDRAM_BASE + 0x80000)    // RX: 0x20080000 - 0x200FFFFF
-#define NODENET_FIFO_SIZE 0x80000                   // 512 KB each
+#define NODENET_STATUS_RX_OVERFLOW       (1u << 31)
+#define NODENET_STATUS_RX_ERROR          (1u << 30)
+#define NODENET_STATUS_HEARTBEAT_DUE     (1u << 29)
+#define NODENET_STATUS_TX_DELAY_ACTIVE   (1u << 28)
+#define NODENET_STATUS_TX_PENDING        (1u << 27)
+#define NODENET_STATUS_TX_ACTIVE         (1u << 26)
+#define NODENET_STATUS_UART_READY        (1u << 25)
+#define NODENET_STATUS_RX_VALID          (1u << 24)
+#define NODENET_STATUS_TX_STAGE_VALID    (1u << 23)
+#define NODENET_STATUS_TX_BUFFER_FULL    (1u << 22)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Protocol Constants
@@ -121,202 +121,56 @@ enum NodeNetPriority {
   NODENET_PRIORITY_HIGH = 2     // Highest: Sent first
 };
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Internal Ring Buffer Helpers
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Wrap a pointer to stay within FIFO bounds [0, FIFO_SIZE)
- * 
- * This handles circular buffer overflow by using modulo arithmetic.
- * When ptr exceeds FIFO_SIZE, it wraps back to the beginning.
- * 
- * @param ptr Current pointer value
- * @return Wrapped pointer in range [0, FIFO_SIZE)
- * 
- * Example:
- *   ptr = 0x7FFF0, size = 0x20
- *   result = (0x7FFF0 + 0x20) % 0x80000 = 0x10  ← Wrapped to start
- */
-static inline uint32_t nodenet_wrap_ptr(uint32_t ptr) {
-  while (ptr >= NODENET_FIFO_SIZE) {
-    ptr -= NODENET_FIFO_SIZE;
-  }
-  return ptr;
+static inline uint32_t nodenet_reg_read(uint32_t addr) {
+  return *(volatile uint32_t*)addr;
 }
 
-/**
- * Write a message to the TX ring buffer
- * 
- * This function places a message in SDRAM's TX FIFO for transmission.
- * The message is stored as: [dst(1B) | len_hi(1B) | len_lo(1B) | payload]
- * 
- * After writing, the TX_WRITE_PTR register is updated so the hardware
- * knows a new message is available. The hardware will transmit at its leisure
- * based on priority and anti-collision timing.
- * 
- * @param dst Destination node address (1-255, or 0 for broadcast)
- * @param data Payload bytes to send
- * @param len Number of payload bytes (0-65535)
- * 
- * Danger: This function will OVERWRITE memory if TX FIFO has no space!
- * Call nodenet_tx_has_space() before sending large messages.
- * 
- * Example:
- *   uint8_t msg[] = {0x41, 0x42};  // "AB"
- *   nodenet_tx_write(0x02, msg, 2);  // Send to node 0x02
- *   // In SDRAM: [0x02 | 0x00 | 0x02 | 0x41 | 0x42]
- */
-static inline void nodenet_tx_write(uint8_t dst, const uint8_t* data, uint16_t len) {
-  volatile uint32_t* tx_wptr_reg = (volatile uint32_t*)NODENET_TX_WPTR;
-  volatile uint8_t* tx_fifo = (volatile uint8_t*)NODENET_TX_FIFO;
-  
-  // Read current write pointer (where to place the message)
-  uint32_t wptr = *tx_wptr_reg;
-  
-  // Write header byte 1: Destination address
-  tx_fifo[wptr] = dst;
-  wptr = nodenet_wrap_ptr(wptr + 1);
-  
-  // Write header byte 2: Message length (high byte)
-  tx_fifo[wptr] = (len >> 8) & 0xFF;
-  wptr = nodenet_wrap_ptr(wptr + 1);
-  
-  // Write header byte 3: Message length (low byte)
-  tx_fifo[wptr] = len & 0xFF;
-  wptr = nodenet_wrap_ptr(wptr + 1);
-  
-  // Write payload bytes in order
-  for (uint16_t i = 0; i < len; i++) {
-    tx_fifo[wptr] = data[i];
-    wptr = nodenet_wrap_ptr(wptr + 1);
-  }
-  
-  // Update write pointer so hardware knows message is ready
-  // Hardware monitors: if (TX_WRITE_PTR != TX_READ_PTR) then transmit
-  *tx_wptr_reg = wptr;
+static inline void nodenet_reg_write(uint32_t addr, uint32_t value) {
+  *(volatile uint32_t*)addr = value;
 }
 
-/**
- * Read a message from the RX ring buffer
- * 
- * Retrieves the next available received message from SDRAM's RX FIFO.
- * The hardware writes messages here as they arrive from the RS-485 line.
- * 
- * The message is extracted as: [src(1B) | len_hi(1B) | len_lo(1B) | payload]
- * 
- * After reading, the RX_READ_PTR register is updated, signaling to the
- * hardware that this buffer space can be reused for future messages.
- * 
- * WARNING: The returned data pointer is dynamically allocated. You MUST call
- * nodenet0_free_message(msg) after processing to avoid memory leaks!
- * 
- * @return NodeNetMessage struct with src_addr, len, and allocated data buffer
- * 
- * Example:
- *   if (nodenet0_has_message()) {
- *     NodeNetMessage msg = nodenet0_read();
- *     printf("From 0x%02X: len=%d\n", msg.src_addr, msg.len);
- *     nodenet0_free_message(msg);  // IMPORTANT!
- *   }
- */
-static inline NodeNetMessage nodenet_rx_read() {
-  volatile uint32_t* rx_rptr_reg = (volatile uint32_t*)NODENET_RX_RPTR;
-  volatile uint8_t* rx_fifo = (volatile uint8_t*)NODENET_RX_FIFO;
-  
-  NodeNetMessage msg;
-  uint32_t rptr = *rx_rptr_reg;
-  
-  // Read header byte 1: Source address
-  msg.src_addr = rx_fifo[rptr];
-  rptr = nodenet_wrap_ptr(rptr + 1);
-  
-  // Read header byte 2: Message length (high byte)
-  uint16_t len_hi = rx_fifo[rptr];
-  rptr = nodenet_wrap_ptr(rptr + 1);
-  
-  // Read header byte 3: Message length (low byte)
-  uint16_t len_lo = rx_fifo[rptr];
-  rptr = nodenet_wrap_ptr(rptr + 1);
-  
-  // Reconstruct 16-bit length from two bytes
-  msg.len = (len_hi << 8) | len_lo;
-  
-  // Allocate buffer for payload and copy bytes
-  msg.data = new uint8_t[msg.len];
-  for (uint16_t i = 0; i < msg.len; i++) {
-    msg.data[i] = rx_fifo[rptr];
-    rptr = nodenet_wrap_ptr(rptr + 1);
-  }
-  
-  // Update read pointer to mark this space as consumed
-  // Hardware can now overwrite this buffer space with future messages
-  *rx_rptr_reg = rptr;
-  
-  return msg;
+static inline uint32_t nodenet_status(void) {
+  return nodenet_reg_read(NODENET_STATUS);
 }
 
-/**
- * Check if there are any pending RX messages
- * 
- * @return true if RX FIFO has data (RX_READ_PTR != RX_WRITE_PTR)
- * 
- * Use this in your main loop before calling nodenet0_read():
- *   while (1) {
- *     if (nodenet0_has_message()) {
- *       msg = nodenet0_read();
- *       ...
- *     }
- *   }
- */
-static inline bool nodenet_rx_has_data() {
-  volatile uint32_t* rx_rptr_reg = (volatile uint32_t*)NODENET_RX_RPTR;
-  volatile uint32_t* rx_wptr_reg = (volatile uint32_t*)NODENET_RX_WPTR;
-  return *rx_rptr_reg != *rx_wptr_reg;
+static inline bool nodenet_tx_mailbox_ready(void) {
+  uint32_t status = nodenet_status();
+  return (status & (NODENET_STATUS_TX_STAGE_VALID | NODENET_STATUS_TX_PENDING | NODENET_STATUS_TX_ACTIVE)) == 0;
 }
 
-/**
- * Check if there's enough space in TX FIFO for a message
- * 
- * Ring buffer available space is:
- *   - If RPTR <= WPTR: space = SIZE - (WPTR - RPTR)
- *   - If RPTR >  WPTR: space = RPTR - WPTR
- * 
- * @param msg_len Message payload length to check
- * @return true if FIFO has space for header (3 bytes) + payload
- * 
- * Use this before sending large messages to avoid overwriting data:
- *   uint8_t huge_msg[1024];
- *   if (nodenet_tx_has_space(1024)) {
- *     nodenet0_send(0x02, huge_msg, 1024);
- *   } else {
- *     // Wait for transmission or error
- *   }
- */
 static inline bool nodenet_tx_has_space(uint16_t msg_len) {
-  volatile uint32_t* tx_wptr_reg = (volatile uint32_t*)NODENET_TX_WPTR;
-  volatile uint32_t* tx_rptr_reg = (volatile uint32_t*)NODENET_TX_RPTR;
-  
-  uint32_t wptr = *tx_wptr_reg;
-  uint32_t rptr = *tx_rptr_reg;
-  
-  // Space needed: 3-byte header + payload
-  uint32_t needed = 3 + msg_len;
-  
-  // Calculate available space in ring buffer
-  uint32_t avail;
-  if (rptr <= wptr) {
-    // Normal case: write pointer hasn't wrapped past read pointer
-    // Available = size - used
-    avail = NODENET_FIFO_SIZE - (wptr - rptr);
-  } else {
-    // Wrapped case: read pointer ahead of write pointer
-    // Available = gap between them
-    avail = rptr - wptr;
+  return msg_len <= NODENET_MAX_PAYLOAD_SIZE && nodenet_tx_mailbox_ready();
+}
+
+static inline bool nodenet_rx_has_data(void) {
+  return (nodenet_reg_read(NODENET_RX_HDR) & (1u << 16)) != 0;
+}
+
+static inline void nodenet_tx_write(uint8_t dst, const uint8_t* data, uint16_t len) {
+  nodenet_reg_write(NODENET_TX_CMD, ((uint32_t)dst << 24) | (uint32_t)len);
+  for (uint16_t index = 0; index < len; ++index) {
+    nodenet_reg_write(NODENET_TX_DATA, data[index]);
   }
-  
-  // Return true only if we have enough space plus safety margin
-  return avail >= (needed + 1);
+  nodenet_reg_write(NODENET_CONTROL, 0x1u);
+}
+
+static inline NodeNetMessage nodenet_rx_read(void) {
+  uint32_t header = nodenet_reg_read(NODENET_RX_HDR);
+  NodeNetMessage msg;
+
+  msg.src_addr = (uint8_t)(header >> 24);
+  msg.len = (uint16_t)(header & 0xFFFFu);
+  msg.data = new uint8_t[msg.len ? msg.len : 1];
+
+  for (uint16_t index = 0; index < msg.len; ++index) {
+    msg.data[index] = (uint8_t)nodenet_reg_read(NODENET_RX_DATA);
+  }
+
+  if (msg.len == 0) {
+    msg.data[0] = 0;
+  }
+
+  return msg;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -336,19 +190,8 @@ static inline bool nodenet_tx_has_space(uint16_t msg_len) {
  *   nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);  // This node is 0x01
  */
 static inline void nodenet0_init(uint8_t addr, NodeNetPriority priority) {
-  volatile uint32_t* cfg = (volatile uint32_t*)NODENET_CONFIG;
-  volatile uint32_t* tx_wptr = (volatile uint32_t*)NODENET_TX_WPTR;
-  volatile uint32_t* tx_rptr = (volatile uint32_t*)NODENET_TX_RPTR;
-  volatile uint32_t* rx_rptr = (volatile uint32_t*)NODENET_RX_RPTR;
-  
-  // Configure node address and priority
-  // Heartbeat interval left at hardware default (10 seconds @ 25MHz)
-  *cfg = (addr << 0) | (priority << 8);
-  
-  // Clear all ring buffer pointers (both FIFOs empty)
-  *tx_wptr = 0;
-  *tx_rptr = 0;
-  *rx_rptr = 0;
+  nodenet_reg_write(NODENET_CONFIG, ((uint32_t)priority << 8) | (uint32_t)addr);
+  nodenet_reg_write(NODENET_CONTROL, 0x2u);
 }
 
 /**
@@ -371,11 +214,13 @@ static inline void nodenet0_init(uint8_t addr, NodeNetPriority priority) {
  * TODO: Add timeout parameter to avoid hanging on full FIFO
  */
 static inline void nodenet0_send(uint8_t dst, const uint8_t* data, uint16_t len) {
-  // Wait for TX FIFO to have space
-  // TODO: Implement timeout in production to avoid infinite wait
-  while (!nodenet_tx_has_space(len)) {
-    // Busy-wait (no OS, bare-metal)
+  if (len > NODENET_MAX_PAYLOAD_SIZE) {
+    len = NODENET_MAX_PAYLOAD_SIZE;
   }
+
+  while (!nodenet_tx_has_space(len)) {
+  }
+
   nodenet_tx_write(dst, data, len);
 }
 
