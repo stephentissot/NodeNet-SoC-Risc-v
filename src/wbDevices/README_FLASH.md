@@ -118,6 +118,21 @@ The `flash.h` header provides:
 1. **Low-level page/sector operations** for direct flash access
 2. **Parameter storage API** (key-value store, like Arduino preferences)
 3. **Convenience functions** for common types (int32, strings)
+4. **Automatic protection** against boot region overwrites
+
+### Safety Features
+
+**Boot region is PROTECTED at the firmware level:**
+- Any write attempt to 0x000000–0x1FFFFF (2 MB) returns `false`
+- Any erase attempt to 0x000000–0x1FFFFF returns `false`
+- Functions silently reject invalid operations (safe for embedded systems)
+
+Example:
+```cpp
+flash_put("test", ...);  // Writes to 0x200000 (safe, after boot region)
+flash_write_page(0x100, ...);  // Returns false (in boot region!)
+flash_erase_sector(0);  // Returns false (in boot region!)
+```
 
 ### Low-Level API
 
@@ -125,9 +140,10 @@ The `flash.h` header provides:
 #include "flash.h"
 
 void flash_wait_ready();                          // Poll until ready
-void flash_read_page(uint32_t offset, uint8_t* buf);   // Read 256 bytes
-void flash_write_page(uint32_t offset, const uint8_t* buf);  // Write 256 bytes
-void flash_erase_sector(uint16_t sector);        // Erase 4 KB sector
+void flash_read_page(uint32_t offset, uint8_t* buf);   // Read 256 bytes (no protection check)
+bool flash_write_page(uint32_t offset, const uint8_t* buf);  // Write 256 bytes (protected!)
+bool flash_erase_sector(uint16_t sector);        // Erase 4 KB sector (protected!)
+bool flash_is_safe_address(uint32_t offset);     // Check if address is outside boot region
 ```
 
 ### Parameter Storage (Key-Value API)
@@ -156,12 +172,13 @@ int channel = flash_get_int("channel", 1);  // Returns 1 if not found
 
 ```
 Flash Address Space (8 MB total)
-├─ 0x000000–0x003FFF (16 KB)  ← Parameter region (4 sectors)
-│  ├─ Sector 0 (0x0000–0x0FFF)
-│  ├─ Sector 1 (0x1000–0x1FFF)
-│  ├─ Sector 2 (0x2000–0x2FFF)
-│  └─ Sector 3 (0x3000–0x3FFF)
-└─ 0x004000–0x7FFFFF (rest)  ← Application data
+├─ 0x000000–0x1FFFFF (2 MB)      ← FPGA Boot Configuration (PROTECTED!)
+├─ 0x200000–0x203FFF (16 KB)     ← Parameter region (safe for PicoRV32)
+│  ├─ Sector 128 (0x200000–0x200FFF)
+│  ├─ Sector 129 (0x201000–0x201FFF)
+│  ├─ Sector 130 (0x202000–0x202FFF)
+│  └─ Sector 131 (0x203000–0x203FFF)
+└─ 0x204000–0x7FFFFF (7.75 MB)   ← Application data
 ```
 
 ### Parameter Entry Format

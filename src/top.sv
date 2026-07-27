@@ -3,13 +3,14 @@ module top (
     input  wire clk_25mhz,
     // LED
     output wire led_d2,
-    // UART0
+    // UART0 (NodeNet485)
     input  wire rx0,
     output wire tx0,
-    // TODO: NodeNet485 - pins to be verified after getting correct PMODH assignment
-    // input  wire rx_nn,
-    // output wire tx_nn,
-    // output wire de_nn,
+    // SPI Flash (W25Q64) — Configuration Flash Access
+    // SCK is generated internally (USRMCLK), not a GPIO pin
+    output wire flash_cs_n,
+    output wire flash_mosi,
+    input  wire flash_miso,
     // SDRAM (M12L64322A — CS_N=GND, CKE=VCC, DQM=GND on PCB)
     output wire        sdram_clk,
     output wire [10:0] sdram_a,
@@ -26,8 +27,9 @@ module top (
     localparam [31:0] ROM_BASE    = 32'h0000_0000;
     localparam [31:0] RAM_BASE    = 32'h0001_0000;
     localparam [31:0] LED_ADDR    = 32'h1000_0000;
-    localparam [31:0] NODENET_BASE = 32'h1000_6000;  // NodeNet485 Wishbone slave (was UART0_BASE)
     localparam [31:0] I2C0_BASE   = 32'h1000_5000;  // 4 KB page, 8 regs @ +0x00..+0x1C
+    localparam [31:0] NODENET_BASE = 32'h1000_6000;  // NodeNet485 Wishbone slave (1 Mb/s RS-485)
+    localparam [31:0] FLASH_BASE  = 32'h1000_7000;  // W25Q64 SPI flash (8 MB)
     localparam [31:0] SDRAM_BASE  = 32'h2000_0000;  // 8MB: 0x20000000–0x207FFFFF
 
     wire reset;
@@ -66,6 +68,8 @@ module top (
     wire        i2c0_ack;
     wire [31:0] nodenet_dat;
     wire        nodenet_ack;
+    wire [31:0] flash_dat;
+    wire        flash_ack;
     wire [31:0] sdram_dat;
     wire        sdram_ack;
 
@@ -74,6 +78,7 @@ module top (
     wire wb_led_sel;
     wire wb_i2c0_sel;
     wire wb_nodenet_sel;
+    wire wb_flash_sel;
     wire wb_sdram_sel;
 
     assign wb_rom_sel    = wb_cyc && wb_stb && (wb_adr[31:16] == ROM_BASE[31:16]);
@@ -81,16 +86,18 @@ module top (
     assign wb_led_sel    = wb_cyc && wb_stb && (wb_adr == LED_ADDR);
     assign wb_i2c0_sel   = wb_cyc && wb_stb && (wb_adr[31:12] == I2C0_BASE[31:12]);
     assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12]);
+    assign wb_flash_sel  = wb_cyc && wb_stb && (wb_adr[31:12] == FLASH_BASE[31:12]);
     assign wb_sdram_sel  = wb_cyc && wb_stb && (wb_adr[31:23] == SDRAM_BASE[31:23]);
 
     assign wb_dat_i = rom_ack     ? rom_dat     :
                       ram_ack     ? ram_dat     :
                       nodenet_ack ? nodenet_dat :
                       i2c0_ack    ? i2c0_dat    :
+                      flash_ack   ? flash_dat   :
                       led_ack     ? led_dat     :
                       sdram_ack   ? sdram_dat   :
                       32'h0000_0000;
-    assign wb_ack = rom_ack | ram_ack | led_ack | nodenet_ack | i2c0_ack | sdram_ack;
+    assign wb_ack = rom_ack | ram_ack | led_ack | nodenet_ack | i2c0_ack | flash_ack | sdram_ack;
     
     //assign led_d2 = wb_cyc;
 
@@ -234,6 +241,29 @@ module top (
 
         .i2c_scl  (i2c0_scl),
         .i2c_sda  (i2c0_sda)
+    );
+
+    wb_flash #(
+        .CLOCK_RATE(25_000_000),
+        .SPI_CLOCK_RATE(10_000_000),
+        .ADDR(FLASH_BASE)
+    ) flash0 (
+        .clk_i(clk_25mhz),
+        .rst_i(reset),
+        
+        .adr_i(wb_adr),
+        .dat_i(wb_dat_o),
+        .dat_o(flash_dat),
+        .sel_i(wb_sel),
+        .cyc_i(wb_flash_sel),
+        .stb_i(wb_flash_sel),
+        .we_i(wb_we),
+        .ack_o(flash_ack),
+        
+        // SCK is generated internally; not exposed as a GPIO pin
+        .spi_mosi_o(flash_mosi),
+        .spi_miso_i(flash_miso),
+        .spi_cs_n_o(flash_cs_n)
     );
 
 endmodule

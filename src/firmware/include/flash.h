@@ -5,8 +5,9 @@
  * This module provides persistent storage using the on-board W25Q64 (8 MB) SPI flash.
  * 
  * Memory Layout:
- *   0x000000–0x003FFF (16 KB, sectors 0–3)  ← Key-value parameter store
- *   0x004000–0x7FFFFF (rest)                ← Application data
+ *   0x000000–0x1FFFFF (2 MB)               ← FPGA Boot Configuration (PROTECTED, DO NOT TOUCH!)
+ *   0x200000–0x203FFF (16 KB)              ← Key-value parameter store (PicoRV32)
+ *   0x204000–0x7FFFFF (rest)               ← Application data
  * 
  * Example Usage:
  *   // Write parameters
@@ -49,10 +50,18 @@
 #define FLASH_SECTOR_SIZE   (4UL * 1024)             // Bytes per sector
 #define FLASH_PAGES_PER_SECTOR (FLASH_SECTOR_SIZE / FLASH_PAGE_SIZE)  // 16
 
-/** Parameter storage region (first 16 KB = 4 sectors) */
-#define PARAM_REGION_BASE   0x000000
-#define PARAM_REGION_SIZE   (16UL * 1024)             // 16 KB
-#define PARAM_MAX_SIZE      (PARAM_REGION_SIZE - 1024)  // Reserve 1KB overhead
+/** Boot region — PROTECTED (do not write here from application!) */
+#define FLASH_BOOT_BASE     0x000000
+#define FLASH_BOOT_SIZE     (2UL * 1024 * 1024)      // 2 MB reserved for FPGA boot config
+
+/** Parameter storage region (16 KB = 4 sectors) — Safe for PicoRV32 */
+#define FLASH_PARAM_BASE    0x200000                 // 2 MB offset (after boot region)
+#define FLASH_PARAM_SIZE    (16UL * 1024)            // 16 KB
+#define FLASH_PARAM_MAX     (FLASH_PARAM_SIZE - 1024) // Reserve 1KB overhead
+
+/** Application region (remainder of flash) */
+#define FLASH_APP_BASE      (FLASH_PARAM_BASE + FLASH_PARAM_SIZE)  // 0x204000
+#define FLASH_APP_SIZE      (FLASH_SIZE - FLASH_APP_BASE)
 
 /** CONTROL register bits */
 #define FLASH_CTRL_READ     (1 << 0)   // Read page into buffer
@@ -68,6 +77,17 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 /**
+ * Validate that an address is NOT in the protected boot region
+ * 
+ * @param offset Flash address to validate
+ * @return true if safe to write, false if in boot region
+ */
+static inline bool flash_is_safe_address(uint32_t offset) {
+    // Reject any write attempt to boot region (0x000000–0x1FFFFF)
+    return (offset >= FLASH_BOOT_BASE + FLASH_BOOT_SIZE);
+}
+
+/**
  * Wait for flash to be ready (no operation in progress)
  * 
  * Polls STATUS register until BUSY flag clears.
@@ -75,7 +95,7 @@
  */
 static inline void flash_wait_ready() {
     volatile uint32_t* status = (volatile uint32_t*)FLASH_STATUS;
-    uint32_t timeout = 125_000_000;  // ~5 seconds @ 25 MHz
+    uint32_t timeout = 125000000;  // ~5 seconds @ 25 MHz (no digit separators for C++17 compat)
     
     while ((*status & FLASH_STAT_BUSY) && timeout-- > 0) {
         // Busy-wait (bare-metal, no OS)
@@ -119,10 +139,18 @@ static inline void flash_read_page(uint32_t offset, uint8_t* buf) {
  * WARNING: Destination must be erased first (all bytes = 0xFF)!
  *          Calls to flash_erase_sector() handle this automatically.
  * 
+ * PROTECTION: Rejects writes to boot region (0x000000–0x1FFFFF)
+ * 
  * @param offset Address in flash (must be page-aligned)
  * @param buf Input buffer (must be exactly 256 bytes)
+ * @return true if write succeeded, false if address in protected boot region
  */
-static inline void flash_write_page(uint32_t offset, const uint8_t* buf) {
+static inline bool flash_write_page(uint32_t offset, const uint8_t* buf) {
+    // Safety check: reject writes to boot region
+    if (!flash_is_safe_address(offset)) {
+        return false;  // Write rejected — boot region protected!
+    }
+    
     volatile uint32_t* ctrl = (volatile uint32_t*)FLASH_CONTROL;
     volatile uint32_t* addr = (volatile uint32_t*)FLASH_ADDRESS;
     volatile uint32_t* data = (volatile uint32_t*)FLASH_DATA;
@@ -140,6 +168,8 @@ static inline void flash_write_page(uint32_t offset, const uint8_t* buf) {
     // Trigger write
     *ctrl = FLASH_CTRL_WRITE;
     flash_wait_ready();
+    
+    return true;
 }
 
 /**
@@ -148,21 +178,33 @@ static inline void flash_write_page(uint32_t offset, const uint8_t* buf) {
  * Sets all bytes in sector to 0xFF (unprogrammed state).
  * After erase, sector can be written page-by-page.
  * 
+ * PROTECTION: Rejects erases in boot region (0x000000–0x1FFFFF)
+ * 
  * @param sector Sector number (0–4095 for W25Q64)
  *               Or equivalently: address / 4096
+ * @return true if erase succeeded, false if sector in protected boot region
  */
-static inline void flash_erase_sector(uint16_t sector) {
+static inline bool flash_erase_sector(uint16_t sector) {
+    uint32_t offset = (uint32_t)sector * FLASH_SECTOR_SIZE;
+    
+    // Safety check: reject erases in boot region
+    if (!flash_is_safe_address(offset)) {
+        return false;  // Erase rejected — boot region protected!
+    }
+    
     volatile uint32_t* ctrl = (volatile uint32_t*)FLASH_CONTROL;
     volatile uint32_t* addr = (volatile uint32_t*)FLASH_ADDRESS;
     
     flash_wait_ready();
     
     // Set address (any byte within the sector)
-    *addr = (uint32_t)sector * FLASH_SECTOR_SIZE;
+    *addr = offset;
     
     // Trigger erase
     *ctrl = FLASH_CTRL_ERASE;
     flash_wait_ready();
+    
+    return true;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -200,11 +242,11 @@ static inline uint16_t flash_get(const char* key, uint8_t* value_buf, uint16_t b
     if (!key || !value_buf) return 0;
     
     uint8_t key_len = strlen(key);
-    uint32_t pos = PARAM_REGION_BASE;
+    uint32_t pos = FLASH_PARAM_BASE;
     uint8_t page_buf[256];
     
     // Linear search through parameter region
-    while (pos < (PARAM_REGION_BASE + PARAM_MAX_SIZE)) {
+    while (pos < (FLASH_PARAM_BASE + FLASH_PARAM_MAX)) {
         // Read page containing this position
         flash_read_page(pos, page_buf);
         
@@ -272,15 +314,15 @@ static inline bool flash_put(const char* key, const uint8_t* value, uint16_t val
     uint8_t key_len = strlen(key);
     uint32_t entry_size = 3 + key_len + value_len;
     
-    if (entry_size > PARAM_MAX_SIZE) return false;  // Entry too large
+    if (entry_size > FLASH_PARAM_MAX) return false;  // Entry too large
     
     // First, find insertion point (end of valid entries)
-    uint32_t write_pos = PARAM_REGION_BASE;
+    uint32_t write_pos = FLASH_PARAM_BASE;
     uint8_t page_buf[256];
     
     // Scan for end-of-entries
     bool found_end = false;
-    while (!found_end && write_pos < (PARAM_REGION_BASE + PARAM_MAX_SIZE)) {
+    while (!found_end && write_pos < (FLASH_PARAM_BASE + FLASH_PARAM_MAX)) {
         flash_read_page(write_pos, page_buf);
         
         for (int i = 0; i < 256; i++) {
@@ -316,13 +358,17 @@ static inline bool flash_put(const char* key, const uint8_t* value, uint16_t val
     // If this crosses page boundary, handle carefully (simplified: assume fits in page)
     if (buf_offset + entry_size <= 256) {
         // Erase sector if needed (first write in sector)
-        uint16_t sector = (write_pos - PARAM_REGION_BASE) / FLASH_SECTOR_SIZE;
+        uint16_t sector = (write_pos - FLASH_PARAM_BASE) / FLASH_SECTOR_SIZE;
         if (buf_offset == 0) {
-            flash_erase_sector(sector);
+            if (!flash_erase_sector(sector)) {
+                return false;  // Sector erase failed (protected or other error)
+            }
         }
         
         // Write page
-        flash_write_page(write_pos, write_buf);
+        if (!flash_write_page(write_pos, write_buf)) {
+            return false;  // Page write failed (protected or other error)
+        }
         return true;
     }
     

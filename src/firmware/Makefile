@@ -6,6 +6,9 @@ VERSION = 0.1.0
 # Git hash appended to version string (adds -dirty suffix on uncommitted changes)
 GIT_HASH := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 
+# Main source file (can be overridden: make MAIN_SRC=test_main.cpp)
+MAIN_SRC ?= main.cpp
+
 # u8g2 library location
 U8G2_DIR=lib/u8g2/csrc
 U8G2_SRCS=$(wildcard $(U8G2_DIR)/*.c)
@@ -59,7 +62,7 @@ $(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(BUILD)/main.o $(BUILD)/u8g2_hal.o $(U
 $(BUILD)/start.o: start.S | $(BUILD)
 	$(CROSS)gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD)/main.o: main.cpp | $(BUILD)
+$(BUILD)/main.o: $(MAIN_SRC) | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/u8g2_hal.o: lib/u8g2_hal/u8g2_hal.cpp | $(BUILD)

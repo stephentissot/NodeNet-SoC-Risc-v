@@ -43,11 +43,14 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - Configurable speed (default 100 kHz, up to 400 kHz @ 25 MHz)
   - Drives SCL/SDA open-drain (external 4.7 kΩ pullup required)  - Wishbone address: 0x10005000
 
-- **SPI Flash Module** (`wb_flash.sv`, planned):
-  - Wishbone interface to on-board SPI flash (M95128, 256 Kbit = 32 KB)
-  - Arbitrary read/write at sector level (256 bytes/sector)
+- **SPI Flash Module** (`wb_flash.sv`, `spi_master.sv`):
+  - Wishbone interface to on-board SPI flash (W25Q64, 8 MB)
+  - Memory layout: 2 MB boot config (protected) + 16 KB parameters + 5.75 MB app
   - C++ firmware API for parameter storage (like Arduino preferences)
-  - Wear-leveling on write to extend flash lifetime
+  - Boot region protection: firmware rejects writes/erases to 0x000000–0x1FFFFF
+  - Parameter storage at 0x200000–0x203FFF (16 KB, 4 sectors)
+  - Wishbone address: 0x10007000
+  - See [src/wbDevices/README_FLASH.md](src/wbDevices/README_FLASH.md) for details
 ### Firmware
 - **C++17 bare-metal** (`firmware/main.cpp`):
   - Compiled with `riscv-none-elf-g++` — no Arduino, no OS
@@ -106,11 +109,16 @@ Address Range               Size      Purpose
 0x10000000                4 B      LED GPIO (bit [0] = LED output)
 0x10005000                32 B     I2C0 master (8 regs @ 4-byte stride)
 0x10006000–0x1000601F     32 B     NodeNet485 (RS485, 1 Mb/s)
+0x10007000                32 B     SPI Flash controller (W25Q64)
 ────────────────────────────────────────────────────────────
 0x20000000–0x200FFFFF     1 MB     SDRAM — NodeNet485 reserved
                                     (TX: 0x20000000–0x2007FFFF)
                                     (RX: 0x20080000–0x200FFFFF)
 0x20100000–0x207FFFFF     7 MB     SDRAM — Application (PicoRV32)
+────────────────────────────────────────────────────────────
+0x00000000–0x1FFFFF       2 MB     SPI Flash — FPGA boot config (PROTECTED)
+0x200000–0x203FFF         16 KB    SPI Flash — Parameter storage
+0x204000–0x7FFFFF         5.75 MB  SPI Flash — Application data
 ```
 
 ## Device Pinout
@@ -131,6 +139,13 @@ Address Range               Size      Purpose
 
 ### GPIO
 - **D2 LED**: GPIO output at 0x10000000 (bit [0] = LED state)
+
+### SPI Flash (W25Q64)
+- **Pins**: R2 (CS), W2 (MOSI), V2 (MISO)
+- **Clock**: Generated internally (10 MHz typical, no GPIO pin)
+- **Capacity**: 8 MB (2 MB boot + 16 KB parameters + 5.75 MB app)
+- **Boot Protection**: Firmware API rejects writes to 0x000000–0x1FFFFF
+- **Parameter Region**: 0x200000–0x203FFF (key-value store, Arduino preferences-like)
 
 ## Firmware Examples
 
