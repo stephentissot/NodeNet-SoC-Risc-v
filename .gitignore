@@ -16,3 +16,17 @@ src/firmware/.cache/
 # IDE
 .vscode/settings.json
 .DS_Store
+
+# KiCad (keep .kicad_pro/.kicad_sch/.kicad_pcb tracked)
+*.kicad_prl
+*.kicad_pro-bak
+*.kicad_sch-bak
+*.kicad_pcb-bak
+*.kicad_wks-bak
+*.sch-bak
+*.bak
+*.kicad_pcb.lck
+*.kicad_sch.lck
+*.kicad_pro.lck
+fp-info-cache
+.history/
