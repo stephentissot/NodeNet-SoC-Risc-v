@@ -303,6 +303,7 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
 - [ ] NodeNet JSON protocol wrapper (UART4)
 - [ ] SPI slave interface for ESP32 co-processor
 - [ ] SPI color LCD support (ST7789, 76x284) on Colorlight i9
+- [ ] KNX integration with NCN5120 transceiver module
 - [ ] Hardware-based CRC accelerator
 - [ ] Real-time interrupt controller (RISC-V PLIC)
 
