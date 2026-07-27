@@ -17,7 +17,7 @@ SOURCES := $(call rwildcard,src/,*.sv) \
            $(call rwildcard,src/,*.v)
 
 
-.PHONY: all firmware-build clean clean-firmware
+.PHONY: all firmware-build clean clean-firmware lock-flash unlock-flash
 
 all: firmware-build $(BUILD)/$(TOP).bit
 
@@ -93,7 +93,34 @@ flash: flash_image
 		-c "init; \
 		    jtagspi_init 0 0x20000000; \
 		    flash probe 0; \
-		    flash write_image erase $(BUILD)/$(TOP).config 0x0; \
+		    flash write_image erase unlock $(BUILD)/$(TOP).config 0x0; \
+		    exit"
+
+
+# Disable flash protection before manual flash operations.
+# Note: availability depends on the OpenOCD flash driver stack.
+unlock-flash:
+	openocd \
+		-f interface/cmsis-dap.cfg \
+		-f target/lattice-ecp5.cfg \
+		-c "init; \
+		    jtagspi_init 0 0x20000000; \
+		    flash probe 0; \
+		    flash protect 0 0 last off; \
+		    flash info 0; \
+		    exit"
+
+
+# Re-enable flash protection after programming if desired.
+lock-flash:
+	openocd \
+		-f interface/cmsis-dap.cfg \
+		-f target/lattice-ecp5.cfg \
+		-c "init; \
+		    jtagspi_init 0 0x20000000; \
+		    flash probe 0; \
+		    flash protect 0 0 last on; \
+		    flash info 0; \
 		    exit"
 sources:
 	@echo $(SOURCES)

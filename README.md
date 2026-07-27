@@ -285,11 +285,18 @@ make ram
 # Program Flash (permanent)
 make flash
 
+# Explicit flash protection control (optional)
+make unlock-flash
+make lock-flash
+
 # UART loopback test
 # - Send "Hello" via USB-to-UART adapter
 # - LED should blink
 # - Characters echoed back
 ```
+
+`make flash` now performs an explicit unlock step in the OpenOCD write command (`flash write_image erase unlock ...`) before erase/program.
+`make lock-flash`/`make unlock-flash` call `flash protect ...` through OpenOCD; effectiveness/persistence depends on driver support for the target flash path.
 
 ## References
 
