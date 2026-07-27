@@ -302,6 +302,7 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
 - [ ] Modbus RTU library (master/slave modes)
 - [ ] NodeNet JSON protocol wrapper (UART4)
 - [ ] SPI slave interface for ESP32 co-processor
+- [ ] SPI color LCD support (ST7789, 76x284) on Colorlight i9
 - [ ] Hardware-based CRC accelerator
 - [ ] Real-time interrupt controller (RISC-V PLIC)
 
