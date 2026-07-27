@@ -7,7 +7,10 @@ VERSION = 0.1.0
 # Git hash appended to version string (adds -dirty suffix on uncommitted changes)
 GIT_HASH := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 
-# Main source file (can be overridden: make MAIN_SRC=test_main.cpp)
+# Entry-point source selection:
+# - Default build uses main.cpp
+# - Bring-up/test build uses test_main.cpp
+# You can still override manually: make MAIN_SRC=test_main.cpp
 MAIN_SRC ?= main.cpp
 
 # Persistent cache root for third-party library objects/archives.

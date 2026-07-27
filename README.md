@@ -89,6 +89,12 @@ make all
 # Firmware only
 make firmware-build
 
+# Firmware test build (uses src/firmware/test_main.cpp)
+make firmware-test
+
+# Full bring-up build (test firmware + FPGA bitstream)
+make bringup
+
 # FPGA synthesis only (requires pre-built firmware)
 make
 

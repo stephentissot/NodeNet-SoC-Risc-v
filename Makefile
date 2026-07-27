@@ -17,12 +17,20 @@ SOURCES := $(call rwildcard,src/,*.sv) \
            $(call rwildcard,src/,*.v)
 
 
-.PHONY: all firmware-build clean clean-firmware lock-flash unlock-flash
+.PHONY: all firmware-build firmware-test bringup clean clean-firmware lock-flash unlock-flash
 
 all: firmware-build $(BUILD)/$(TOP).bit
 
+# Default firmware build uses src/firmware/main.cpp.
 firmware-build:
 	$(MAKE) -C src/firmware
+
+# Build test firmware (src/firmware/test_main.cpp) without manual MAIN_SRC override.
+firmware-test:
+	$(MAKE) -C src/firmware MAIN_SRC=test_main.cpp
+
+# Build complete bring-up image (test firmware + FPGA bitstream).
+bringup: firmware-test $(BUILD)/$(TOP).bit
 
 clean-firmware:
 	$(MAKE) -C src/firmware clean
