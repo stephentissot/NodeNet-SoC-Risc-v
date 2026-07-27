@@ -64,6 +64,7 @@ module wb_flash #(
     reg [7:0] spi_data_in;
     reg [1:0] spi_xfer_len;  // 0=8bit, 1=16bit, 2=24bit, 3=32bit
     reg spi_xfer_start;
+    reg spi_hold_cs;
     
     spi_master #(
         .CLOCK_RATE(CLOCK_RATE),
@@ -75,6 +76,7 @@ module wb_flash #(
         .data_out_o(spi_data_out),
         .xfer_len_i(spi_xfer_len),
         .xfer_start_i(spi_xfer_start),
+        .hold_cs_i(spi_hold_cs),
         .xfer_done_o(spi_xfer_done),
         .spi_clk_o(spi_clk_o),
         .spi_mosi_o(spi_mosi_o),
@@ -113,10 +115,13 @@ module wb_flash #(
     localparam WRITE_CMD = 3'b101;
     localparam WRITE_ADDR = 3'b110;
     localparam WRITE_DATA = 3'b111;
+    localparam POLL_STATUS_CMD = 4'b1000;
+    localparam POLL_STATUS_DATA = 4'b1001;
     
-    reg [2:0] state;
+    reg [3:0] state;
     reg [9:0] byte_count;                  // Byte counter for operations
-    reg [2:0] next_state;
+    reg op_erase;
+    reg spi_waiting;
     
     // Wishbone response
     always @(posedge clk_i) begin
@@ -128,13 +133,16 @@ module wb_flash #(
             page_buf_offset <= 8'h0;
             byte_count <= 10'h0;
             spi_xfer_start <= 1'b0;
+            spi_hold_cs <= 1'b0;
             ack_o <= 1'b0;
             dat_o <= 32'h0;
-            next_state <= IDLE;
+            op_erase <= 1'b0;
+            spi_waiting <= 1'b0;
         end else begin
             // Default: no ACK, no SPI transfer request
             ack_o <= 1'b0;
             spi_xfer_start <= 1'b0;
+            spi_hold_cs <= 1'b0;
             
             // Handle Wishbone access
             if (wb_valid & in_range) begin
@@ -146,10 +154,33 @@ module wb_flash #(
                         end
                         4'h4: begin
                             // CONTROL: initiate operations
-                            if (dat_i[0]) next_state <= READ_CMD;   // Read page
-                            if (dat_i[1]) next_state <= WRITE_EN;   // Write page
-                            if (dat_i[2]) next_state <= READ_CMD;   // Erase sector (same start)
-                            busy <= 1'b1;
+                            if (!busy) begin
+                                if (dat_i[2]) begin
+                                    // Erase sector
+                                    op_erase <= 1'b1;
+                                    state <= WRITE_EN;
+                                    busy <= 1'b1;
+                                    byte_count <= 10'h0;
+                                    page_buf_offset <= 8'h0;
+                                    spi_waiting <= 1'b0;
+                                end else if (dat_i[1]) begin
+                                    // Write page
+                                    op_erase <= 1'b0;
+                                    state <= WRITE_EN;
+                                    busy <= 1'b1;
+                                    byte_count <= 10'h0;
+                                    page_buf_offset <= 8'h0;
+                                    spi_waiting <= 1'b0;
+                                end else if (dat_i[0]) begin
+                                    // Read page
+                                    op_erase <= 1'b0;
+                                    state <= READ_CMD;
+                                    busy <= 1'b1;
+                                    byte_count <= 10'h0;
+                                    page_buf_offset <= 8'h0;
+                                    spi_waiting <= 1'b0;
+                                end
+                            end
                             ack_o <= 1'b1;
                         end
                         4'h8: begin
@@ -170,7 +201,7 @@ module wb_flash #(
                     case (reg_addr)
                         4'h0: begin
                             // STATUS
-                            dat_o <= {30'h0, 1'b0, busy};  // [1]=ready, [0]=busy
+                            dat_o <= {30'h0, ~busy, busy};  // [1]=ready, [0]=busy
                             ack_o <= 1'b1;
                         end
                         4'h4: begin
@@ -193,108 +224,175 @@ module wb_flash #(
                 end
             end
             
-            // State machine for SPI operations
-            if (state != next_state) begin
-                state <= next_state;
-                byte_count <= 0;
-                page_buf_offset <= 0;
-            end
-            
             case (state)
                 IDLE: begin
                     busy <= 1'b0;
+                    spi_waiting <= 1'b0;
                 end
                 
                 READ_CMD: begin
-                    // Send READ command
-                    spi_data_in <= CMD_READ;
-                    spi_xfer_len <= 2'b00;  // 8-bit
-                    spi_xfer_start <= 1'b1;
-                    if (spi_xfer_done) next_state <= READ_ADDR;
+                    // Send READ command, keep CS asserted for address + data burst
+                    if (!spi_waiting) begin
+                        spi_data_in <= CMD_READ;
+                        spi_xfer_len <= 2'b00;
+                        spi_hold_cs <= 1'b1;
+                        spi_xfer_start <= 1'b1;
+                        spi_waiting <= 1'b1;
+                    end else if (spi_xfer_done) begin
+                        spi_waiting <= 1'b0;
+                        byte_count <= 10'h0;
+                        state <= READ_ADDR;
+                    end
                 end
                 
                 READ_ADDR: begin
-                    // Send 24-bit address
-                    case (byte_count)
-                        0: begin
-                            spi_data_in <= address[23:16];
-                            spi_xfer_start <= 1'b1;
-                            byte_count <= 1;
+                    // Send 24-bit address while CS remains asserted
+                    if (!spi_waiting) begin
+                        case (byte_count)
+                            10'd0: spi_data_in <= address[23:16];
+                            10'd1: spi_data_in <= address[15:8];
+                            default: spi_data_in <= address[7:0];
+                        endcase
+                        spi_xfer_len <= 2'b00;
+                        spi_hold_cs <= 1'b1;
+                        spi_xfer_start <= 1'b1;
+                        spi_waiting <= 1'b1;
+                    end else if (spi_xfer_done) begin
+                        spi_waiting <= 1'b0;
+                        if (byte_count == 10'd2) begin
+                            byte_count <= 10'h0;
+                            state <= READ_DATA;
+                        end else begin
+                            byte_count <= byte_count + 10'd1;
                         end
-                        1: begin
-                            spi_data_in <= address[15:8];
-                            spi_xfer_start <= 1'b1;
-                            byte_count <= 2;
-                        end
-                        2: begin
-                            spi_data_in <= address[7:0];
-                            spi_xfer_start <= 1'b1;
-                            if (spi_xfer_done) next_state <= READ_DATA;
-                        end
-                    endcase
+                    end
                 end
                 
                 READ_DATA: begin
-                    // Read 256 bytes into buffer
-                    if (byte_count < 256) begin
-                        spi_data_in <= 8'h00;  // Dummy byte
-                        spi_xfer_start <= 1'b1;
-                        if (spi_xfer_done) begin
+                    // Read 256 bytes into buffer in one continuous CS window
+                    if (byte_count < 10'd256) begin
+                        if (!spi_waiting) begin
+                            spi_data_in <= 8'h00;  // Dummy byte
+                            spi_xfer_len <= 2'b00;
+                            spi_hold_cs <= (byte_count != 10'd255);
+                            spi_xfer_start <= 1'b1;
+                            spi_waiting <= 1'b1;
+                        end else if (spi_xfer_done) begin
+                            spi_waiting <= 1'b0;
                             page_buffer[byte_count] <= spi_data_out;
-                            byte_count <= byte_count + 1;
+                            byte_count <= byte_count + 10'd1;
+                            page_buf_offset <= byte_count[7:0] + 8'd1;
                         end
                     end else begin
                         busy <= 1'b0;
-                        next_state <= IDLE;
+                        state <= IDLE;
                     end
                 end
                 
                 WRITE_EN: begin
                     // Send WRITE ENABLE command
-                    spi_data_in <= CMD_WRITE_ENABLE;
-                    spi_xfer_len <= 2'b00;
-                    spi_xfer_start <= 1'b1;
-                    if (spi_xfer_done) next_state <= WRITE_CMD;
+                    if (!spi_waiting) begin
+                        spi_data_in <= CMD_WRITE_ENABLE;
+                        spi_xfer_len <= 2'b00;
+                        spi_hold_cs <= 1'b0;
+                        spi_xfer_start <= 1'b1;
+                        spi_waiting <= 1'b1;
+                    end else if (spi_xfer_done) begin
+                        spi_waiting <= 1'b0;
+                        state <= WRITE_CMD;
+                    end
                 end
                 
                 WRITE_CMD: begin
-                    // Send WRITE (PROGRAM PAGE) command
-                    spi_data_in <= CMD_WRITE;
-                    spi_xfer_len <= 2'b00;
-                    spi_xfer_start <= 1'b1;
-                    if (spi_xfer_done) next_state <= WRITE_ADDR;
+                    // Send WRITE or ERASE command and keep CS asserted for address
+                    if (!spi_waiting) begin
+                        spi_data_in <= op_erase ? CMD_ERASE_4K : CMD_WRITE;
+                        spi_xfer_len <= 2'b00;
+                        spi_hold_cs <= 1'b1;
+                        spi_xfer_start <= 1'b1;
+                        spi_waiting <= 1'b1;
+                    end else if (spi_xfer_done) begin
+                        spi_waiting <= 1'b0;
+                        byte_count <= 10'h0;
+                        state <= WRITE_ADDR;
+                    end
                 end
                 
                 WRITE_ADDR: begin
-                    // Send 24-bit address
-                    case (byte_count)
-                        0: begin
-                            spi_data_in <= address[23:16];
-                            spi_xfer_start <= 1'b1;
-                            byte_count <= 1;
+                    // Send 24-bit address, release CS at end for erase op
+                    if (!spi_waiting) begin
+                        case (byte_count)
+                            10'd0: spi_data_in <= address[23:16];
+                            10'd1: spi_data_in <= address[15:8];
+                            default: spi_data_in <= address[7:0];
+                        endcase
+                        spi_xfer_len <= 2'b00;
+                        spi_hold_cs <= !(op_erase && (byte_count == 10'd2));
+                        spi_xfer_start <= 1'b1;
+                        spi_waiting <= 1'b1;
+                    end else if (spi_xfer_done) begin
+                        spi_waiting <= 1'b0;
+                        if (byte_count == 10'd2) begin
+                            if (op_erase) begin
+                                state <= POLL_STATUS_CMD;
+                            end else begin
+                                byte_count <= 10'h0;
+                                state <= WRITE_DATA;
+                            end
+                        end else begin
+                            byte_count <= byte_count + 10'd1;
                         end
-                        1: begin
-                            spi_data_in <= address[15:8];
-                            spi_xfer_start <= 1'b1;
-                            byte_count <= 2;
-                        end
-                        2: begin
-                            spi_data_in <= address[7:0];
-                            spi_xfer_start <= 1'b1;
-                            if (spi_xfer_done) next_state <= WRITE_DATA;
-                        end
-                    endcase
+                    end
                 end
                 
                 WRITE_DATA: begin
-                    // Send 256 bytes from buffer
-                    if (byte_count < 256) begin
-                        spi_data_in <= page_buffer[byte_count];
-                        spi_xfer_start <= 1'b1;
-                        if (spi_xfer_done) byte_count <= byte_count + 1;
+                    // Send 256 bytes from buffer in one continuous CS window
+                    if (byte_count < 10'd256) begin
+                        if (!spi_waiting) begin
+                            spi_data_in <= page_buffer[byte_count];
+                            spi_xfer_len <= 2'b00;
+                            spi_hold_cs <= (byte_count != 10'd255);
+                            spi_xfer_start <= 1'b1;
+                            spi_waiting <= 1'b1;
+                        end else if (spi_xfer_done) begin
+                            spi_waiting <= 1'b0;
+                            byte_count <= byte_count + 10'd1;
+                        end
                     end else begin
-                        busy <= 1'b0;
-                        next_state <= IDLE;
+                        state <= POLL_STATUS_CMD;
+                    end
+                end
+
+                POLL_STATUS_CMD: begin
+                    // Poll WIP bit after write/erase completion
+                    if (!spi_waiting) begin
+                        spi_data_in <= CMD_READ_STATUS;
+                        spi_xfer_len <= 2'b00;
+                        spi_hold_cs <= 1'b1;
+                        spi_xfer_start <= 1'b1;
+                        spi_waiting <= 1'b1;
+                    end else if (spi_xfer_done) begin
+                        spi_waiting <= 1'b0;
+                        state <= POLL_STATUS_DATA;
+                    end
+                end
+
+                POLL_STATUS_DATA: begin
+                    if (!spi_waiting) begin
+                        spi_data_in <= 8'h00;
+                        spi_xfer_len <= 2'b00;
+                        spi_hold_cs <= 1'b0;
+                        spi_xfer_start <= 1'b1;
+                        spi_waiting <= 1'b1;
+                    end else if (spi_xfer_done) begin
+                        spi_waiting <= 1'b0;
+                        status_reg <= spi_data_out;
+                        if (spi_data_out[STAT_BUSY]) begin
+                            state <= POLL_STATUS_CMD;
+                        end else begin
+                            busy <= 1'b0;
+                            state <= IDLE;
+                        end
                     end
                 end
             endcase

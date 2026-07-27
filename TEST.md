@@ -9,7 +9,9 @@ Test coverage:
 - ✓ I2C0 master (SSD1306 OLED communication)
 - ✓ SDRAM controller (read/write validation)
 - ✓ NodeNet485 RS-485 communication
-- ✓ SPI Flash read/write/protection
+- ✓ SPI Flash protection
+- ✓ SPI Flash erase/program/readback cycle
+- ✓ SPI Flash key-value parameter storage
 
 ## Building the Test Firmware
 
@@ -58,8 +60,9 @@ Once the Colorlight i9 is programmed with the test bitstream:
   SDRAM: OK
    NodeNet485: OK/FAIL
    Flash protect: OK
+  Flash RW/erase: OK
    Flash params: OK
-  Result: 6/6 PASS
+  Result: 7/7 PASS
    ```
 3. **LED behavior**:
   - If all tests pass: LED heartbeat (toggle every 2 seconds)
@@ -69,7 +72,8 @@ Once the Colorlight i9 is programmed with the test bitstream:
     - 3 blinks: SDRAM test
     - 4 blinks: NodeNet test
     - 5 blinks: Flash protection test
-    - 6 blinks: Flash parameter test
+    - 6 blinks: Flash erase/program/readback test
+    - 7 blinks: Flash parameter test
 
 ## Test Descriptions
 
@@ -102,6 +106,15 @@ Once the Colorlight i9 is programmed with the test bitstream:
   3. Reads back and verifies data integrity
 - **Pass Criteria**: All three steps succeed
 
+### Flash RW/Erase
+- **Purpose**: Verify sector erase and page program behavior in a safe flash region
+- **Action**:
+  1. Erases one sector at `FLASH_APP_BASE`
+  2. Verifies erased page reads as `0xFF`
+  3. Programs a 256-byte pattern and verifies exact read-back
+  4. Erases again and verifies blank state restored
+- **Pass Criteria**: All four steps succeed
+
 ### Flash Parameters
 - **Purpose**: Verify key-value parameter storage works
 - **Action**:
@@ -115,7 +128,7 @@ Once the Colorlight i9 is programmed with the test bitstream:
 
 1. Program RAM with test firmware (`MAIN_SRC=test_main.cpp`).
 2. Confirm D2 LED changes state within 2-3 seconds after reset.
-3. If OLED is connected, check the 6 test lines and final 6/6 summary.
+3. If OLED is connected, check the 7 test lines and final 7/7 summary.
 4. If OLED is not connected, use LED code blinks to identify first failing stage.
 5. After all pass, rebuild default firmware (`make clean; make all`) and reflash.
 
@@ -142,10 +155,17 @@ Once the Colorlight i9 is programmed with the test bitstream:
   - flash.h has correct #define for FLASH_BOOT_SIZE = 2 MB
   - No corrupted flash (try full reset/reprogram)
 
+### "Flash RW/erase: FAIL"
+- **Cause**: Sector erase or page-program cycle failed
+- **Check**:
+  - SPI wiring and flash power integrity
+  - Flash busy handling in wb_flash (WIP polling)
+  - Test area at `FLASH_APP_BASE` is not being used by another flow
+
 ### "Flash params: FAIL"
 - **Cause**: Parameter write/read failed
 - **Check**:
-  - SPI flash responds to reads (would also fail "Flash protect")
+  - SPI flash responds to reads (would also fail "Flash protect"/"Flash RW/erase")
   - Parameter region not corrupted (manual inspection via SPI)
   - 16 KB parameter region at 0x200000–0x203FFF not full
 
@@ -189,8 +209,8 @@ To add new tests to `test_main.cpp`:
 - **OLED rendering**: ~200 ms (I2C @ 100 kHz, 128×64 full framebuffer)
 - **LED blink test**: ~600 ms
 - **NodeNet485 test**: ~500 ms timeout
-- **Flash test**: ~10 ms (read/write/erase in safe region)
-- **Total runtime**: ~1.5 seconds from boot to final test display
+- **Flash tests**: ~30-80 ms total (protect + erase/program/readback + params)
+- **Total runtime**: ~1.5-2.0 seconds from boot to final test display
 
 ## See Also
 

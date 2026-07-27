@@ -60,12 +60,12 @@ module nodenet_decoder (
   
   assign rx_timeout_o = timeout && (state != IDLE);
   
-  // Nibble parity checker: verify that (b | (inverse_pattern)) is correct
+  // Encoded nibble checker: high/low nibbles must be bitwise complements.
   function is_valid_encoded_nibble(input [7:0] byte_in);
     reg [3:0] high, low;
     high = byte_in[7:4];
     low = byte_in[3:0];
-    is_valid_encoded_nibble = ((high & low) == 4'b0);  // High and low should not overlap
+    is_valid_encoded_nibble = ((high ^ low) == 4'hf);
   endfunction
   
   always @(posedge clk or negedge rst_n) begin
@@ -112,7 +112,7 @@ module nodenet_decoder (
           
           RX_LEN_LO: begin
             payload_len[7:0] <= rx_byte_i;
-            crc <= dst ^ src ^ rx_byte_i;
+            crc <= dst ^ src ^ payload_len[15:8] ^ rx_byte_i;
             payload_idx <= 16'b0;
             state <= WAIT_STX;
           end

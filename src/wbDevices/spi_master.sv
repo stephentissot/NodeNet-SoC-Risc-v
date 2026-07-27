@@ -30,6 +30,7 @@ module spi_master #(
     output reg [7:0] data_out_o,          // Byte received
     input wire [1:0] xfer_len_i,          // 0=8bit, 1=16bit, 2=24bit, 3=32bit
     input wire xfer_start_i,              // Pulse to start transfer
+    input wire hold_cs_i,                 // Keep CS asserted after transfer
     output reg xfer_done_o,               // Transfer complete (1 cycle pulse)
     
     // SPI pins
@@ -75,7 +76,6 @@ module spi_master #(
                 IDLE: begin
                     spi_clk_o <= 1'b0;
                     spi_mosi_o <= 1'b1;
-                    spi_cs_n_o <= 1'b1;
                     clk_div_cnt <= 16'h0;
                     
                     if (xfer_start_i) begin
@@ -126,7 +126,12 @@ module spi_master #(
                             if (bit_cnt == xfer_len) begin
                                 // Transfer complete
                                 spi_clk_o <= 1'b1;  // End with clock high
-                                spi_cs_n_o <= 1'b1;  // Release chip select
+                                if (!hold_cs_i) begin
+                                    spi_cs_n_o <= 1'b1;  // Release chip select
+                                end
+                                else begin
+                                    spi_cs_n_o <= 1'b0;  // Keep asserted for chained transfer
+                                end
                                 
                                 // Rotate result to extract received byte
                                 case (xfer_len)

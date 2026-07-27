@@ -16,23 +16,23 @@ IOBUF PORT "flash_cs_n" IO_TYPE=LVCMOS33;
 IOBUF PORT "flash_miso" IO_TYPE=LVCMOS33;
 IOBUF PORT "flash_mosi" IO_TYPE=LVCMOS33;
 
-# Ethernet PHY 0 (Broadcom B50612D)
-LOCATE COMP "eth0_rst_n" SITE "R1";
-LOCATE COMP "eth0_mdio" SITE "T2";
-LOCATE COMP "eth0_mdc" SITE "P1";
-LOCATE COMP "eth0_rx_clk" SITE "M1";
-LOCATE COMP "eth0_rx_ctl" SITE "N1";
-LOCATE COMP "eth0_rx_data[0]" SITE "M2";
-LOCATE COMP "eth0_rx_data[1]" SITE "N2";
-LOCATE COMP "eth0_rx_data[2]" SITE "P2";
-LOCATE COMP "eth0_rx_data[3]" SITE "R3";
-LOCATE COMP "eth0_tx_clk" SITE "M4";
-LOCATE COMP "eth0_tx_ctl" SITE "L4";
-LOCATE COMP "eth0_tx_data[0]" SITE "L1";
-LOCATE COMP "eth0_tx_data[1]" SITE "L3";
-LOCATE COMP "eth0_tx_data[2]" SITE "P5";
-LOCATE COMP "eth0_tx_data[3]" SITE "L5";
-IOBUF PORT "eth0_rst_n" IO_TYPE=LVCMOS33;
+# Ethernet PHY 0 (Broadcom B50612D) -- currently unused, keep commented for later.
+# LOCATE COMP "eth0_rst_n" SITE "R1";
+# LOCATE COMP "eth0_mdio" SITE "T2";
+# LOCATE COMP "eth0_mdc" SITE "P1";
+# LOCATE COMP "eth0_rx_clk" SITE "M1";
+# LOCATE COMP "eth0_rx_ctl" SITE "N1";
+# LOCATE COMP "eth0_rx_data[0]" SITE "M2";
+# LOCATE COMP "eth0_rx_data[1]" SITE "N2";
+# LOCATE COMP "eth0_rx_data[2]" SITE "P2";
+# LOCATE COMP "eth0_rx_data[3]" SITE "R3";
+# LOCATE COMP "eth0_tx_clk" SITE "M4";
+# LOCATE COMP "eth0_tx_ctl" SITE "L4";
+# LOCATE COMP "eth0_tx_data[0]" SITE "L1";
+# LOCATE COMP "eth0_tx_data[1]" SITE "L3";
+# LOCATE COMP "eth0_tx_data[2]" SITE "P5";
+# LOCATE COMP "eth0_tx_data[3]" SITE "L5";
+# IOBUF PORT "eth0_rst_n" IO_TYPE=LVCMOS33;
 # ... (Add remaining IOBUF commands as needed)
 
 # SDRAM (M12L64322A — 512K × 32 × 4 banks = 8MB)

@@ -239,7 +239,7 @@ static inline bool flash_erase_sector(uint16_t sector) {
  *   if (len > 0) ssid[len] = '\0';  // Null-terminate
  */
 static inline uint16_t flash_get(const char* key, uint8_t* value_buf, uint16_t buf_size) {
-    if (!key || !value_buf) return 0;
+    if (!key || !value_buf || buf_size == 0) return 0;
     
     uint8_t key_len = strlen(key);
     uint32_t pos = FLASH_PARAM_BASE;
@@ -282,7 +282,7 @@ static inline uint16_t flash_get(const char* key, uint8_t* value_buf, uint16_t b
                 for (int i = 0; i < copy_len; i++) {
                     value_buf[i] = page_buf[page_offset + 3 + key_len + i];
                 }
-                return entry_val_len;
+                return copy_len;
             }
             
             // Skip to next entry
@@ -318,29 +318,35 @@ static inline bool flash_put(const char* key, const uint8_t* value, uint16_t val
     
     // First, find insertion point (end of valid entries)
     uint32_t write_pos = FLASH_PARAM_BASE;
+    uint32_t scan_page = FLASH_PARAM_BASE;
     uint8_t page_buf[256];
     
     // Scan for end-of-entries
     bool found_end = false;
-    while (!found_end && write_pos < (FLASH_PARAM_BASE + FLASH_PARAM_MAX)) {
-        flash_read_page(write_pos, page_buf);
+    while (!found_end && scan_page < (FLASH_PARAM_BASE + FLASH_PARAM_MAX)) {
+        flash_read_page(scan_page, page_buf);
         
         for (int i = 0; i < 256; i++) {
             if (page_buf[i] == 0xFF || page_buf[i] == 0x00) {
-                write_pos += i;
+                write_pos = scan_page + i;
                 found_end = true;
                 break;
             }
         }
         
-        if (!found_end) write_pos += 256;
+        if (!found_end) scan_page += 256;
     }
+
+    if (!found_end) return false;
+    if ((write_pos + entry_size) > (FLASH_PARAM_BASE + FLASH_PARAM_MAX)) return false;
+    if ((write_pos % FLASH_PAGE_SIZE) + entry_size > FLASH_PAGE_SIZE) return false;  // single-page entries only
     
     // Write entry header + data
     uint8_t write_buf[256];
-    for (int i = 0; i < 256; i++) write_buf[i] = page_buf[i];  // Preserve existing
+    uint32_t page_base = write_pos & ~(FLASH_PAGE_SIZE - 1);
+    flash_read_page(page_base, write_buf);
     
-    uint16_t buf_offset = write_pos % 256;
+    uint16_t buf_offset = write_pos - page_base;
     
     // Write header
     write_buf[buf_offset] = key_len;
@@ -355,24 +361,42 @@ static inline bool flash_put(const char* key, const uint8_t* value, uint16_t val
         write_buf[buf_offset + 3 + key_len + i] = value[i];
     }
     
-    // If this crosses page boundary, handle carefully (simplified: assume fits in page)
-    if (buf_offset + entry_size <= 256) {
-        // Erase sector if needed (first write in sector)
-        uint16_t sector = (write_pos - FLASH_PARAM_BASE) / FLASH_SECTOR_SIZE;
-        if (buf_offset == 0) {
-            if (!flash_erase_sector(sector)) {
-                return false;  // Sector erase failed (protected or other error)
-            }
+    // If location is not blank, only a sector boundary gives us a safe erase point.
+    bool can_program = true;
+    for (uint16_t i = 0; i < entry_size; i++) {
+        if (write_buf[buf_offset + i] != 0xFF) {
+            can_program = false;
+            break;
         }
-        
-        // Write page
-        if (!flash_write_page(write_pos, write_buf)) {
-            return false;  // Page write failed (protected or other error)
-        }
-        return true;
     }
-    
-    return false;  // Would cross page boundary — not handled yet
+
+    if (!can_program) {
+        if (buf_offset != 0) {
+            return false;  // Requires compaction/GC, not implemented
+        }
+        uint16_t sector = (uint16_t)(page_base / FLASH_SECTOR_SIZE);
+        if (!flash_erase_sector(sector)) {
+            return false;
+        }
+        for (int i = 0; i < 256; i++) {
+            write_buf[i] = 0xFF;
+        }
+        // Rebuild entry in erased page
+        write_buf[buf_offset] = key_len;
+        write_buf[buf_offset + 1] = value_len & 0xFF;
+        write_buf[buf_offset + 2] = (value_len >> 8) & 0xFF;
+        for (int i = 0; i < key_len; i++) {
+            write_buf[buf_offset + 3 + i] = key[i];
+        }
+        for (int i = 0; i < value_len; i++) {
+            write_buf[buf_offset + 3 + key_len + i] = value[i];
+        }
+    }
+
+    if (!flash_write_page(page_base, write_buf)) {
+        return false;
+    }
+    return true;
 }
 
 /**
@@ -403,15 +427,20 @@ static inline int32_t flash_get_int(const char* key, int32_t default_val) {
 }
 
 static inline uint16_t flash_get_string(const char* key, char* buf, uint16_t buf_size, const char* default_val) {
+    if (!buf || buf_size == 0) return 0;
+
     uint16_t len = flash_get(key, (uint8_t*)buf, buf_size - 1);
     
     if (len == 0) {
         // Not found, use default
         strncpy(buf, default_val, buf_size - 1);
         buf[buf_size - 1] = '\0';
-        return strlen(default_val);
+        return strlen(buf);
     }
     
+    if (len >= buf_size) {
+        len = buf_size - 1;
+    }
     buf[len] = '\0';
     return len;
 }

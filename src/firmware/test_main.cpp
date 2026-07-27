@@ -6,7 +6,7 @@
  * - LED GPIO (D2)
  * - I2C0 master (OLED SSD1306)
  * - NodeNet485 RS-485 transport (TX framing + optional RX validation)
- * - SPI Flash (W25Q64) read/write/protect
+ * - SPI Flash (W25Q64) protect + erase/program/readback + KV parameters
  * 
  * OLED Display Layout:
  *   [Test Name] [✓/✗] [Status]
@@ -181,6 +181,49 @@ bool test_flash(void) {
     return protected_rejected && safe_write && safe_read;
 }
 
+/** Test dedicated flash erase/program/readback cycle in app region */
+bool test_flash_rw_erase(void) {
+    const uint32_t test_offset = FLASH_APP_BASE;  // Safe area outside boot + params
+    const uint16_t test_sector = (uint16_t)(test_offset / FLASH_SECTOR_SIZE);
+
+    uint8_t write_buf[256];
+    uint8_t read_buf[256];
+
+    // Deterministic non-trivial pattern.
+    for (int i = 0; i < 256; i++) {
+        write_buf[i] = (uint8_t)(i ^ 0x5A);
+    }
+
+    // 1) Erase and verify blank page
+    if (!flash_erase_sector(test_sector)) {
+        return false;
+    }
+    flash_read_page(test_offset, read_buf);
+    for (int i = 0; i < 256; i++) {
+        if (read_buf[i] != 0xFF) return false;
+    }
+
+    // 2) Program and verify exact readback
+    if (!flash_write_page(test_offset, write_buf)) {
+        return false;
+    }
+    flash_read_page(test_offset, read_buf);
+    if (memcmp(read_buf, write_buf, 256) != 0) {
+        return false;
+    }
+
+    // 3) Erase again and verify blank state restored
+    if (!flash_erase_sector(test_sector)) {
+        return false;
+    }
+    flash_read_page(test_offset, read_buf);
+    for (int i = 0; i < 256; i++) {
+        if (read_buf[i] != 0xFF) return false;
+    }
+
+    return true;
+}
+
 /** Test parameter storage (key-value) */
 bool test_flash_params(void) {
     // Write a test parameter
@@ -247,7 +290,13 @@ int main(void) {
     if (flash_ok) pass_count++;
     total_count++;
     
-    // Test 6: Flash parameters
+    // Test 6: Flash erase/program/readback
+    bool flash_rw_ok = test_flash_rw_erase();
+    oled_print_test(line++, "Flash RW/erase", flash_rw_ok);
+    if (flash_rw_ok) pass_count++;
+    total_count++;
+
+    // Test 7: Flash parameters
     bool flash_param_ok = test_flash_params();
     oled_print_test(line++, "Flash params", flash_param_ok);
     if (flash_param_ok) pass_count++;
@@ -260,14 +309,15 @@ int main(void) {
     oled_print_line(line, summary);
     
     // Failure code for quick diagnosis without OLED
-    // 1=LED, 2=I2C, 3=SDRAM, 4=NodeNet, 5=Flash protect, 6=Flash params
+    // 1=LED, 2=I2C, 3=SDRAM, 4=NodeNet, 5=Flash protect, 6=Flash RW/erase, 7=Flash params
     uint8_t fail_code = 0;
     if (!led_ok) fail_code = 1;
     else if (!i2c_ok) fail_code = 2;
     else if (!sdram_ok) fail_code = 3;
     else if (!nodenet_ok) fail_code = 4;
     else if (!flash_ok) fail_code = 5;
-    else if (!flash_param_ok) fail_code = 6;
+    else if (!flash_rw_ok) fail_code = 6;
+    else if (!flash_param_ok) fail_code = 7;
 
     // Overall status
     LED = (fail_code == 0) ? 1 : 0;
