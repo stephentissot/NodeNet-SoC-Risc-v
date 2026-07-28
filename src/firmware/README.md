@@ -59,6 +59,7 @@ src/firmware/
 | `0x10000008` | 4 B | **RJ45 LED1** (`wb_led`) |
 | `0x10005000` | 32 B | **I2C0** |
 | `0x10006000` | 32 B | **NodeNet485** (RS-485 @ 1 Mb/s, includes LED pulse config) |
+| `0x10007000` | 32 B | **SPI Flash** (`wb_flash`, W25Q64 via USRMCLK) |
 | `0x20000000–0x207FFFFF` | 8 MB | **SDRAM** (external, available after ~200 µs) |
 
 ---
@@ -265,13 +266,31 @@ uint16_t len = header & 0xFFFF;
 - **Driver Enable**: Automatic (hardware module handles)
 - **Current Status**: Functional TX/RX framing with mailbox-based Wishbone API
 
-For full protocol documentation including frame format, CRC, and encoding details, see [../src/wbDevices/README_NODENET.md](../src/wbDevices/README_NODENET.md).
+For full protocol documentation including frame format, CRC, and encoding details, see [../wbDevices/README_NODENET.md](../wbDevices/README_NODENET.md).
 
 ---
 
-### UART0 Removed
+### SPI Flash (`0x10007000`) — Persistent Parameter Storage
 
-**Note**: UART0 has been replaced by NodeNet485 at address `0x10006000`. The hardware pins (H16/H17) are now used for RS-485 communication instead of direct UART. If you need serial debugging, consider using I2C + a USB bridge adapter, or add a separate debug UART on unused pins.
+The onboard W25Q64 (8 MB) is exposed through the `wb_flash` peripheral.
+`flash.h` provides both low-level page/sector operations and key-value style helpers for application parameters.
+
+```cpp
+#include "flash.h"
+
+// Store and retrieve settings in flash
+flash_put_string("device_name", "nodenet-01");
+
+char name[32];
+flash_get_string("device_name", name, sizeof(name), "default");
+```
+
+Implementation notes:
+- SPI SCK uses the ECP5 dedicated USRMCLK path (not a normal GPIO pin).
+- Firmware-side protection keeps writes/erases out of the boot region.
+- Parameter storage starts after the protected boot area.
+
+Detailed register-level documentation is available in [../wbDevices/README_FLASH.md](../wbDevices/README_FLASH.md).
 
 ---
 

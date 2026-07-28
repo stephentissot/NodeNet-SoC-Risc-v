@@ -25,14 +25,15 @@ The W25Q64JVSIQ is an 8 MB SPI flash memory IC on the Colorlight i9 that provide
 
 | Signal | FPGA Pin | Flash Pin | Purpose |
 |--------|----------|-----------|---------|
-| CLK | (to assign) | 6 (CLK) | SPI clock |
-| MOSI | (to assign) | 5 (DI) | Master out, slave in |
-| MISO | (to assign) | 2 (DO) | Master in, slave out |
-| CS_N | (to assign) | 1 (CS) | Chip select (active low) |
+| CLK | Dedicated USRMCLK path (not GPIO) | 6 (CLK) | SPI clock |
+| MOSI | W2 | 5 (DI) | Master out, slave in |
+| MISO | V2 | 2 (DO) | Master in, slave out |
+| CS_N | R2 | 1 (CS) | Chip select (active low) |
 | VCC | 3.3 V | 8 (VCC) | Power supply |
 | GND | GND | 4 (GND) | Ground |
 
-> **Note**: Pin assignments must be added to `constraints/colorlight_i9.lpf`
+> **Note**: Pin assignments are already present in `constraints/colorlight_i9.lpf` for `flash_cs_n`, `flash_miso`, and `flash_mosi`.
+> `CLK` is routed through the ECP5 dedicated `USRMCLK` network, so there is no `flash_clk` GPIO assignment in LPF.
 
 ### Pin Protection
 
@@ -217,9 +218,9 @@ void flash_compact() {
 
 ## Integration Checklist
 
-- [ ] Add pin assignments to `colorlight_i9.lpf` (CLK, MOSI, MISO, CS_N)
+- [x] Pin assignments present in `colorlight_i9.lpf` for MOSI, MISO, CS_N (CLK via USRMCLK)
 - [ ] Add decoupling capacitor (100 nF) near flash VCC
-- [ ] Instantiate `wb_flash` in top.sv with Wishbone mux
+- [x] `wb_flash` instantiated in `top.sv` with Wishbone mux
 - [ ] Verify pin voltage levels (3.3 V)
 - [ ] Test with `flash_get_string()` / `flash_put_string()` in firmware
 
