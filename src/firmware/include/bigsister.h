@@ -13,6 +13,9 @@
 #define BIGSISTER_CPU_HZ 25000000UL
 #endif
 
+// Bare-metal C++ runtime stub: called on invalid pure virtual dispatch.
+extern "C" inline void __cxa_pure_virtual() { while (1); }
+
 static inline uint64_t bigsister_read_mcycle(void) {
 #if defined(__INTELLISENSE__)
     return 0;

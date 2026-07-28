@@ -25,6 +25,7 @@
 #include "sdram.h"
 #include "i2c.h"
 #include "led.h"
+#include "bigsister.h"
 #include "u8g2.h"
 #include "u8g2_hal.h"
 
@@ -40,9 +41,6 @@ static const I2C i2c0(I2C0_BASE);
 // ════════════════════════════════════════════════════════════════════════════
 // Hardware Abstractions
 // ════════════════════════════════════════════════════════════════════════════
-
-/** Bare-metal C++ stubs (no libstdc++, no exceptions, no RTTI) */
-extern "C" void __cxa_pure_virtual() { while (1); }
 
 /** Simple delay function (@ 25 MHz) */
 void delay_ms(uint32_t ms) {
