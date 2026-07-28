@@ -12,12 +12,12 @@
  * 
  * Quick Start
  * ═══════════
- *   nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);  // Initialize as node 0x01
- *   nodenet0_send(0x02, "Hello", 5);               // Send to node 0x02
- *   if (nodenet0_has_message()) {
- *     NodeNetMessage msg = nodenet0_read();         // Read incoming message
+ *   NodeNet nodenet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
+ *   nodenet.Send(0x02, "Hello", 5);               // Send to node 0x02
+ *   if (nodenet.HasMessage()) {
+ *     NodeNetMessage msg = nodenet.ReadMessage();   // Read incoming message
  *     process(msg.src_addr, msg.data, msg.len);    // Process message
- *     nodenet0_free_message(msg);                  // Deallocate
+ *     NodeNet::FreeMessage(msg);                   // Deallocate
  *   }
  * 
  * Mailbox Register Flow
@@ -94,7 +94,7 @@
 
 #define NODENET_BROADCAST 0x00  // Address 0 means broadcast to all nodes
 
-// Message structure returned by nodenet0_read()
+// Message structure returned by NodeNet::ReadMessage()
 struct NodeNetMessage {
   uint8_t src_addr;             // Sender's node address
   uint16_t len;                 // Payload length in bytes
@@ -208,174 +208,5 @@ private:
     *(volatile uint32_t*)(base_ + offset) = value;
   }
 };
-
-static inline NodeNet& nodenet0() {
-  static NodeNet instance(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 100u);
-  return instance;
-}
-
-static inline uint32_t nodenet_status(void) {
-  return nodenet0().Status();
-}
-
-static inline bool nodenet_tx_mailbox_ready(void) {
-  return nodenet0().TxMailboxReady();
-}
-
-static inline bool nodenet_tx_has_space(uint16_t msg_len) {
-  return nodenet0().TxHasSpace(msg_len);
-}
-
-static inline bool nodenet_rx_has_data(void) {
-  return nodenet0().HasMessage();
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Public API Functions (User-Facing)
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Initialize NodeNet485 node
- * 
- * Must be called once at startup before using any other functions.
- * This configures the node address, priority, and clears FIFO pointers.
- * 
- * @param addr Node address on the bus (1-255; 0 is reserved for broadcast)
- * @param priority Message transmission priority (LOW, NORMAL, or HIGH)
- * @param led_blink_ms Activity LED pulse width in milliseconds (TX/RX)
- * 
- * Example:
- *   nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);  // This node is 0x01
- */
-static inline void nodenet0_init(uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u) {
-  nodenet0().Init(addr, priority, led_blink_ms);
-}
-
-/**
- * Send a message to another node
- * 
- * Queues a message for transmission to a specific destination node.
- * If destination is NODENET_BROADCAST (0), message goes to all nodes.
- * 
- * This function busy-waits if TX FIFO is full. Use with caution in
- * interrupt-driven code!
- * 
- * @param dst Destination node address (1-255, or 0 for broadcast)
- * @param data Pointer to payload bytes
- * @param len Number of bytes to send
- * 
- * Example:
- *   uint8_t greeting[] = "Hello";
- *   nodenet0_send(0x02, greeting, 5);
- * 
- * TODO: Add timeout parameter to avoid hanging on full FIFO
- */
-static inline void nodenet0_send(uint8_t dst, const uint8_t* data, uint16_t len) {
-  nodenet0().Send(dst, data, len);
-}
-
-/**
- * Send a C-string message to another node
- * 
- * Convenience overload that automatically calculates string length.
- * 
- * @param dst Destination node address
- * @param str Null-terminated C-string to send
- * 
- * Example:
- *   nodenet0_send(0x02, "Temperature: 25C");
- */
-static inline void nodenet0_send(uint8_t dst, const char* str) {
-  nodenet0().Send(dst, str);
-}
-
-/**
- * Broadcast a message to all nodes
- * 
- * Sends message with destination = 0x00 (broadcast).
- * All nodes with different addresses will receive it.
- * 
- * @param data Pointer to payload bytes
- * @param len Number of bytes to send
- */
-static inline void nodenet0_broadcast(const uint8_t* data, uint16_t len) {
-  nodenet0().Broadcast(data, len);
-}
-
-/**
- * Broadcast a C-string to all nodes
- * 
- * @param str Null-terminated string to broadcast
- * 
- * Example:
- *   nodenet0_broadcast("SYSTEM_RESET");
- */
-static inline void nodenet0_broadcast(const char* str) {
-  nodenet0().Broadcast(str);
-}
-
-/**
- * Check if any messages are pending
- * 
- * @return true if at least one message in RX FIFO
- * 
- * Example:
- *   if (nodenet0_has_message()) {
- *     NodeNetMessage msg = nodenet0_read();
- *     ...
- *   }
- */
-static inline bool nodenet0_has_message() {
-  return nodenet0().HasMessage();
-}
-
-/**
- * Get approximate count of pending messages
- * 
- * NOTE: This is a simple 0/1 indicator, not an exact count!
- * We return 1 if FIFO has ANY data, 0 if empty.
- * (Exact counting requires knowing message boundaries)
- * 
- * @return 0 if no messages, 1 if messages available
- */
-static inline uint8_t nodenet0_message_count() {
-  return nodenet0().MessageCount();
-}
-
-/**
- * Read and return the next pending message
- * 
- * Removes the message from RX FIFO and returns its contents.
- * 
- * WARNING: Allocates memory for msg.data! You MUST call
- * nodenet0_free_message(msg) after processing to avoid leaks.
- * 
- * @return NodeNetMessage with src_addr, len, and data buffer
- * 
- * Example:
- *   NodeNetMessage msg = nodenet0_read();
- *   printf("From node 0x%02X: %d bytes\n", msg.src_addr, msg.len);
- *   nodenet0_free_message(msg);  // Don't forget!
- */
-static inline NodeNetMessage nodenet0_read() {
-  return nodenet0().ReadMessage();
-}
-
-/**
- * Deallocate a message buffer
- * 
- * Frees the dynamically allocated data buffer and clears the struct.
- * MUST be called after reading each message to prevent memory leaks!
- * 
- * @param msg Message to deallocate
- * 
- * Example:
- *   NodeNetMessage msg = nodenet0_read();
- *   process(msg);
- *   nodenet0_free_message(msg);  // Always cleanup
- */
-static inline void nodenet0_free_message(NodeNetMessage& msg) {
-  NodeNet::FreeMessage(msg);
-}
 
 #endif  // NODENET_H

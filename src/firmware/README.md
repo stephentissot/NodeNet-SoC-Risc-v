@@ -174,14 +174,6 @@ public:
     NodeNetMessage ReadMessage() const;
     static void FreeMessage(NodeNetMessage& msg);
 };
-
-// Legacy compatibility wrappers are still available:
-void nodenet0_init(uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
-void nodenet0_send(uint8_t dst, const uint8_t *data, uint16_t len);
-void nodenet0_broadcast(const uint8_t *data, uint16_t len);
-bool nodenet0_has_message();
-NodeNetMessage nodenet0_read();
-void nodenet0_free_message(NodeNetMessage &msg);
 ```
 
 **Echo Loop Example** (Listen and reply):
@@ -240,7 +232,8 @@ int main() {
 **Mailbox Debugging**:
 
 ```cpp
-uint32_t status = nodenet_status();
+NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
+uint32_t status = myNodeNet.Status();
 bool tx_busy = (status & (NODENET_STATUS_TX_PENDING | NODENET_STATUS_TX_ACTIVE)) != 0;
 bool rx_ready = (status & NODENET_STATUS_RX_VALID) != 0;
 bool rx_error = (status & (NODENET_STATUS_RX_ERROR | NODENET_STATUS_RX_OVERFLOW)) != 0;
@@ -360,28 +353,30 @@ Hardware: 8 MB total (M12L64322A SDRAM on Colorlight i9)
 
 ### I2C0 (`0x10005000`) — via `i2c.h`
 
-`i2c.h` provides blocking helpers that map directly to the MMIO registers.
+`i2c.h` provides an `I2C` object API bound to a base address.
 
 ```cpp
 #include "i2c.h"
 
 void i2c_example(void) {
+    I2C i2c(I2C0_BASE);
+
     // Set clock: 400 kHz @ 25 MHz (prescale = 25e6 / (400e3 * 4) = 15)
-    i2c0_init(15);
+    i2c.Init(15);
 
     // Write: send a 2-byte command to device at address 0x3C
     uint8_t cmd[] = { 0x00, 0xAF };     // SSD1306: Co=0, D/C=0, DISPLAY_ON
-    int ret = i2c0_write(0x3C, cmd, 2); // returns 0=OK, 1=NACK
+    int ret = i2c.Write(0x3C, cmd, 2);  // returns 0=OK, 1=NACK
     if (ret) uart_puts("I2C NACK!\n");
 
     // Read: receive 2 bytes from device at 0x48
     uint8_t data[2];
-    i2c0_read(0x48, data, 2);
+    i2c.Read(0x48, data, 2);
 
     // Combined write-then-read (register read pattern)
     uint8_t reg = 0x00;
-    i2c0_write(0x48, &reg, 1);   // Write register address
-    i2c0_read(0x48, data, 2);    // Read register value
+    i2c.Write(0x48, &reg, 1);    // Write register address
+    i2c.Read(0x48, data, 2);     // Read register value
 }
 ```
 
@@ -400,7 +395,7 @@ I2C0_DATA = 0xAF;
 I2C0_CMD = I2C_CMD_STOP;
 
 // Wait for completion
-i2c0_wait_busy();
+I2C(I2C0_BASE).WaitBusy();
 ```
 
 ---

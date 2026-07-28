@@ -33,6 +33,7 @@
 
 static wb_led::Led led0(LED0_BASE, false);
 static wb_led::Led led1(LED1_BASE, false);
+static const I2C i2c0(I2C0_BASE);
 
 // ════════════════════════════════════════════════════════════════════════════
 // Hardware Abstractions
@@ -115,9 +116,9 @@ bool test_i2c(void) {
     // Controller-level check independent of any external device presence.
     // Program a known prescale and verify read-back through Wishbone.
     const uint16_t expected = 62;  // 100 kHz @ 25 MHz
-    i2c0_init(expected);
+    i2c0.Init(expected);
 
-    uint16_t readback = (uint16_t)((I2C0_PRESC_HI << 8) | (I2C0_PRESC_LO & 0xFF));
+    uint16_t readback = i2c0.Prescale();
     return readback == expected;
 }
 
@@ -141,7 +142,7 @@ bool test_nodenet(void) {
     led0.Blink(0);
 
     for (int i = 0; i < 100; i++) {  // ~1 s timeout
-        uint32_t status = nodenet_status();
+        uint32_t status = myNodeNet.Status();
 
         if (myNodeNet.HasMessage()) {
             NodeNetMessage msg = myNodeNet.ReadMessage();

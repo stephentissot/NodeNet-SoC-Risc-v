@@ -52,6 +52,7 @@ static void delay_100ns(uint32_t count) {
 
 static uint8_t  s_i2c_addr   = 0;
 static bool     s_tx_started = false;  // True after first byte is queued
+static const I2C s_i2c(I2C0_BASE);
 
 // ─── I2C byte callback ───────────────────────────────────────────────────────
 
@@ -61,7 +62,7 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
 
     case U8X8_MSG_BYTE_INIT:
         // Set I2C clock to 400 kHz for fast display updates
-        i2c0_init(I2C0_CLK_HZ / (400000UL * 4));
+        s_i2c.Init((uint16_t)(I2C0_CLK_HZ / (400000UL * 4)));
         s_tx_started = false;
         break;
 
@@ -69,7 +70,7 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
         // u8g2 stores address in 8-bit form (7-bit << 1); shift back to 7-bit
         s_i2c_addr   = u8x8_GetI2CAddress(u8x8) >> 1;
         s_tx_started = false;
-        I2C0_ADDR    = s_i2c_addr;
+        s_i2c.SetAddress(s_i2c_addr);
         break;
 
     case U8X8_MSG_BYTE_SEND: {
@@ -78,7 +79,7 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
         // The hardware stalls automatically when FIFOs are full.
         const uint8_t *data = static_cast<const uint8_t *>(arg_ptr);
         for (uint8_t i = 0; i < arg_int; i++) {
-            if (!i2c0_push_data(data[i])) {
+            if (!s_i2c.PushData(data[i])) {
                 s_tx_started = false;
                 return 0;
             }
@@ -88,7 +89,7 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
                 cmd |= I2C_CMD_START;
                 s_tx_started = true;
             }
-            if (!i2c0_push_cmd(cmd)) {
+            if (!s_i2c.PushCmd(cmd)) {
                 s_tx_started = false;
                 return 0;
             }
@@ -99,13 +100,13 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
     case U8X8_MSG_BYTE_END_TRANSFER:
         // Issue STOP to close the I2C frame
         if (s_tx_started) {
-            if (!i2c0_push_cmd(I2C_CMD_STOP)) {
+            if (!s_i2c.PushCmd(I2C_CMD_STOP)) {
                 s_tx_started = false;
                 return 0;
             }
         }
         // Block until the hardware has physically finished
-        if (!i2c0_wait_busy()) {
+        if (!s_i2c.WaitBusy()) {
             s_tx_started = false;
             return 0;
         }

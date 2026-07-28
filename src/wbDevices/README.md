@@ -449,16 +449,18 @@ parameter        READ_FIFO_DEPTH  = 32;
 ```cpp
 #include "i2c.h"
 
+I2C i2c(I2C0_BASE);
+
 // Initialize at 400 kHz
-i2c0_init(25000000 / (400000 * 4));  // prescale = 15
+i2c.Init(25000000 / (400000 * 4));  // prescale = 15
 
 // Write 2 bytes to 0x3C (SSD1306 command: DISPLAY_ON)
 uint8_t buf[] = { 0x00, 0xAF };
-i2c0_write(0x3C, buf, 2);
+i2c.Write(0x3C, buf, 2);
 
 // Read 1 byte from 0x48 (ADS1015)
 uint8_t result;
-i2c0_read(0x48, &result, 1);
+i2c.Read(0x48, &result, 1);
 ```
 
 **Hardware Pins** (Colorlight i9 pmodg connector, external 4.7 kΩ pullup to 3.3 V required):

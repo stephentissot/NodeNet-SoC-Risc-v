@@ -312,23 +312,6 @@ public:
    NodeNetMessage ReadMessage() const;
    static void FreeMessage(NodeNetMessage& msg);
 };
-
-// Compatibility wrappers retained for existing code:
-static inline void nodenet0_init(uint8_t my_addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
-
-// Send unicast
-static inline void nodenet0_send(uint8_t dst, const uint8_t* data, uint16_t len);
-static inline void nodenet0_send(uint8_t dst, const char* str);  // C-string overload
-
-// Send broadcast
-static inline void nodenet0_broadcast(const uint8_t* data, uint16_t len);
-static inline void nodenet0_broadcast(const char* str);  // C-string overload
-
-// Receive
-static inline bool nodenet0_has_message();
-static inline uint8_t nodenet0_message_count();
-static inline NodeNetMessage nodenet0_read();
-static inline void nodenet0_free_message(NodeNetMessage& msg);
 ```
 
 ### Example Implementation (main.cpp)
