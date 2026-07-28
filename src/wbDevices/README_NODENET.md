@@ -218,24 +218,24 @@ IDLE (searching for next SOH)
 Header: `include/nodenet.h`
 
 ```cpp
-// Initialize (address, priority, TX/RX LED pulse duration in ms)
-nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);
+// Preferred object API
+NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
 
 // Send unicast
-nodenet0_send(0x02, "Hello", 5);
+myNodeNet.Send(0x02, "Hello", 5);
 
 // Send broadcast
-nodenet0_broadcast("Alert!");
+myNodeNet.Broadcast("Alert!");
 
 // Check for messages
-if (nodenet0_has_message()) {
-  NodeNetMessage msg = nodenet0_read();
+if (myNodeNet.HasMessage()) {
+   NodeNetMessage msg = myNodeNet.ReadMessage();
   printf("From %d: %.*s\n", msg.src_addr, msg.len, msg.data);
-  nodenet0_free_message(msg);
+   NodeNet::FreeMessage(msg);
 }
 
 // Check message count
-uint8_t count = nodenet0_message_count();
+uint8_t count = myNodeNet.MessageCount();
 ```
 
 ## Timing Parameters (@ 25 MHz)
@@ -295,7 +295,22 @@ assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12
 Firmware API is in `src/firmware/include/nodenet.h`:
 
 ```cpp
-// Initialize (address, priority, TX/RX LED pulse duration in ms)
+class NodeNet {
+public:
+   explicit NodeNet(uint32_t base, uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
+   void Init(uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
+   uint32_t Status() const;
+   bool HasMessage() const;
+   uint8_t MessageCount() const;
+   void Send(uint8_t dst, const uint8_t* data, uint16_t len) const;
+   void Send(uint8_t dst, const char* str) const;
+   void Broadcast(const uint8_t* data, uint16_t len) const;
+   void Broadcast(const char* str) const;
+   NodeNetMessage ReadMessage() const;
+   static void FreeMessage(NodeNetMessage& msg);
+};
+
+// Compatibility wrappers retained for existing code:
 static inline void nodenet0_init(uint8_t my_addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
 
 // Send unicast
@@ -322,10 +337,10 @@ Current test code demonstrates:
 - LED heartbeat indicator (blink every ~1 second)
 
 For custom applications:
-1. Call `nodenet0_init(node_address, priority, led_blink_ms)` at startup
-2. Check `nodenet0_has_message()` in main loop
-3. Process messages with `nodenet0_read()`
-4. Send replies with `nodenet0_send(sender_addr, ...)`
+1. Construct `NodeNet myNodeNet(NODENET0_BASE, node_address, priority, led_blink_ms)` at startup
+2. Check `myNodeNet.HasMessage()` in main loop
+3. Process messages with `myNodeNet.ReadMessage()`
+4. Send replies with `myNodeNet.Send(sender_addr, ...)`
 
 ### Previous Integration Instructions (Preserved for Reference)
 

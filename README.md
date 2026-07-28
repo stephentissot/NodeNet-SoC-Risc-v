@@ -227,14 +227,14 @@ See **[src/firmware/README.md](src/firmware/README.md)** for a full guide with c
 #define LED          (*(volatile uint32_t*)0x10000000)
 
 int main() {
-  nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);
+  NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
   for (;;) {
-    if (nodenet0_has_message()) {
-      NodeNetMessage msg = nodenet0_read();
+    if (myNodeNet.HasMessage()) {
+      NodeNetMessage msg = myNodeNet.ReadMessage();
       if (msg.src_addr != 0) {
-        nodenet0_send(msg.src_addr, msg.data, msg.len);
+        myNodeNet.Send(msg.src_addr, msg.data, msg.len);
       }
-      nodenet0_free_message(msg);
+      NodeNet::FreeMessage(msg);
     }
     LED ^= 1;
   }

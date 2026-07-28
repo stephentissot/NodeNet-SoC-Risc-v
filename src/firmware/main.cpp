@@ -24,13 +24,9 @@ static inline uint64_t read_mcycle()
 
 int main(void)
 {
+    NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
+
     LED_D2 = 0;
-    
-    // Initialize NodeNet485
-    // This node is address 0x01
-    // In a multi-node setup, each board would have a different address
-    // and they'd communicate over RS485 at 1 Mb/s
-    nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);
     
     // Main loop: pulse LED and listen for NodeNet485 messages
     bool led_state = false;
@@ -51,18 +47,18 @@ int main(void)
         // Check for incoming NodeNet485 messages
         // In a real application, you'd process these messages here
         // For now, we just listen and echo them back as a demo
-        if (nodenet0_has_message())
+        if (myNodeNet.HasMessage())
         {
-            NodeNetMessage msg = nodenet0_read();
+            NodeNetMessage msg = myNodeNet.ReadMessage();
             
             // Echo unicast messages back to sender
             if (msg.src_addr != 0)  // Don't echo broadcasts
             {
-                nodenet0_send(msg.src_addr, msg.data, msg.len);
+                myNodeNet.Send(msg.src_addr, msg.data, msg.len);
             }
             
             // Free the message buffer
-            nodenet0_free_message(msg);
+            NodeNet::FreeMessage(msg);
         }
         
     }

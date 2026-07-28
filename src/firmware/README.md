@@ -130,80 +130,74 @@ RX Path (Hardware → Firmware):
 ```cpp
 #include "nodenet.h"
 
-// Initialize as node 0x01 with NORMAL priority and 200 ms TX/RX LED pulse
-nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);
+// Preferred object API
+NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
 
 // Send unicast message to node 0x02
-nodenet0_send(0x02, "Hello", 5);
+myNodeNet.Send(0x02, "Hello", 5);
 
 // Send broadcast to all nodes
-nodenet0_broadcast("ALERT");
+myNodeNet.Broadcast("ALERT");
 
 // Receive messages (check first to avoid blocking)
-if (nodenet0_has_message()) {
-    NodeNetMessage msg = nodenet0_read();
+if (myNodeNet.HasMessage()) {
+    NodeNetMessage msg = myNodeNet.ReadMessage();
     printf("From node 0x%02X: len=%d\n", msg.src_addr, msg.len);
     
     // Echo back if not broadcast
     if (msg.src_addr != 0) {
-        nodenet0_send(msg.src_addr, msg.data, msg.len);
+        myNodeNet.Send(msg.src_addr, msg.data, msg.len);
     }
     
-    nodenet0_free_message(msg);  // IMPORTANT: deallocate!
+    NodeNet::FreeMessage(msg);  // IMPORTANT: deallocate!
 }
 ```
 
-**Detailed Functions**:
+**Detailed API**:
 
 ```cpp
-// Initialize node address, priority and TX/RX activity LED pulse in ms
-void nodenet0_init(uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
-
-// Send message (blocks while TX mailbox is busy)
-void nodenet0_send(uint8_t dst, const uint8_t *data, uint16_t len);
-void nodenet0_send(uint8_t dst, const char *str);  // C-string variant
-
-// Broadcast to all nodes (destination = 0x00)
-void nodenet0_broadcast(const uint8_t *data, uint16_t len);
-void nodenet0_broadcast(const char *str);
-
-// Poll for incoming messages
-bool nodenet0_has_message();
-uint8_t nodenet0_message_count();  // 0 or 1
-
-// Read message (allocates buffer, must free after use!)
-struct NodeNetMessage {
-    uint8_t src_addr;              // Sender's address
-    uint16_t len;                  // Payload length
-    uint8_t *data;                 // Dynamically allocated
+class NodeNet {
+public:
+    explicit NodeNet(uint32_t base, uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
+    void Init(uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
+    uint32_t Status() const;
+    bool TxMailboxReady() const;
+    bool TxHasSpace(uint16_t msg_len) const;
+    bool HasMessage() const;
+    uint8_t MessageCount() const;
+    void Send(uint8_t dst, const uint8_t* data, uint16_t len) const;
+    void Send(uint8_t dst, const char* str) const;
+    void Broadcast(const uint8_t* data, uint16_t len) const;
+    void Broadcast(const char* str) const;
+    NodeNetMessage ReadMessage() const;
+    static void FreeMessage(NodeNetMessage& msg);
 };
+
+// Legacy compatibility wrappers are still available:
+void nodenet0_init(uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
+void nodenet0_send(uint8_t dst, const uint8_t *data, uint16_t len);
+void nodenet0_broadcast(const uint8_t *data, uint16_t len);
+bool nodenet0_has_message();
 NodeNetMessage nodenet0_read();
 void nodenet0_free_message(NodeNetMessage &msg);
-
-// Priority levels (affects transmission order)
-enum NodeNetPriority {
-    NODENET_PRIORITY_LOW = 0,
-    NODENET_PRIORITY_NORMAL = 1,
-    NODENET_PRIORITY_HIGH = 2
-};
 ```
 
 **Echo Loop Example** (Listen and reply):
 
 ```cpp
 int main() {
-    nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);
+    NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
     
     while (1) {
-        if (nodenet0_has_message()) {
-            NodeNetMessage msg = nodenet0_read();
+        if (myNodeNet.HasMessage()) {
+            NodeNetMessage msg = myNodeNet.ReadMessage();
             
             // Echo back unicast messages to sender
             if (msg.src_addr != 0) {
-                nodenet0_send(msg.src_addr, msg.data, msg.len);
+                myNodeNet.Send(msg.src_addr, msg.data, msg.len);
             }
             
-            nodenet0_free_message(msg);  // Don't forget!
+            NodeNet::FreeMessage(msg);  // Don't forget!
         }
     }
 }
@@ -213,26 +207,26 @@ int main() {
 
 ```cpp
 int main() {
-    nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);
+    NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
     
     // Send request to node 0x02
-    nodenet0_send(0x02, "STATUS?", 7);
+    myNodeNet.Send(0x02, "STATUS?", 7);
     
     // Wait for response (timeout = 1 second)
     uint32_t deadline = get_cycles() + 25_000_000;
     
     while (get_cycles() < deadline) {
-        if (nodenet0_has_message()) {
-            NodeNetMessage msg = nodenet0_read();
+        if (myNodeNet.HasMessage()) {
+            NodeNetMessage msg = myNodeNet.ReadMessage();
             
             if (msg.src_addr == 0x02) {
                 // Got response!
                 printf("Temperature: %.*s\n", msg.len, msg.data);
-                nodenet0_free_message(msg);
+                NodeNet::FreeMessage(msg);
                 return 0;
             }
             
-            nodenet0_free_message(msg);
+            NodeNet::FreeMessage(msg);
         }
     }
     

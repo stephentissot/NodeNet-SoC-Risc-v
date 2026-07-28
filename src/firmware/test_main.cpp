@@ -129,8 +129,7 @@ bool test_sdram(void) {
 
 /** Test NodeNet485 RS-485 transport */
 bool test_nodenet(void) {
-    // Initialize NodeNet485 (this node is address 0x01)
-    nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);
+    NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
     
     // Delay to allow initialization
     delay_ms(100);
@@ -138,16 +137,16 @@ bool test_nodenet(void) {
     // Validate that the transport can queue and drain a real broadcast frame.
     // Any valid incoming frame during the observation window is treated as a bonus.
     const char* test_msg = "TEST";
-    nodenet0_broadcast((const uint8_t*)test_msg, 4);
+    myNodeNet.Broadcast((const uint8_t*)test_msg, 4);
     led0.Blink(0);
 
     for (int i = 0; i < 100; i++) {  // ~1 s timeout
         uint32_t status = nodenet_status();
 
-        if (nodenet0_has_message()) {
-            NodeNetMessage msg = nodenet0_read();
+        if (myNodeNet.HasMessage()) {
+            NodeNetMessage msg = myNodeNet.ReadMessage();
             led1.Blink(0);
-            nodenet0_free_message(msg);
+            NodeNet::FreeMessage(msg);
             return true;
         }
 

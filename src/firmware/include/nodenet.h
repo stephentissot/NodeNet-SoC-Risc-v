@@ -53,16 +53,27 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 #define NODENET_BASE      0x10006000u
+#define NODENET0_BASE     NODENET_BASE
+
+// Register offsets
+#define NODENET_TX_CMD_OFS   0x00u
+#define NODENET_TX_DATA_OFS  0x04u
+#define NODENET_RX_HDR_OFS   0x08u
+#define NODENET_RX_DATA_OFS  0x0Cu
+#define NODENET_CONFIG_OFS   0x10u
+#define NODENET_CONTROL_OFS  0x14u
+#define NODENET_STATUS_OFS   0x18u
+#define NODENET_LED_CFG_OFS  0x1Cu
 
 // Mailbox registers
-#define NODENET_TX_CMD    (NODENET_BASE + 0x00u)   // [dst(31:24) | len(15:0)]
-#define NODENET_TX_DATA   (NODENET_BASE + 0x04u)   // write one payload byte per access
-#define NODENET_RX_HDR    (NODENET_BASE + 0x08u)   // [src(31:24) | rx_valid(16) | len(15:0)]
-#define NODENET_RX_DATA   (NODENET_BASE + 0x0Cu)   // read one payload byte per access
-#define NODENET_CONFIG    (NODENET_BASE + 0x10u)   // [hb_interval(31:10) | prio(9:8) | addr(7:0)]
-#define NODENET_CONTROL   (NODENET_BASE + 0x14u)   // bit0=trigger_tx bit1=clear_rx bit2=queue_heartbeat
-#define NODENET_STATUS    (NODENET_BASE + 0x18u)
-#define NODENET_LED_CFG   (NODENET_BASE + 0x1Cu)   // activity blink duration in milliseconds
+#define NODENET_TX_CMD    (NODENET_BASE + NODENET_TX_CMD_OFS)   // [dst(31:24) | len(15:0)]
+#define NODENET_TX_DATA   (NODENET_BASE + NODENET_TX_DATA_OFS)  // write one payload byte per access
+#define NODENET_RX_HDR    (NODENET_BASE + NODENET_RX_HDR_OFS)   // [src(31:24) | rx_valid(16) | len(15:0)]
+#define NODENET_RX_DATA   (NODENET_BASE + NODENET_RX_DATA_OFS)  // read one payload byte per access
+#define NODENET_CONFIG    (NODENET_BASE + NODENET_CONFIG_OFS)   // [hb_interval(31:10) | prio(9:8) | addr(7:0)]
+#define NODENET_CONTROL   (NODENET_BASE + NODENET_CONTROL_OFS)  // bit0=trigger_tx bit1=clear_rx bit2=queue_heartbeat
+#define NODENET_STATUS    (NODENET_BASE + NODENET_STATUS_OFS)
+#define NODENET_LED_CFG   (NODENET_BASE + NODENET_LED_CFG_OFS)  // activity blink duration in milliseconds
 
 #define NODENET_MAX_PAYLOAD_SIZE 2048u
 
@@ -97,56 +108,126 @@ enum NodeNetPriority {
   NODENET_PRIORITY_HIGH = 2     // Highest: Sent first
 };
 
-static inline uint32_t nodenet_reg_read(uint32_t addr) {
-  return *(volatile uint32_t*)addr;
-}
+class NodeNet {
+public:
+  explicit NodeNet(uint32_t base,
+                   uint8_t addr,
+                   NodeNetPriority priority,
+                   uint32_t led_blink_ms = 100u)
+      : base_(base) {
+    Init(addr, priority, led_blink_ms);
+  }
 
-static inline void nodenet_reg_write(uint32_t addr, uint32_t value) {
-  *(volatile uint32_t*)addr = value;
+  void Init(uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u) {
+    Write(NODENET_CONFIG_OFS, ((uint32_t)priority << 8) | (uint32_t)addr);
+    Write(NODENET_LED_CFG_OFS, led_blink_ms);
+    Write(NODENET_CONTROL_OFS, 0x2u);
+  }
+
+  uint32_t Status() const {
+    return Read(NODENET_STATUS_OFS);
+  }
+
+  bool TxMailboxReady() const {
+    uint32_t status = Status();
+    return (status & (NODENET_STATUS_TX_STAGE_VALID | NODENET_STATUS_TX_PENDING | NODENET_STATUS_TX_ACTIVE)) == 0;
+  }
+
+  bool TxHasSpace(uint16_t msg_len) const {
+    return msg_len <= NODENET_MAX_PAYLOAD_SIZE && TxMailboxReady();
+  }
+
+  bool HasMessage() const {
+    return (Read(NODENET_RX_HDR_OFS) & (1u << 16)) != 0;
+  }
+
+  uint8_t MessageCount() const {
+    return HasMessage() ? 1 : 0;
+  }
+
+  void Send(uint8_t dst, const uint8_t* data, uint16_t len) const {
+    if (len > NODENET_MAX_PAYLOAD_SIZE) {
+      len = NODENET_MAX_PAYLOAD_SIZE;
+    }
+
+    while (!TxHasSpace(len)) {
+    }
+
+    Write(NODENET_TX_CMD_OFS, ((uint32_t)dst << 24) | (uint32_t)len);
+    for (uint16_t index = 0; index < len; ++index) {
+      Write(NODENET_TX_DATA_OFS, data[index]);
+    }
+    Write(NODENET_CONTROL_OFS, 0x1u);
+  }
+
+  void Send(uint8_t dst, const char* str) const {
+    Send(dst, (const uint8_t*)str, strlen(str));
+  }
+
+  void Broadcast(const uint8_t* data, uint16_t len) const {
+    Send(NODENET_BROADCAST, data, len);
+  }
+
+  void Broadcast(const char* str) const {
+    Send(NODENET_BROADCAST, str);
+  }
+
+  NodeNetMessage ReadMessage() const {
+    uint32_t header = Read(NODENET_RX_HDR_OFS);
+    NodeNetMessage msg;
+
+    msg.src_addr = (uint8_t)(header >> 24);
+    msg.len = (uint16_t)(header & 0xFFFFu);
+    msg.data = new uint8_t[msg.len ? msg.len : 1];
+
+    for (uint16_t index = 0; index < msg.len; ++index) {
+      msg.data[index] = (uint8_t)Read(NODENET_RX_DATA_OFS);
+    }
+
+    if (msg.len == 0) {
+      msg.data[0] = 0;
+    }
+
+    return msg;
+  }
+
+  static void FreeMessage(NodeNetMessage& msg) {
+    delete[] msg.data;
+    msg.data = nullptr;
+    msg.len = 0;
+  }
+
+private:
+  uint32_t base_;
+
+  uint32_t Read(uint32_t offset) const {
+    return *(volatile uint32_t*)(base_ + offset);
+  }
+
+  void Write(uint32_t offset, uint32_t value) const {
+    *(volatile uint32_t*)(base_ + offset) = value;
+  }
+};
+
+static inline NodeNet& nodenet0() {
+  static NodeNet instance(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 100u);
+  return instance;
 }
 
 static inline uint32_t nodenet_status(void) {
-  return nodenet_reg_read(NODENET_STATUS);
+  return nodenet0().Status();
 }
 
 static inline bool nodenet_tx_mailbox_ready(void) {
-  uint32_t status = nodenet_status();
-  return (status & (NODENET_STATUS_TX_STAGE_VALID | NODENET_STATUS_TX_PENDING | NODENET_STATUS_TX_ACTIVE)) == 0;
+  return nodenet0().TxMailboxReady();
 }
 
 static inline bool nodenet_tx_has_space(uint16_t msg_len) {
-  return msg_len <= NODENET_MAX_PAYLOAD_SIZE && nodenet_tx_mailbox_ready();
+  return nodenet0().TxHasSpace(msg_len);
 }
 
 static inline bool nodenet_rx_has_data(void) {
-  return (nodenet_reg_read(NODENET_RX_HDR) & (1u << 16)) != 0;
-}
-
-static inline void nodenet_tx_write(uint8_t dst, const uint8_t* data, uint16_t len) {
-  nodenet_reg_write(NODENET_TX_CMD, ((uint32_t)dst << 24) | (uint32_t)len);
-  for (uint16_t index = 0; index < len; ++index) {
-    nodenet_reg_write(NODENET_TX_DATA, data[index]);
-  }
-  nodenet_reg_write(NODENET_CONTROL, 0x1u);
-}
-
-static inline NodeNetMessage nodenet_rx_read(void) {
-  uint32_t header = nodenet_reg_read(NODENET_RX_HDR);
-  NodeNetMessage msg;
-
-  msg.src_addr = (uint8_t)(header >> 24);
-  msg.len = (uint16_t)(header & 0xFFFFu);
-  msg.data = new uint8_t[msg.len ? msg.len : 1];
-
-  for (uint16_t index = 0; index < msg.len; ++index) {
-    msg.data[index] = (uint8_t)nodenet_reg_read(NODENET_RX_DATA);
-  }
-
-  if (msg.len == 0) {
-    msg.data[0] = 0;
-  }
-
-  return msg;
+  return nodenet0().HasMessage();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -167,9 +248,7 @@ static inline NodeNetMessage nodenet_rx_read(void) {
  *   nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);  // This node is 0x01
  */
 static inline void nodenet0_init(uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u) {
-  nodenet_reg_write(NODENET_CONFIG, ((uint32_t)priority << 8) | (uint32_t)addr);
-  nodenet_reg_write(NODENET_LED_CFG, led_blink_ms);
-  nodenet_reg_write(NODENET_CONTROL, 0x2u);
+  nodenet0().Init(addr, priority, led_blink_ms);
 }
 
 /**
@@ -192,14 +271,7 @@ static inline void nodenet0_init(uint8_t addr, NodeNetPriority priority, uint32_
  * TODO: Add timeout parameter to avoid hanging on full FIFO
  */
 static inline void nodenet0_send(uint8_t dst, const uint8_t* data, uint16_t len) {
-  if (len > NODENET_MAX_PAYLOAD_SIZE) {
-    len = NODENET_MAX_PAYLOAD_SIZE;
-  }
-
-  while (!nodenet_tx_has_space(len)) {
-  }
-
-  nodenet_tx_write(dst, data, len);
+  nodenet0().Send(dst, data, len);
 }
 
 /**
@@ -214,7 +286,7 @@ static inline void nodenet0_send(uint8_t dst, const uint8_t* data, uint16_t len)
  *   nodenet0_send(0x02, "Temperature: 25C");
  */
 static inline void nodenet0_send(uint8_t dst, const char* str) {
-  nodenet0_send(dst, (const uint8_t*)str, strlen(str));
+  nodenet0().Send(dst, str);
 }
 
 /**
@@ -227,7 +299,7 @@ static inline void nodenet0_send(uint8_t dst, const char* str) {
  * @param len Number of bytes to send
  */
 static inline void nodenet0_broadcast(const uint8_t* data, uint16_t len) {
-  nodenet0_send(NODENET_BROADCAST, data, len);
+  nodenet0().Broadcast(data, len);
 }
 
 /**
@@ -239,7 +311,7 @@ static inline void nodenet0_broadcast(const uint8_t* data, uint16_t len) {
  *   nodenet0_broadcast("SYSTEM_RESET");
  */
 static inline void nodenet0_broadcast(const char* str) {
-  nodenet0_send(NODENET_BROADCAST, str);
+  nodenet0().Broadcast(str);
 }
 
 /**
@@ -254,7 +326,7 @@ static inline void nodenet0_broadcast(const char* str) {
  *   }
  */
 static inline bool nodenet0_has_message() {
-  return nodenet_rx_has_data();
+  return nodenet0().HasMessage();
 }
 
 /**
@@ -267,7 +339,7 @@ static inline bool nodenet0_has_message() {
  * @return 0 if no messages, 1 if messages available
  */
 static inline uint8_t nodenet0_message_count() {
-  return nodenet_rx_has_data() ? 1 : 0;
+  return nodenet0().MessageCount();
 }
 
 /**
@@ -286,7 +358,7 @@ static inline uint8_t nodenet0_message_count() {
  *   nodenet0_free_message(msg);  // Don't forget!
  */
 static inline NodeNetMessage nodenet0_read() {
-  return nodenet_rx_read();
+  return nodenet0().ReadMessage();
 }
 
 /**
@@ -303,9 +375,7 @@ static inline NodeNetMessage nodenet0_read() {
  *   nodenet0_free_message(msg);  // Always cleanup
  */
 static inline void nodenet0_free_message(NodeNetMessage& msg) {
-  delete[] msg.data;
-  msg.data = nullptr;
-  msg.len = 0;
+  NodeNet::FreeMessage(msg);
 }
 
 #endif  // NODENET_H
