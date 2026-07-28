@@ -449,6 +449,7 @@ parameter        READ_FIFO_DEPTH  = 32;
 ```cpp
 #include "i2c.h"
 
+constexpr uint32_t I2C0_BASE = 0x10005000u;
 I2C i2c(I2C0_BASE);
 
 // Initialize at 400 kHz

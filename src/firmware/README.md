@@ -362,6 +362,7 @@ Hardware: 8 MB total (M12L64322A SDRAM on Colorlight i9)
 #include "i2c.h"
 
 void i2c_example(void) {
+    constexpr uint32_t I2C0_BASE = 0x10005000u;
     I2C i2c(I2C0_BASE);
 
     // Set clock: 400 kHz @ 25 MHz (prescale = 25e6 / (400e3 * 4) = 15)
@@ -385,17 +386,22 @@ void i2c_example(void) {
 
 **Raw MMIO access** (for custom protocols):
 ```cpp
+constexpr uint32_t I2C0_BASE = 0x10005000u;
+auto i2c_reg = [](uint32_t base, uint32_t ofs) -> volatile uint32_t& {
+    return *reinterpret_cast<volatile uint32_t*>(base + ofs);
+};
+
 // Wait until cmd FIFO not full, then push a START+WRITE command
-while (I2C0_FIFO & I2C_FIFO_CMD_FULL);
-I2C0_ADDR = 0x3C;
-I2C0_CMD  = I2C_CMD_START | I2C_CMD_WRITE;
+while (i2c_reg(I2C0_BASE, I2C_REG_FIFO) & I2C_FIFO_CMD_FULL);
+i2c_reg(I2C0_BASE, I2C_REG_ADDR) = 0x3C;
+i2c_reg(I2C0_BASE, I2C_REG_CMD)  = I2C_CMD_START | I2C_CMD_WRITE;
 
 // Push data
-while (I2C0_FIFO & I2C_FIFO_WR_FULL);
-I2C0_DATA = 0xAF;
+while (i2c_reg(I2C0_BASE, I2C_REG_FIFO) & I2C_FIFO_WR_FULL);
+i2c_reg(I2C0_BASE, I2C_REG_DATA) = 0xAF;
 
 // Push STOP
-I2C0_CMD = I2C_CMD_STOP;
+i2c_reg(I2C0_BASE, I2C_REG_CMD) = I2C_CMD_STOP;
 
 // Wait for completion
 I2C(I2C0_BASE).WaitBusy();

@@ -1,7 +1,7 @@
 /**
  * i2c.h — MMIO I2C driver for wb_i2c / i2c_master_wbs_8
  *
- * Memory-mapped at I2C0_BASE (0x10005000) via Wishbone bus.
+ * Memory-mapped via a caller-provided base address (for example 0x10005000).
  * Wraps Alex Forencich's verilog-i2c i2c_master_wbs_8 core.
  *
  * Register addresses (4-byte stride from base):
@@ -14,17 +14,17 @@
  *   +0x1C  Prescale Hi W
  *
  * Protocol for a WRITE transaction of N bytes:
- *   1. I2C0_ADDR = device_addr;
+ *   1. Write [base + I2C_REG_ADDR] = device_addr;
  *   2. For byte 0: push DATA, then push CMD = START|WRITE
  *   3. For bytes 1..N-2: push DATA, then push CMD = WRITE
  *   4. For byte N-1: push DATA, then push CMD = WRITE|STOP
  *   5. Wait until cmd FIFO empty, then until not busy.
  *
  * Protocol for a READ transaction of N bytes:
- *   1. I2C0_ADDR = device_addr;
+ *   1. Write [base + I2C_REG_ADDR] = device_addr;
  *   2. Push CMD = START|READ  (for each byte to read, one cmd per byte)
  *   3. Last byte: CMD = READ|STOP
- *   4. Read N bytes from I2C0_DATA as they become available (poll rd_empty).
+ *   4. Read N bytes from [base + I2C_REG_DATA] as they become available.
  */
 
 #ifndef I2C_H
@@ -32,9 +32,7 @@
 
 #include <stdint.h>
 
-// ─── MMIO base and register offsets ─────────────────────────────────────────
-
-#define I2C0_BASE       0x10005000UL
+// ─── MMIO register offsets ───────────────────────────────────────────────────
 
 #define I2C_REG_STATUS   0x00u
 #define I2C_REG_FIFO     0x04u
@@ -43,14 +41,6 @@
 #define I2C_REG_DATA     0x10u
 #define I2C_REG_PRESC_LO 0x18u
 #define I2C_REG_PRESC_HI 0x1Cu
-
-#define I2C0_STATUS     (*(volatile uint32_t*)(I2C0_BASE + I2C_REG_STATUS))
-#define I2C0_FIFO       (*(volatile uint32_t*)(I2C0_BASE + I2C_REG_FIFO))
-#define I2C0_ADDR       (*(volatile uint32_t*)(I2C0_BASE + I2C_REG_ADDR))
-#define I2C0_CMD        (*(volatile uint32_t*)(I2C0_BASE + I2C_REG_CMD))
-#define I2C0_DATA       (*(volatile uint32_t*)(I2C0_BASE + I2C_REG_DATA))
-#define I2C0_PRESC_LO   (*(volatile uint32_t*)(I2C0_BASE + I2C_REG_PRESC_LO))
-#define I2C0_PRESC_HI   (*(volatile uint32_t*)(I2C0_BASE + I2C_REG_PRESC_HI))
 
 // ─── Status register bits (0x00) ────────────────────────────────────────────
 #define I2C_STATUS_BUSY      (1u << 0)  // Transaction in progress
