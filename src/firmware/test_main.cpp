@@ -30,6 +30,7 @@
 
 #define LED0_BASE 0x10000004UL
 #define LED1_BASE 0x10000008UL
+static constexpr uint32_t NODENET0_BASE = 0x10006000u;
 
 static wb_led::Led led0(LED0_BASE, false);
 static wb_led::Led led1(LED1_BASE, false);

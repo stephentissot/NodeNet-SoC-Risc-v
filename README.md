@@ -228,6 +228,7 @@ See **[src/firmware/README.md](src/firmware/README.md)** for a full guide with c
 #include "nodenet.h"
 
 #define LED          (*(volatile uint32_t*)0x10000000)
+constexpr uint32_t NODENET0_BASE = 0x10006000u;
 
 int main() {
   NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);

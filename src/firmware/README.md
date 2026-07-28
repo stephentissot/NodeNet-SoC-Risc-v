@@ -133,6 +133,7 @@ RX Path (Hardware → Firmware):
 #include "nodenet.h"
 
 // Preferred object API
+constexpr uint32_t NODENET0_BASE = 0x10006000u;
 NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
 
 // Send unicast message to node 0x02
@@ -180,6 +181,7 @@ public:
 
 ```cpp
 int main() {
+    constexpr uint32_t NODENET0_BASE = 0x10006000u;
     NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
     
     while (1) {
@@ -201,6 +203,7 @@ int main() {
 
 ```cpp
 int main() {
+    constexpr uint32_t NODENET0_BASE = 0x10006000u;
     NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
     
     // Send request to node 0x02
@@ -238,7 +241,7 @@ bool tx_busy = (status & (NODENET_STATUS_TX_PENDING | NODENET_STATUS_TX_ACTIVE))
 bool rx_ready = (status & NODENET_STATUS_RX_VALID) != 0;
 bool rx_error = (status & (NODENET_STATUS_RX_ERROR | NODENET_STATUS_RX_OVERFLOW)) != 0;
 
-uint32_t header = *(volatile uint32_t *)NODENET_RX_HDR;
+uint32_t header = *(volatile uint32_t *)(NODENET0_BASE + NODENET_RX_HDR_OFS);
 uint8_t src = header >> 24;
 uint16_t len = header & 0xFFFF;
 ```

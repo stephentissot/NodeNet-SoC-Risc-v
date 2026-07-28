@@ -219,6 +219,7 @@ Header: `include/nodenet.h`
 
 ```cpp
 // Preferred object API
+constexpr uint32_t NODENET0_BASE = 0x10006000u;
 NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
 
 // Send unicast
@@ -323,10 +324,11 @@ Current test code demonstrates:
 - LED heartbeat indicator (blink every ~1 second)
 
 For custom applications:
-1. Construct `NodeNet myNodeNet(NODENET0_BASE, node_address, priority, led_blink_ms)` at startup
-2. Check `myNodeNet.HasMessage()` in main loop
-3. Process messages with `myNodeNet.ReadMessage()`
-4. Send replies with `myNodeNet.Send(sender_addr, ...)`
+1. Define `constexpr uint32_t NODENET0_BASE = 0x10006000u` in your application
+2. Construct `NodeNet myNodeNet(NODENET0_BASE, node_address, priority, led_blink_ms)` at startup
+3. Check `myNodeNet.HasMessage()` in main loop
+4. Process messages with `myNodeNet.ReadMessage()`
+5. Send replies with `myNodeNet.Send(sender_addr, ...)`
 
 ### Previous Integration Instructions (Preserved for Reference)
 

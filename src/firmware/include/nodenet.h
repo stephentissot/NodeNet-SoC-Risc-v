@@ -12,6 +12,7 @@
  * 
  * Quick Start
  * ═══════════
+ *   constexpr uint32_t NODENET0_BASE = 0x10006000u;
  *   NodeNet nodenet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
  *   nodenet.Send(0x02, "Hello", 5);               // Send to node 0x02
  *   if (nodenet.HasMessage()) {
@@ -36,8 +37,8 @@
  * 
  * Debugging Tips
  * ══════════════
- * 1. Inspect NODENET_STATUS for RX/TX/error bits
- * 2. Inspect NODENET_RX_HDR for [src, valid, len]
+ * 1. Inspect status register at [base + NODENET_STATUS_OFS] for RX/TX/error bits
+ * 2. Inspect RX header at [base + NODENET_RX_HDR_OFS] for [src, valid, len]
  * 3. Monitor wire protocol on H16 (RX), H17 (TX)
  * 4. Inject known frames and verify CRC/error flags
  */
@@ -52,9 +53,6 @@
 // Hardware Registers (Wishbone B.4 Slave at 0x10006000)
 // ═══════════════════════════════════════════════════════════════════════════
 
-#define NODENET_BASE      0x10006000u
-#define NODENET0_BASE     NODENET_BASE
-
 // Register offsets
 #define NODENET_TX_CMD_OFS   0x00u
 #define NODENET_TX_DATA_OFS  0x04u
@@ -64,16 +62,6 @@
 #define NODENET_CONTROL_OFS  0x14u
 #define NODENET_STATUS_OFS   0x18u
 #define NODENET_LED_CFG_OFS  0x1Cu
-
-// Mailbox registers
-#define NODENET_TX_CMD    (NODENET_BASE + NODENET_TX_CMD_OFS)   // [dst(31:24) | len(15:0)]
-#define NODENET_TX_DATA   (NODENET_BASE + NODENET_TX_DATA_OFS)  // write one payload byte per access
-#define NODENET_RX_HDR    (NODENET_BASE + NODENET_RX_HDR_OFS)   // [src(31:24) | rx_valid(16) | len(15:0)]
-#define NODENET_RX_DATA   (NODENET_BASE + NODENET_RX_DATA_OFS)  // read one payload byte per access
-#define NODENET_CONFIG    (NODENET_BASE + NODENET_CONFIG_OFS)   // [hb_interval(31:10) | prio(9:8) | addr(7:0)]
-#define NODENET_CONTROL   (NODENET_BASE + NODENET_CONTROL_OFS)  // bit0=trigger_tx bit1=clear_rx bit2=queue_heartbeat
-#define NODENET_STATUS    (NODENET_BASE + NODENET_STATUS_OFS)
-#define NODENET_LED_CFG   (NODENET_BASE + NODENET_LED_CFG_OFS)  // activity blink duration in milliseconds
 
 #define NODENET_MAX_PAYLOAD_SIZE 2048u
 

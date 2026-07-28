@@ -4,6 +4,8 @@
 
 #define LED_D2 (*(volatile uint32_t*)0x10000000UL)
 
+static constexpr uint32_t NODENET0_BASE = 0x10006000u;
+
 // Bare-metal C++ stubs (no libstdc++, no exceptions, no RTTI)
 extern "C" void __cxa_pure_virtual() { while (1); }
 
