@@ -1,8 +1,10 @@
 
 module top (
     input  wire clk_25mhz,
-    // LED
+    // LEDs
     output wire led_d2,
+    output wire led_g18,
+    output wire led_e16,
     // UART0 (NodeNet485)
     input  wire rx0,
     output wire tx0,
@@ -26,7 +28,9 @@ module top (
 
     localparam [31:0] ROM_BASE    = 32'h0000_0000;
     localparam [31:0] RAM_BASE    = 32'h0001_0000;
-    localparam [31:0] LED_ADDR    = 32'h1000_0000;
+    localparam [31:0] LED_D2_ADDR = 32'h1000_0000;
+    localparam [31:0] LED0_ADDR   = 32'h1000_0004;
+    localparam [31:0] LED1_ADDR   = 32'h1000_0008;
     localparam [31:0] I2C0_BASE   = 32'h1000_5000;  // 4 KB page, 8 regs @ +0x00..+0x1C
     localparam [31:0] NODENET_BASE = 32'h1000_6000;  // NodeNet485 Wishbone slave (1 Mb/s RS-485)
     localparam [31:0] FLASH_BASE  = 32'h1000_7000;  // W25Q64 SPI flash (8 MB)
@@ -62,8 +66,12 @@ module top (
     wire        rom_ack;
     wire [31:0] ram_dat;
     wire        ram_ack;
-    wire [31:0] led_dat;
-    wire        led_ack;
+    wire [31:0] led_d2_dat;
+    wire        led_d2_ack;
+    wire [31:0] led0_dat;
+    wire        led0_ack;
+    wire [31:0] led1_dat;
+    wire        led1_ack;
     wire [31:0] i2c0_dat;
     wire        i2c0_ack;
     wire [31:0] nodenet_dat;
@@ -76,7 +84,9 @@ module top (
 
     wire wb_rom_sel;
     wire wb_ram_sel;
-    wire wb_led_sel;
+    wire wb_led_d2_sel;
+    wire wb_led0_sel;
+    wire wb_led1_sel;
     wire wb_i2c0_sel;
     wire wb_nodenet_sel;
     wire wb_flash_sel;
@@ -84,7 +94,9 @@ module top (
 
     assign wb_rom_sel    = wb_cyc && wb_stb && (wb_adr[31:16] == ROM_BASE[31:16]);
     assign wb_ram_sel    = wb_cyc && wb_stb && (wb_adr[31:16] == RAM_BASE[31:16]);
-    assign wb_led_sel    = wb_cyc && wb_stb && (wb_adr == LED_ADDR);
+    assign wb_led_d2_sel = wb_cyc && wb_stb && (wb_adr == LED_D2_ADDR);
+    assign wb_led0_sel   = wb_cyc && wb_stb && (wb_adr == LED0_ADDR);
+    assign wb_led1_sel   = wb_cyc && wb_stb && (wb_adr == LED1_ADDR);
     assign wb_i2c0_sel   = wb_cyc && wb_stb && (wb_adr[31:12] == I2C0_BASE[31:12]);
     assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12]);
     assign wb_flash_sel  = wb_cyc && wb_stb && (wb_adr[31:12] == FLASH_BASE[31:12]);
@@ -95,16 +107,25 @@ module top (
                       nodenet_ack ? nodenet_dat :
                       i2c0_ack    ? i2c0_dat    :
                       flash_ack   ? flash_dat   :
-                      led_ack     ? led_dat     :
+                      led_d2_ack  ? led_d2_dat  :
+                      led0_ack    ? led0_dat    :
+                      led1_ack    ? led1_dat    :
                       sdram_ack   ? sdram_dat   :
                       32'h0000_0000;
-    assign wb_ack = rom_ack | ram_ack | led_ack | nodenet_ack | i2c0_ack | flash_ack | sdram_ack;
+    assign wb_ack = rom_ack | ram_ack | led_d2_ack | led0_ack | led1_ack | nodenet_ack | i2c0_ack | flash_ack | sdram_ack;
     
-    //assign led_d2 = wb_cyc;
+    wire led0_out;
+    wire led1_out;
+
+    assign led_d2 = led_d2_out;
+    assign led_g18 = led0_out;
+    assign led_e16 = led1_out;
+
+    wire led_d2_out;
 
     wb_gpio #(
-        .ADDR(LED_ADDR)
-    ) led0
+        .ADDR(LED_D2_ADDR)
+    ) led_d2_gpio
     (
         .clk(clk_25mhz),
 
@@ -112,13 +133,57 @@ module top (
         .wb_dat_i(wb_dat_o),
         .wb_sel_i(wb_sel),
         .wb_we_i(wb_we),
-        .wb_cyc_i(wb_led_sel),
-        .wb_stb_i(wb_led_sel),
+        .wb_cyc_i(wb_led_d2_sel),
+        .wb_stb_i(wb_led_d2_sel),
 
-        .wb_dat_o(led_dat),
-        .wb_ack_o(led_ack),
+        .wb_dat_o(led_d2_dat),
+        .wb_ack_o(led_d2_ack),
 
-        .led(led_d2)
+        .led(led_d2_out)
+    );
+
+    wb_led #(
+        .ADDR(LED0_ADDR),
+        .DEFAULT_STATE(1'b0),
+        .BLINK_CYCLES(32'd2500000) // 100 ms @ 25 MHz
+    ) led0
+    (
+        .clk(clk_25mhz),
+        .rst(reset),
+
+        .wb_adr_i(wb_adr),
+        .wb_dat_i(wb_dat_o),
+        .wb_sel_i(wb_sel),
+        .wb_we_i(wb_we),
+        .wb_cyc_i(wb_led0_sel),
+        .wb_stb_i(wb_led0_sel),
+
+        .wb_dat_o(led0_dat),
+        .wb_ack_o(led0_ack),
+
+        .led(led0_out)
+    );
+
+    wb_led #(
+        .ADDR(LED1_ADDR),
+        .DEFAULT_STATE(1'b0),
+        .BLINK_CYCLES(32'd2500000) // 100 ms @ 25 MHz
+    ) led1
+    (
+        .clk(clk_25mhz),
+        .rst(reset),
+
+        .wb_adr_i(wb_adr),
+        .wb_dat_i(wb_dat_o),
+        .wb_sel_i(wb_sel),
+        .wb_we_i(wb_we),
+        .wb_cyc_i(wb_led1_sel),
+        .wb_stb_i(wb_led1_sel),
+
+        .wb_dat_o(led1_dat),
+        .wb_ack_o(led1_ack),
+
+        .led(led1_out)
     );
     
     wb_nodenet #(

@@ -54,7 +54,9 @@ src/firmware/
 |--------------|------|-------------|
 | `0x00000000–0x0000FFFF` | 64 KiB | **Boot ROM** — firmware binary |
 | `0x00010000–0x0001FFFF` | 64 KiB | **RAM** — stack, BSS, initialized data |
-| `0x10000000` | 4 B | **LED GPIO** |
+| `0x10000000` | 4 B | **D2 LED GPIO** (`wb_gpio`) |
+| `0x10000004` | 4 B | **RJ45 LED0** (`wb_led`) |
+| `0x10000008` | 4 B | **RJ45 LED1** (`wb_led`) |
 | `0x10005000` | 32 B | **I2C0** |
 | `0x10006000` | 32 B | **NodeNet485** (RS-485 @ 1 Mb/s) |
 | `0x20000000–0x207FFFFF` | 8 MB | **SDRAM** (external, available after ~200 µs) |
@@ -63,7 +65,7 @@ src/firmware/
 
 ## Peripheral Examples
 
-### LED GPIO (`0x10000000`)
+### D2 LED GPIO (`0x10000000`)
 
 ```cpp
 #define LED (*(volatile uint32_t*)0x10000000)
@@ -72,6 +74,28 @@ LED = 1;    // ON
 LED = 0;    // OFF
 LED ^= 1;   // Toggle
 ```
+
+Current `main.cpp` heartbeat policy uses a non-blocking software toggle every 500 ms.
+
+### RJ45 LEDs (`wb_led`: `0x10000004`, `0x10000008`)
+
+RJ45 LEDs are controlled through the `wb_led` peripheral and firmware helpers in `include/led.h`.
+
+```cpp
+#include "led.h"
+
+#define LED0_BASE 0x10000004UL
+#define LED1_BASE 0x10000008UL
+
+wb_led::Led led0(LED0_BASE, false);
+wb_led::Led led1(LED1_BASE, false);
+
+led0.Blink(100);   // non-blocking one-shot pulse (100 ms)
+led1.On();         // set default state ON
+led1.Off();        // set default state OFF
+```
+
+`test_main.cpp` currently uses these two addresses for RJ45 LED validation.
 
 ---
 

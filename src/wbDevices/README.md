@@ -245,7 +245,40 @@ uint32_t state = *led_gpio;
 
 ---
 
-### 5. `wb_sdram.sv` – 8 MB External SDRAM Controller
+### 5. `wb_led.sv` – Non-Blocking LED Pulse Controller
+
+**Purpose**: Hardware-timed one-shot LED pulses over Wishbone, used for RJ45 LEDs.
+
+**Addresses in current top-level integration**:
+- `0x10000004`: LED0 (pin G18)
+- `0x10000008`: LED1 (pin E16)
+
+**Write Commands** (`wb_dat_i`):
+- `bit0 = 1`: trigger one-shot pulse
+- `bits31:3`: optional duration override (clock cycles, `0` means use `BLINK_CYCLES` parameter)
+- `bit1 = 1`: update default state
+- `bit2`: new default state value (0 = OFF, 1 = ON)
+
+**Readback** (`wb_dat_o`):
+- `bit0`: current LED output level
+- `bit1`: pulse active (`busy`)
+- `bit2`: default state
+
+**Parameters**:
+
+```systemverilog
+parameter ADDR = 32'h1000_0004;
+parameter DEFAULT_STATE = 1'b0;
+parameter BLINK_CYCLES = 32'd2500000; // 100 ms @ 25 MHz
+```
+
+**Firmware usage**:
+- See `src/firmware/include/led.h` for helper functions and `wb_led::Led` wrapper.
+- Current policy: `main.cpp` uses only D2 (`wb_gpio`), while `test_main.cpp` exercises RJ45 LEDs through `wb_led`.
+
+---
+
+### 6. `wb_sdram.sv` – 8 MB External SDRAM Controller
 
 **Purpose**: Full-featured SDRAM controller for the M12L64322A chip on Colorlight i9, exposing 8 MB of external DRAM to the CPU via Wishbone B.4.
 
@@ -450,23 +483,32 @@ All modules are instantiated in [../top.sv](../top.sv) with address decoding:
 ```systemverilog
 // Address ranges
 always_comb begin
-    wb_rom_sel  = (wb_adr_i[31:16] == 16'h0000);
-    wb_ram_sel  = (wb_adr_i[31:16] == 16'h0001);
-    wb_uart0_sel = (wb_adr_i[31:12] == 20'h1000_1);
-    wb_led_sel  = (wb_adr_i[31:16] == 16'h1000);
+    wb_rom_sel    = wb_cyc && wb_stb && (wb_adr[31:16] == 16'h0000);
+    wb_ram_sel    = wb_cyc && wb_stb && (wb_adr[31:16] == 16'h0001);
+    wb_led_d2_sel = wb_cyc && wb_stb && (wb_adr == 32'h1000_0000);
+    wb_led0_sel   = wb_cyc && wb_stb && (wb_adr == 32'h1000_0004);
+    wb_led1_sel   = wb_cyc && wb_stb && (wb_adr == 32'h1000_0008);
+    wb_i2c0_sel   = wb_cyc && wb_stb && (wb_adr[31:12] == 20'h10005);
+    wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == 20'h10006);
+    wb_flash_sel  = wb_cyc && wb_stb && (wb_adr[31:12] == 20'h10007);
+    wb_sdram_sel  = wb_cyc && wb_stb && (wb_adr[31:23] == 9'h040);
 end
 
 // Data multiplexer
-assign wb_dat_i = wb_rom_sel  ? wb_rom_data :
-                  wb_ram_sel  ? wb_ram_data :
-                  wb_uart0_sel ? wb_uart0_data :
-                  wb_led_sel  ? wb_led_data : 32'h0;
+assign wb_dat_i = rom_ack     ? rom_dat     :
+                  ram_ack     ? ram_dat     :
+                  nodenet_ack ? nodenet_dat :
+                  i2c0_ack    ? i2c0_dat    :
+                  flash_ack   ? flash_dat   :
+                  led_d2_ack  ? led_d2_dat  :
+                  led0_ack    ? led0_dat    :
+                  led1_ack    ? led1_dat    :
+                  sdram_ack   ? sdram_dat   :
+                  32'h0;
 
 // Ack multiplexer
-assign wb_ack = wb_rom_sel  ? wb_rom_ack :
-                wb_ram_sel  ? wb_ram_ack :
-                wb_uart0_sel ? wb_uart0_ack :
-                wb_led_sel  ? wb_led_ack : 1'b0;
+assign wb_ack = rom_ack | ram_ack | led_d2_ack | led0_ack | led1_ack |
+                nodenet_ack | i2c0_ack | flash_ack | sdram_ack;
 ```
 
 ---

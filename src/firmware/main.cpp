@@ -2,31 +2,29 @@
 #include "version.h"
 #include "nodenet.h"
 
+#define LED_D2 (*(volatile uint32_t*)0x10000000UL)
+
 // Bare-metal C++ stubs (no libstdc++, no exceptions, no RTTI)
 extern "C" void __cxa_pure_virtual() { while (1); }
 
-// LED register
-#define LED (*(volatile uint32_t*)0x10000000)
-
-// Simple delay function (@ 25 MHz)
-void delay_ms(uint32_t ms)
+static inline uint64_t read_mcycle()
 {
-    // Rough estimate: 25000 cycles ~= 1 ms @ 25 MHz
-    for (volatile uint32_t i = 0; i < ms * 25000; i++)
-    {
-    }
+    uint32_t hi0;
+    uint32_t lo;
+    uint32_t hi1;
+
+    do {
+        asm volatile ("csrr %0, mcycleh" : "=r"(hi0));
+        asm volatile ("csrr %0, mcycle"  : "=r"(lo));
+        asm volatile ("csrr %0, mcycleh" : "=r"(hi1));
+    } while (hi0 != hi1);
+
+    return ((uint64_t)hi0 << 32) | lo;
 }
 
 int main(void)
 {
-    // Blink LED to show boot
-    LED = 1;
-    delay_ms(200);
-    LED = 0;
-    delay_ms(200);
-    LED = 1;
-    delay_ms(200);
-    LED = 0;
+    LED_D2 = 0;
     
     // Initialize NodeNet485
     // This node is address 0x01
@@ -34,18 +32,20 @@ int main(void)
     // and they'd communicate over RS485 at 1 Mb/s
     nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
     
-    // Main loop: blink LED and listen for NodeNet485 messages
-    uint32_t led_state = 0;
-    uint32_t loop_count = 0;
+    // Main loop: pulse LED and listen for NodeNet485 messages
+    bool led_state = false;
+    const uint64_t blink_period_cycles = 12'500'000ULL; // 500 ms @ 25 MHz
+    uint64_t next_toggle = read_mcycle() + blink_period_cycles;
     
     while (1)
     {
-        // Blink LED every ~1 second
-        LED = led_state;
-        if (++loop_count >= 100)
+        // Non-blocking heartbeat: toggle every 500 ms with no delay loop.
+        uint64_t now = read_mcycle();
+        if ((int64_t)(now - next_toggle) >= 0)
         {
-            led_state ^= 1;
-            loop_count = 0;
+            led_state = !led_state;
+            LED_D2 = led_state ? 1u : 0u;
+            next_toggle += blink_period_cycles;
         }
         
         // Check for incoming NodeNet485 messages
@@ -65,7 +65,6 @@ int main(void)
             nodenet0_free_message(msg);
         }
         
-        delay_ms(10);
     }
     
     return 0;

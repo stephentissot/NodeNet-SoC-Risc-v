@@ -8,7 +8,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 - **Processor**: PicoRV32 (32-bit RISC-V, bare-metal)
 - **Clock**: 25 MHz
 - **Memory**: 64 KiB ROM (boot code) + 64 KiB RAM (stack/variables) + 8 MB SDRAM (application/external data)
-- **Peripherals**: LED GPIO, RS485 NodeNet485, I2C master, SDRAM controller
+- **Peripherals**: D2 LED GPIO, RJ45 LED pulse controllers (`wb_led`), RS485 NodeNet485, I2C master, SDRAM controller
 - **Communication**: NodeNet485 @ 1 Mb/s over RS-485 (multi-node capable)
 - **Firmware**: C++17, bare-metal, newlib-nano
 
@@ -20,7 +20,9 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 - **Memory Map**:
   - `0x00000000–0x0000FFFF`: 64 KiB boot ROM
   - `0x00010000–0x0001FFFF`: 64 KiB RAM (stack, BSS, heap)
-  - `0x10000000`: LED GPIO (1-bit output)
+  - `0x10000000`: D2 LED GPIO (1-bit output)
+  - `0x10000004`: RJ45 LED0 (`wb_led` one-shot pulse)
+  - `0x10000008`: RJ45 LED1 (`wb_led` one-shot pulse)
   - `0x10005000`: I2C0 master (8 registers @ 4-byte stride)
   - `0x10006000`: NodeNet485 RS-485 mailbox (7 registers, 1 Mb/s)
   - `0x20000000–0x207FFFFF`: 8 MB SDRAM (application / framebuffer / logs)
@@ -61,7 +63,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - Dead code elimination (`-ffunction-sections -Wl,--gc-sections`)
   - Global C++ constructors called in `start.S` via `.init_array`
   - **NodeNet485 echo loop**: Listens for messages, echoes responses
-  - LED blink pattern for boot indication
+  - D2 activity heartbeat: non-blocking software toggle every 500 ms
 
 - See [src/firmware/README.md](src/firmware/README.md) for full peripheral usage guide.
 - See [src/wbDevices/README_NODENET.md](src/wbDevices/README_NODENET.md) for protocol details.
@@ -148,7 +150,9 @@ Address Range               Size      Purpose
 0x00000000–0x0000FFFF     64 KiB   Boot ROM (firmware binary)
 0x00010000–0x0001FFFF     64 KiB   RAM (stack, BSS, heap)
 ────────────────────────────────────────────────────────────
-0x10000000                4 B      LED GPIO (bit [0] = LED output)
+0x10000000                4 B      D2 LED GPIO (bit [0] = LED output)
+0x10000004                4 B      RJ45 LED0 (`wb_led` control/status)
+0x10000008                4 B      RJ45 LED1 (`wb_led` control/status)
 0x10005000                32 B     I2C0 master (8 regs @ 4-byte stride)
 0x10006000–0x1000601B     28 B     NodeNet485 mailbox (RS485, 1 Mb/s)
 0x10007000                32 B     SPI Flash controller (W25Q64)
@@ -192,6 +196,12 @@ NodeNet RJ45 pinout (both connectors):
 
 ### GPIO
 - **D2 LED**: GPIO output at 0x10000000 (bit [0] = LED state)
+
+### RJ45 LEDs (`wb_led`)
+- **LED0 (G18)**: `0x10000004`
+- **LED1 (E16)**: `0x10000008`
+- Write command bit0 triggers a non-blocking pulse (duration can be overridden by firmware).
+- Main firmware currently keeps RJ45 LEDs for dedicated test firmware (`test_main.cpp`).
 
 ### SPI Flash (W25Q64)
 - **Pins**: R2 (CS), W2 (MOSI), V2 (MISO)
@@ -275,17 +285,17 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
                            |
                       Wishbone B4
                            |
-      +--------+-----------+--------+----------+-------+
-      |        |           |        |          |       |
-         wb_rom   wb_ram   wb_nodenet wb_gpio   wb_sdram wb_i2c
+      +--------+-----------+---------+--------+----------+-------+
+      |        |           |         |        |          |       |
+         wb_rom   wb_ram   wb_nodenet wb_gpio   wb_led    wb_sdram wb_i2c
               |            |          |        |
-               uart_simple   LED D2  M12L64322A  SSD1306
+           uart_simple   LED D2   RJ45 LEDs  M12L64322A  SSD1306
               |                    (8MB SDRAM) OLED
             RS485 Transceiver
                            |
-                    TMUX4051 Mux Array
+                 Direct RS485 A/B/GND
                            |
-                    RJ45 Connectors
+                   Field Connectors
 ```
 
 **Data Flow**:
@@ -296,12 +306,13 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
    - `wb_ram`: 64 KiB RAM (0x00010000)
    - `wb_sdram`: 8 MB SDRAM (0x20000000)
   - `wb_nodenet`: NodeNet485 mailbox transport (0x10006000)
-   - `wb_gpio`: GPIO output (0x10000000)
+  - `wb_gpio`: D2 GPIO output (0x10000000)
+  - `wb_led`: RJ45 LED pulse controllers (0x10000004 / 0x10000008)
    - `wb_i2c`: I2C master with FIFOs (0x10005000)
 4. **NodeNet Transport**: Mailbox-driven TX/RX framing, decode, and heartbeat scheduling
 5. **I2C Core**: Wraps Alex Forencich's `i2c_master_wbs_8` with Wishbone interface
 6. **RS485 Physical**: Transceiver converts CMOS ↔ RS485 differential signaling
-7. **Multiplexing**: TMUX4051 arrays route A/B pairs to correct RJ45 connectors
+7. **Field Wiring**: Each RS485 channel is exposed as direct A/B/GND connections
 
 ## Planned Enhancements
 
@@ -312,16 +323,16 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
 - [x] SDRAM section in linker script (`sdram.h`, `SDRAM_DATA` macro)
 - [x] NodeNet485 mailbox transport with TX/RX framing and heartbeat
 - [ ] UART1–4 implementation and testing
-- [ ] RS485 multiplexer firmware control
+- [ ] RS485 direct connector mapping and labeling verification (A/B/GND)
 - [ ] `wb_gpio` control bit for RS485 120R termination switch (74LVC1G66GW,125)
-- [ ] Modbus V1 front-end: 4x RS485 modules + 8x TMUX4051 (2 per RS485 channel)
-- [ ] TMUX EN selector control (3-bit bus + EN pulse via 74HC138/74LVC138 class device)
+- [ ] Modbus V1 front-end: 4x RS485 modules with direct A/B/GND connectors per channel
 - [ ] `wb_gpiopwm` peripheral + firmware API (PKLCS1212E4001-R1 buzzer)
 - [ ] TMP117 board temperature sensor + firmware I2C driver/API
 - [ ] Display validation: OLED over I2C and LCD over SPI (select final path after tests)
 - [ ] Evaluate and select more robust 1 Mb/s transceivers for Modbus and NodeNet
 - [ ] Dual Ethernet breakout using i9 onboard Broadcom PHYs (2x RJ45 with magnetics)
-- [ ] RJ45 LEDs integration and firmware-controlled blink policy (link/activity/status)
+- [x] RJ45 LEDs integrated through `wb_led` at dedicated addresses
+- [ ] Final RJ45 firmware policy (link/activity/status) for production runtime
 - [ ] ESP32 module SPI coprocessor for web API and MQTT bridge
 - [ ] Power option study: use ESP32 module 3.3V rail vs dedicated 12V->3.3V buck
 - [ ] Modbus RTU library (master/slave modes)
@@ -337,9 +348,7 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
 - **Colorlight i9 Board** with Lattice LFE5U-45F FPGA
 - **USB-C Programmer** (e.g., openFPGALoader, oss-cad-suite)
 - **RS485 Transceiver** modules (SN65HVD230, MAX483, etc.)
-- **TMUX4051 Multiplexers** (8 units, 2 per RJ45)
-- **74HC138 Decoder** (1 unit, for mux selection)
-- **RJ45 Connectors** (4 units)
+- **RS485 Field Connectors** (A/B/GND per channel)
 - **SSD1306 OLED Module** (I2C, 128×32 or 128×64) + 4.7 kΩ pullup resistors
 
 ## Testing
@@ -387,4 +396,4 @@ https://github.com/stephentissot
 ---
 
 **Status**: Prototype / Active Development  
-**Last Updated**: 2026-07-25
+**Last Updated**: 2026-07-28

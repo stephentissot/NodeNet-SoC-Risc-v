@@ -24,7 +24,7 @@ U8G2_CACHE=$(CACHE_ROOT)/u8g2
 U8G2_LIB=$(CACHE_ROOT)/libu8g2.a
 U8G2_OBJS=$(patsubst $(U8G2_DIR)/%.c,$(U8G2_CACHE)/%.o,$(U8G2_SRCS))
 
-CFLAGS=-march=rv32im -mabi=ilp32 \
+CFLAGS=-march=rv32im_zicsr -mabi=ilp32 \
        -Wall \
        -Os \
        -ffreestanding \

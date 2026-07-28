@@ -24,14 +24,19 @@
 #include "flash.h"
 #include "sdram.h"
 #include "i2c.h"
+#include "led.h"
 #include "u8g2.h"
 #include "u8g2_hal.h"
+
+#define LED0_BASE 0x10000004UL
+#define LED1_BASE 0x10000008UL
+
+static wb_led::Led led0(LED0_BASE, false);
+static wb_led::Led led1(LED1_BASE, false);
 
 // ════════════════════════════════════════════════════════════════════════════
 // Hardware Abstractions
 // ════════════════════════════════════════════════════════════════════════════
-
-#define LED (*(volatile uint32_t*)0x10000000)
 
 /** Bare-metal C++ stubs (no libstdc++, no exceptions, no RTTI) */
 extern "C" void __cxa_pure_virtual() { while (1); }
@@ -43,10 +48,8 @@ void delay_ms(uint32_t ms) {
 
 void blink_code(uint8_t code, uint32_t gap_ms) {
     for (uint8_t i = 0; i < code; ++i) {
-        LED = 1;
-        delay_ms(120);
-        LED = 0;
-        delay_ms(180);
+        led0.Blink(0);
+        delay_ms(300);
     }
     delay_ms(gap_ms);
 }
@@ -100,10 +103,8 @@ struct test_result {
 bool test_led(void) {
     // Blink LED 3 times
     for (int i = 0; i < 3; i++) {
-        LED = 1;
-        delay_ms(100);
-        LED = 0;
-        delay_ms(100);
+        led0.Blink(0);
+        delay_ms(200);
     }
     // If we got here without crashing, test passed
     return true;
@@ -138,12 +139,14 @@ bool test_nodenet(void) {
     // Any valid incoming frame during the observation window is treated as a bonus.
     const char* test_msg = "TEST";
     nodenet0_broadcast((const uint8_t*)test_msg, 4);
+    led0.Blink(0);
 
     for (int i = 0; i < 100; i++) {  // ~1 s timeout
         uint32_t status = nodenet_status();
 
         if (nodenet0_has_message()) {
             NodeNetMessage msg = nodenet0_read();
+            led1.Blink(0);
             nodenet0_free_message(msg);
             return true;
         }
@@ -319,8 +322,10 @@ int main(void) {
     else if (!flash_rw_ok) fail_code = 6;
     else if (!flash_param_ok) fail_code = 7;
 
-    // Overall status
-    LED = (fail_code == 0) ? 1 : 0;
+    // Overall status pulse
+    if (fail_code == 0) {
+        led0.Blink(0);
+    }
     
     oled_show();
     
@@ -328,7 +333,7 @@ int main(void) {
     while (1) {
         if (fail_code == 0) {
             delay_ms(2000);
-            LED ^= 1;  // Healthy heartbeat
+            led0.Blink(100);  // Healthy heartbeat pulse
         } else {
             blink_code(fail_code, 1000);
         }
