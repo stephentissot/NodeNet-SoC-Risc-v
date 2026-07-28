@@ -9,6 +9,11 @@ extern "C" void __cxa_pure_virtual() { while (1); }
 
 static inline uint64_t read_mcycle()
 {
+#if defined(__INTELLISENSE__)
+    // VS Code IntelliSense may parse GNU inline asm as an error in non-GNU modes.
+    // Keep editor diagnostics clean without affecting real firmware builds.
+    return 0;
+#else
     uint32_t hi0;
     uint32_t lo;
     uint32_t hi1;
@@ -20,6 +25,7 @@ static inline uint64_t read_mcycle()
     } while (hi0 != hi1);
 
     return ((uint64_t)hi0 << 32) | lo;
+#endif
 }
 
 int main(void)
