@@ -4,6 +4,8 @@ module top (
     // LEDs
     output wire led_d2,
     output wire led_g18,
+    output wire led_h18,
+    output wire led_e18,
     output wire led_e16,
     // UART0 (NodeNet485)
     input  wire rx0,
@@ -116,9 +118,13 @@ module top (
     
     wire led0_out;
     wire led1_out;
+    wire nodenet_tx_led_out;
+    wire nodenet_rx_led_out;
 
     assign led_d2 = led_d2_out;
-    assign led_g18 = led0_out;
+    assign led_g18 = nodenet_rx_led_out;
+    assign led_h18 = nodenet_tx_led_out;
+    assign led_e18 = led0_out;
     assign led_e16 = led1_out;
 
     wire led_d2_out;
@@ -202,7 +208,9 @@ module top (
         .ack_o(nodenet_ack),
         
         .uart_rx_i(rx0),
-        .uart_tx_o(tx0)
+        .uart_tx_o(tx0),
+        .tx_led_o(nodenet_tx_led_out),
+        .rx_led_o(nodenet_rx_led_out)
     );
     
     picorv32_wb #(

@@ -131,6 +131,7 @@ Base address: `0x10006000`
 | 0x10   | CONFIG    | R/W | 31:0  | `[hb_interval(31:10) | prio(9:8) | addr]` |
 | 0x14   | CONTROL   | W   | 2:0   | `bit0=trigger_tx bit1=clear_rx bit2=queue_heartbeat` |
 | 0x18   | STATUS    | R   | 31:0  | TX/RX state, UART ready, error flags |
+| 0x1C   | LED_CFG   | R/W | 31:0  | TX/RX activity LED pulse duration (milliseconds) |
 
 **Key STATUS bits:**
 - `bit31`: RX overflow
@@ -217,8 +218,8 @@ IDLE (searching for next SOH)
 Header: `include/nodenet.h`
 
 ```cpp
-// Initialize (address, priority)
-nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
+// Initialize (address, priority, TX/RX LED pulse duration in ms)
+nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);
 
 // Send unicast
 nodenet0_send(0x02, "Hello", 5);
@@ -280,8 +281,10 @@ wb_nodenet #(
     .cyc_i(wb_nodenet_sel),
     .ack_o(nodenet_ack),
     
-    .uart_rx_i(rx0),      // H16
-    .uart_tx_o(tx0)       // H17
+   .uart_rx_i(rx0),      // H16
+   .uart_tx_o(tx0),      // H17
+   .tx_led_o(led_h18),   // H18 (TX activity pulse)
+   .rx_led_o(led_g18)    // G18 (RX default ON, pulse on RX)
 );
 
 assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12]);
@@ -292,8 +295,8 @@ assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12
 Firmware API is in `src/firmware/include/nodenet.h`:
 
 ```cpp
-// Initialize (address, priority)
-static inline void nodenet0_init(uint8_t my_addr, NodeNetPriority priority);
+// Initialize (address, priority, TX/RX LED pulse duration in ms)
+static inline void nodenet0_init(uint8_t my_addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
 
 // Send unicast
 static inline void nodenet0_send(uint8_t dst, const uint8_t* data, uint16_t len);
@@ -319,7 +322,7 @@ Current test code demonstrates:
 - LED heartbeat indicator (blink every ~1 second)
 
 For custom applications:
-1. Call `nodenet0_init(node_address, priority)` at startup
+1. Call `nodenet0_init(node_address, priority, led_blink_ms)` at startup
 2. Check `nodenet0_has_message()` in main loop
 3. Process messages with `nodenet0_read()`
 4. Send replies with `nodenet0_send(sender_addr, ...)`

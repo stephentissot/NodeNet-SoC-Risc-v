@@ -24,7 +24,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - `0x10000004`: RJ45 LED0 (`wb_led` one-shot pulse)
   - `0x10000008`: RJ45 LED1 (`wb_led` one-shot pulse)
   - `0x10005000`: I2C0 master (8 registers @ 4-byte stride)
-  - `0x10006000`: NodeNet485 RS-485 mailbox (7 registers, 1 Mb/s)
+  - `0x10006000`: NodeNet485 RS-485 mailbox (8 registers, 1 Mb/s)
   - `0x20000000–0x207FFFFF`: 8 MB SDRAM (application / framebuffer / logs)
 
 ### Peripherals
@@ -154,7 +154,7 @@ Address Range               Size      Purpose
 0x10000004                4 B      RJ45 LED0 (`wb_led` control/status)
 0x10000008                4 B      RJ45 LED1 (`wb_led` control/status)
 0x10005000                32 B     I2C0 master (8 regs @ 4-byte stride)
-0x10006000–0x1000601B     28 B     NodeNet485 mailbox (RS485, 1 Mb/s)
+0x10006000–0x1000601F     32 B     NodeNet485 mailbox + LED config (RS485, 1 Mb/s)
 0x10007000                32 B     SPI Flash controller (W25Q64)
 ────────────────────────────────────────────────────────────
 0x20000000–0x207FFFFF     8 MB     SDRAM — Fully available to firmware (app/buffers/logs)
@@ -198,10 +198,15 @@ NodeNet RJ45 pinout (both connectors):
 - **D2 LED**: GPIO output at 0x10000000 (bit [0] = LED state)
 
 ### RJ45 LEDs (`wb_led`)
-- **LED0 (G18)**: `0x10000004`
+- **LED0 (E18)**: `0x10000004`
 - **LED1 (E16)**: `0x10000008`
 - Write command bit0 triggers a non-blocking pulse (duration can be overridden by firmware).
 - Main firmware currently keeps RJ45 LEDs for dedicated test firmware (`test_main.cpp`).
+
+### NodeNet Activity LEDs (100% hardware)
+- **RX activity LED (G18, green)**: default ON, pulses OFF when a valid frame is received.
+- **TX activity LED (H18, orange)**: pulses ON when a transmission is queued.
+- Blink duration is configured by firmware through NodeNet register `0x1000601C` (milliseconds).
 
 ### SPI Flash (W25Q64)
 - **Pins**: R2 (CS), W2 (MOSI), V2 (MISO)
@@ -222,7 +227,7 @@ See **[src/firmware/README.md](src/firmware/README.md)** for a full guide with c
 #define LED          (*(volatile uint32_t*)0x10000000)
 
 int main() {
-  nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
+  nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);
   for (;;) {
     if (nodenet0_has_message()) {
       NodeNetMessage msg = nodenet0_read();

@@ -245,12 +245,31 @@ uint32_t state = *led_gpio;
 
 ---
 
-### 5. `wb_led.sv` – Non-Blocking LED Pulse Controller
+### 5. `led_pulse_core.sv` – Generic LED Pulse Engine (No Bus)
+
+**Purpose**: Reusable hardware pulse/state engine used by bus wrappers and event-driven blocks.
+
+**Inputs**:
+- `trigger_i`: starts one non-blocking pulse
+- `set_default_i`: updates persistent default state
+- `default_value_i`: default state value when `set_default_i=1`
+- `blink_cycles_i`: pulse width in clock cycles (`0` uses module parameter)
+
+**Outputs**:
+- `led_o`: current LED level
+- `busy_o`: pulse currently active
+- `default_state_o`: latched default state
+
+This module is used by both `wb_led.sv` (Wishbone wrapper) and `wb_nodenet.sv` (event-driven TX/RX activity LEDs).
+
+---
+
+### 6. `wb_led.sv` – Non-Blocking LED Pulse Controller
 
 **Purpose**: Hardware-timed one-shot LED pulses over Wishbone, used for RJ45 LEDs.
 
 **Addresses in current top-level integration**:
-- `0x10000004`: LED0 (pin G18)
+- `0x10000004`: LED0 (pin E18)
 - `0x10000008`: LED1 (pin E16)
 
 **Write Commands** (`wb_dat_i`):
@@ -278,7 +297,7 @@ parameter BLINK_CYCLES = 32'd2500000; // 100 ms @ 25 MHz
 
 ---
 
-### 6. `wb_sdram.sv` – 8 MB External SDRAM Controller
+### 7. `wb_sdram.sv` – 8 MB External SDRAM Controller
 
 **Purpose**: Full-featured SDRAM controller for the M12L64322A chip on Colorlight i9, exposing 8 MB of external DRAM to the CPU via Wishbone B.4.
 

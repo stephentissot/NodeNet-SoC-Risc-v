@@ -58,7 +58,7 @@ src/firmware/
 | `0x10000004` | 4 B | **RJ45 LED0** (`wb_led`) |
 | `0x10000008` | 4 B | **RJ45 LED1** (`wb_led`) |
 | `0x10005000` | 32 B | **I2C0** |
-| `0x10006000` | 32 B | **NodeNet485** (RS-485 @ 1 Mb/s) |
+| `0x10006000` | 32 B | **NodeNet485** (RS-485 @ 1 Mb/s, includes LED pulse config) |
 | `0x20000000–0x207FFFFF` | 8 MB | **SDRAM** (external, available after ~200 µs) |
 
 ---
@@ -130,8 +130,8 @@ RX Path (Hardware → Firmware):
 ```cpp
 #include "nodenet.h"
 
-// Initialize as node 0x01 with NORMAL priority
-nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
+// Initialize as node 0x01 with NORMAL priority and 200 ms TX/RX LED pulse
+nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);
 
 // Send unicast message to node 0x02
 nodenet0_send(0x02, "Hello", 5);
@@ -156,8 +156,8 @@ if (nodenet0_has_message()) {
 **Detailed Functions**:
 
 ```cpp
-// Initialize node address and priority
-void nodenet0_init(uint8_t addr, NodeNetPriority priority);
+// Initialize node address, priority and TX/RX activity LED pulse in ms
+void nodenet0_init(uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
 
 // Send message (blocks while TX mailbox is busy)
 void nodenet0_send(uint8_t dst, const uint8_t *data, uint16_t len);
@@ -192,7 +192,7 @@ enum NodeNetPriority {
 
 ```cpp
 int main() {
-    nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
+    nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);
     
     while (1) {
         if (nodenet0_has_message()) {
@@ -213,7 +213,7 @@ int main() {
 
 ```cpp
 int main() {
-    nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
+    nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);
     
     // Send request to node 0x02
     nodenet0_send(0x02, "STATUS?", 7);

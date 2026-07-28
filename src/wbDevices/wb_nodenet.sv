@@ -24,7 +24,9 @@ module wb_nodenet #(
   input  wire stb_i,
   output reg ack_o,
   input  wire uart_rx_i,
-  output wire uart_tx_o
+  output wire uart_tx_o,
+  output wire tx_led_o,
+  output wire rx_led_o
 );
 
   localparam integer MAX_PAYLOAD = `NODENET_MAX_PAYLOAD_SIZE;
@@ -36,7 +38,11 @@ module wb_nodenet #(
     REG_RX_DATA = 3'd3,
     REG_CONFIG  = 3'd4,
     REG_CONTROL = 3'd5,
-    REG_STATUS  = 3'd6;
+    REG_STATUS  = 3'd6,
+    REG_LED_CFG = 3'd7;
+
+  localparam [31:0] DEFAULT_ACTIVITY_BLINK_MS = 32'd100;
+  localparam [31:0] CYCLES_PER_MS = CLOCK_RATE / 32'd1000;
 
   localparam [3:0]
     TX_IDLE       = 4'd0,
@@ -101,6 +107,7 @@ module wb_nodenet #(
   reg [7:0] node_addr;
   reg [31:0] heartbeat_interval;
   reg [1:0] prio;
+  reg [31:0] activity_blink_ms;
 
   reg [7:0] tx_stage_dst;
   reg [15:0] tx_stage_len;
@@ -132,6 +139,8 @@ module wb_nodenet #(
   reg [7:0] uart_tx_data;
   reg uart_tx_valid;
   reg message_sent_pulse;
+  reg tx_led_trigger_pulse;
+  reg rx_led_trigger_pulse;
 
   wire [7:0] uart_rx_data;
   wire uart_rx_valid;
@@ -149,6 +158,9 @@ module wb_nodenet #(
 
   wire heartbeat_trigger;
   wire [31:0] unused_next_transmit_allowed;
+  wire [31:0] activity_blink_cycles;
+
+  assign activity_blink_cycles = ((activity_blink_ms != 32'd0) ? activity_blink_ms : DEFAULT_ACTIVITY_BLINK_MS) * CYCLES_PER_MS;
 
   uart_simple #(
     .CLOCK_RATE(CLOCK_RATE),
@@ -195,14 +207,47 @@ module wb_nodenet #(
     .next_transmit_allowed_o(unused_next_transmit_allowed)
   );
 
+  led_pulse_core #(
+    .DEFAULT_STATE(1'b0),
+    .BLINK_CYCLES(32'd2500000)
+  ) tx_activity_led (
+    .clk(clk_i),
+    .rst(rst_i),
+    .trigger_i(tx_led_trigger_pulse),
+    .set_default_i(1'b0),
+    .default_value_i(1'b0),
+    .blink_cycles_i(activity_blink_cycles),
+    .led_o(tx_led_o),
+    .busy_o(),
+    .default_state_o()
+  );
+
+  led_pulse_core #(
+    .DEFAULT_STATE(1'b1),
+    .BLINK_CYCLES(32'd2500000)
+  ) rx_activity_led (
+    .clk(clk_i),
+    .rst(rst_i),
+    .trigger_i(rx_led_trigger_pulse),
+    .set_default_i(1'b0),
+    .default_value_i(1'b1),
+    .blink_cycles_i(activity_blink_cycles),
+    .led_o(rx_led_o),
+    .busy_o(),
+    .default_state_o()
+  );
+
   always @(posedge clk_i) begin
     uart_tx_valid <= 1'b0;
     message_sent_pulse <= 1'b0;
+    tx_led_trigger_pulse <= 1'b0;
+    rx_led_trigger_pulse <= 1'b0;
 
     if (rst_i) begin
       node_addr <= 8'h01;
       heartbeat_interval <= `NODENET_HEARTBEAT_DEFAULT_CYCLES;
       prio <= 2'b01;
+      activity_blink_ms <= DEFAULT_ACTIVITY_BLINK_MS;
       tx_stage_dst <= 8'h00;
       tx_stage_len <= 16'h0000;
       tx_load_count <= 16'h0000;
@@ -251,6 +296,7 @@ module wb_nodenet #(
           rx_len <= decoder_msg_len;
           rx_read_idx <= 16'h0000;
           rx_valid <= 1'b1;
+          rx_led_trigger_pulse <= 1'b1;
         end else if (decoder_msg_valid) begin
           rx_overflow <= 1'b1;
         end
@@ -266,6 +312,7 @@ module wb_nodenet #(
         tx_pending <= 1'b1;
         tx_pending_is_heartbeat <= 1'b1;
         tx_cooldown_counter <= compute_tx_delay(8'h00, prio);
+        tx_led_trigger_pulse <= 1'b1;
       end
 
       if (wb_fire) begin
@@ -294,6 +341,10 @@ module wb_nodenet #(
               heartbeat_interval <= {dat_i[31:10], 10'b0};
             end
 
+            REG_LED_CFG: begin
+              activity_blink_ms <= dat_i;
+            end
+
             REG_CONTROL: begin
               if (dat_i[1]) begin
                 rx_valid <= 1'b0;
@@ -307,12 +358,14 @@ module wb_nodenet #(
                 tx_pending <= 1'b1;
                 tx_pending_is_heartbeat <= 1'b1;
                 tx_cooldown_counter <= compute_tx_delay(8'h00, prio);
+                tx_led_trigger_pulse <= 1'b1;
               end
 
               if (dat_i[0] && tx_stage_valid && !tx_pending && !tx_active && (tx_load_count == tx_stage_len)) begin
                 tx_pending <= 1'b1;
                 tx_pending_is_heartbeat <= 1'b0;
                 tx_cooldown_counter <= compute_tx_delay(tx_stage_dst, prio);
+                tx_led_trigger_pulse <= 1'b1;
               end
             end
 
@@ -372,6 +425,10 @@ module wb_nodenet #(
                 prio,
                 tx_load_count[15:0]
               };
+            end
+
+            REG_LED_CFG: begin
+              dat_o <= activity_blink_ms;
             end
 
             default: begin

@@ -12,7 +12,7 @@
  * 
  * Quick Start
  * ═══════════
- *   nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);  // Initialize as node 0x01
+ *   nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);  // Initialize as node 0x01
  *   nodenet0_send(0x02, "Hello", 5);               // Send to node 0x02
  *   if (nodenet0_has_message()) {
  *     NodeNetMessage msg = nodenet0_read();         // Read incoming message
@@ -62,6 +62,7 @@
 #define NODENET_CONFIG    (NODENET_BASE + 0x10u)   // [hb_interval(31:10) | prio(9:8) | addr(7:0)]
 #define NODENET_CONTROL   (NODENET_BASE + 0x14u)   // bit0=trigger_tx bit1=clear_rx bit2=queue_heartbeat
 #define NODENET_STATUS    (NODENET_BASE + 0x18u)
+#define NODENET_LED_CFG   (NODENET_BASE + 0x1Cu)   // activity blink duration in milliseconds
 
 #define NODENET_MAX_PAYLOAD_SIZE 2048u
 
@@ -160,12 +161,14 @@ static inline NodeNetMessage nodenet_rx_read(void) {
  * 
  * @param addr Node address on the bus (1-255; 0 is reserved for broadcast)
  * @param priority Message transmission priority (LOW, NORMAL, or HIGH)
+ * @param led_blink_ms Activity LED pulse width in milliseconds (TX/RX)
  * 
  * Example:
- *   nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);  // This node is 0x01
+ *   nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);  // This node is 0x01
  */
-static inline void nodenet0_init(uint8_t addr, NodeNetPriority priority) {
+static inline void nodenet0_init(uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u) {
   nodenet_reg_write(NODENET_CONFIG, ((uint32_t)priority << 8) | (uint32_t)addr);
+  nodenet_reg_write(NODENET_LED_CFG, led_blink_ms);
   nodenet_reg_write(NODENET_CONTROL, 0x2u);
 }
 

@@ -130,7 +130,7 @@ bool test_sdram(void) {
 /** Test NodeNet485 RS-485 transport */
 bool test_nodenet(void) {
     // Initialize NodeNet485 (this node is address 0x01)
-    nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
+    nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);
     
     // Delay to allow initialization
     delay_ms(100);

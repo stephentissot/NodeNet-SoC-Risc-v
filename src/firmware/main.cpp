@@ -30,7 +30,7 @@ int main(void)
     // This node is address 0x01
     // In a multi-node setup, each board would have a different address
     // and they'd communicate over RS485 at 1 Mb/s
-    nodenet0_init(0x01, NODENET_PRIORITY_NORMAL);
+    nodenet0_init(0x01, NODENET_PRIORITY_NORMAL, 200);
     
     // Main loop: pulse LED and listen for NodeNet485 messages
     bool led_state = false;

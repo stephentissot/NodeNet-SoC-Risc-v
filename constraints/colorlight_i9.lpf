@@ -7,9 +7,17 @@ FREQUENCY NET "clk_25mhz" 25.000000 MHz;
 LOCATE COMP "led_d2" SITE "L2";
 IOBUF PORT "led_d2" IO_TYPE=LVCMOS33;
 
-# Extra debug LEDs driven by wb_led instances
+# NodeNet activity LEDs + wb_led outputs
+# led_g18: NodeNet RX activity (default ON, pulses OFF on RX)
 LOCATE COMP "led_g18" SITE "G18";
 IOBUF PORT "led_g18" IO_TYPE=LVCMOS33 DRIVE=8;
+# led_h18: NodeNet TX activity pulse
+LOCATE COMP "led_h18" SITE "H18";
+IOBUF PORT "led_h18" IO_TYPE=LVCMOS33 DRIVE=8;
+# led_e18: wb_led LED0 output
+LOCATE COMP "led_e18" SITE "E18";
+IOBUF PORT "led_e18" IO_TYPE=LVCMOS33 DRIVE=8;
+# led_e16: wb_led LED1 output
 LOCATE COMP "led_e16" SITE "E16";
 IOBUF PORT "led_e16" IO_TYPE=LVCMOS33 DRIVE=8;
 
