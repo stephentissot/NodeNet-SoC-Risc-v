@@ -6,7 +6,8 @@
  * - bits31:3 optionally override pulse duration in clock cycles.
  * - If bits31:3 are 0, hardware uses its default RTL blink duration.
  * - bit1+bit2 command updates default LED state (On/Off).
- * - Readback: bit0=current LED level, bit1=blink active, bit2=default state.
+ * - Readback: bit0=current logical LED state, bit1=blink active, bit2=logical default state.
+ *   (Logical state is polarity-agnostic even when the pin is wired active-low.)
  */
 
 #ifndef LED_H

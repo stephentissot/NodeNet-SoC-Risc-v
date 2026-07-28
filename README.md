@@ -200,12 +200,15 @@ NodeNet RJ45 pinout (both connectors):
 ### RJ45 LEDs (`wb_led`)
 - **LED0 (E18)**: `0x10000004`
 - **LED1 (E16)**: `0x10000008`
+- Active-low wiring policy: GPIO high = LED OFF, GPIO low = LED ON.
+- LPF enables pull-up on these pins for deterministic OFF level during startup.
 - Write command bit0 triggers a non-blocking pulse (duration can be overridden by firmware).
 - Main firmware currently keeps RJ45 LEDs for dedicated test firmware (`test_main.cpp`).
 
 ### NodeNet Activity LEDs (100% hardware)
 - **RX activity LED (G18, green)**: default ON, pulses OFF when a valid frame is received.
 - **TX activity LED (H18, orange)**: pulses ON when a transmission is queued.
+- Active-low with pull-up: idle/high keeps LED OFF unless logic drives low.
 - Blink duration is configured by firmware through NodeNet register `0x1000601C` (milliseconds).
 
 ### SPI Flash (W25Q64)

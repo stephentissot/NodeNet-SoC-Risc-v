@@ -208,6 +208,7 @@ module wb_nodenet #(
   );
 
   led_pulse_core #(
+    .ACTIVE_LOW(1'b1),
     .DEFAULT_STATE(1'b0),
     .BLINK_CYCLES(32'd2500000)
   ) tx_activity_led (
@@ -223,6 +224,7 @@ module wb_nodenet #(
   );
 
   led_pulse_core #(
+    .ACTIVE_LOW(1'b1),
     .DEFAULT_STATE(1'b1),
     .BLINK_CYCLES(32'd2500000)
   ) rx_activity_led (

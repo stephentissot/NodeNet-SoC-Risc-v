@@ -287,6 +287,9 @@ wb_nodenet #(
    .rx_led_o(led_g18)    // G18 (RX default ON, pulse on RX)
 );
 
+// Note: TX/RX LED pins are configured active-low with pull-up in LPF.
+// This keeps LEDs off during startup unless logic actively drives them low.
+
 assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12]);
 ```
 

@@ -80,6 +80,7 @@ Current `main.cpp` heartbeat policy uses a non-blocking software toggle every 50
 ### RJ45 LEDs (`wb_led`: `0x10000004`, `0x10000008`)
 
 RJ45 LEDs are controlled through the `wb_led` peripheral and firmware helpers in `include/led.h`.
+Hardware is wired active-low with pull-up, but `Led::On/Off/Blink` remain logical (On = visible LED ON).
 
 ```cpp
 #include "led.h"

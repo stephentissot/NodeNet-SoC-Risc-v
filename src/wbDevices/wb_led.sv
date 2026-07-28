@@ -1,5 +1,6 @@
 module wb_led #(
     parameter [31:0] ADDR = 32'h10000000,
+    parameter        ACTIVE_LOW = 1'b0,
     parameter        DEFAULT_STATE = 1'b0,
     parameter [31:0] BLINK_CYCLES = 32'd2500000
 ) (
@@ -32,6 +33,7 @@ module wb_led #(
     wire led_core;
     wire busy_core;
     wire default_state_core;
+    wire led_state_logical;
 
     assign wb_hit = wb_cyc_i && wb_stb_i && (wb_adr_i == ADDR);
     assign req_trigger = wb_hit && wb_we_i && wb_sel_i[0] && wb_dat_i[0];
@@ -39,8 +41,10 @@ module wb_led #(
     assign req_default_value = wb_dat_i[2];
 
     assign req_blink_cycles = {3'b000, wb_dat_i[31:3]};
+    assign led_state_logical = ACTIVE_LOW ? ~led_core : led_core;
 
     led_pulse_core #(
+        .ACTIVE_LOW(ACTIVE_LOW),
         .DEFAULT_STATE(DEFAULT_STATE),
         .BLINK_CYCLES(BLINK_CYCLES)
     ) led_core_inst (
@@ -61,8 +65,8 @@ module wb_led #(
         trigger_pulse <= 1'b0;
         set_default_pulse <= 1'b0;
 
-        // bit0: current LED output, bit1: blink active, bit2: default state
-        wb_dat_o <= {29'd0, default_state_core, busy_core, led_core};
+        // bit0: current logical LED state, bit1: blink active, bit2: logical default state
+        wb_dat_o <= {29'd0, default_state_core, busy_core, led_state_logical};
 
         led <= led_core;
 

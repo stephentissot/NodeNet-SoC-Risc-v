@@ -255,6 +255,10 @@ uint32_t state = *led_gpio;
 - `default_value_i`: default state value when `set_default_i=1`
 - `blink_cycles_i`: pulse width in clock cycles (`0` uses module parameter)
 
+**Polarity**:
+- `ACTIVE_LOW=0`: `led_o=1` means LED ON (active-high)
+- `ACTIVE_LOW=1`: `led_o=0` means LED ON (active-low)
+
 **Outputs**:
 - `led_o`: current LED level
 - `busy_o`: pulse currently active
@@ -287,6 +291,7 @@ This module is used by both `wb_led.sv` (Wishbone wrapper) and `wb_nodenet.sv` (
 
 ```systemverilog
 parameter ADDR = 32'h1000_0004;
+parameter ACTIVE_LOW = 1'b0;
 parameter DEFAULT_STATE = 1'b0;
 parameter BLINK_CYCLES = 32'd2500000; // 100 ms @ 25 MHz
 ```
@@ -294,6 +299,7 @@ parameter BLINK_CYCLES = 32'd2500000; // 100 ms @ 25 MHz
 **Firmware usage**:
 - See `src/firmware/include/led.h` for helper functions and `wb_led::Led` wrapper.
 - Current policy: `main.cpp` uses only D2 (`wb_gpio`), while `test_main.cpp` exercises RJ45 LEDs through `wb_led`.
+- Current board policy for external LEDs is active-low with pull-up, so wrappers set `ACTIVE_LOW=1` in top-level integrations.
 
 ---
 
