@@ -33,6 +33,7 @@ module top (
     localparam [31:0] LED_D2_ADDR = 32'h1000_0000;
     localparam [31:0] LED0_ADDR   = 32'h1000_0004;
     localparam [31:0] LED1_ADDR   = 32'h1000_0008;
+    localparam [31:0] TIMER_ADDR  = 32'h1000_0010;
     localparam [31:0] I2C0_BASE   = 32'h1000_5000;  // 4 KB page, 8 regs @ +0x00..+0x1C
     localparam [31:0] NODENET_BASE = 32'h1000_6000;  // NodeNet485 Wishbone slave (1 Mb/s RS-485)
     localparam [31:0] FLASH_BASE  = 32'h1000_7000;  // W25Q64 SPI flash (8 MB)
@@ -69,6 +70,8 @@ module top (
     wire        led1_ack;
     wire [31:0] i2c0_dat;
     wire        i2c0_ack;
+    wire [31:0] timer_dat;
+    wire        timer_ack;
     wire [31:0] nodenet_dat;
     wire        nodenet_ack;
     wire [31:0] flash_dat;
@@ -82,6 +85,7 @@ module top (
     wire wb_led_d2_sel;
     wire wb_led0_sel;
     wire wb_led1_sel;
+    wire wb_timer_sel;
     wire wb_i2c0_sel;
     wire wb_nodenet_sel;
     wire wb_flash_sel;
@@ -92,6 +96,7 @@ module top (
     assign wb_led_d2_sel = wb_cyc && wb_stb && (wb_adr == LED_D2_ADDR);
     assign wb_led0_sel   = wb_cyc && wb_stb && (wb_adr == LED0_ADDR);
     assign wb_led1_sel   = wb_cyc && wb_stb && (wb_adr == LED1_ADDR);
+    assign wb_timer_sel  = wb_cyc && wb_stb && (wb_adr == TIMER_ADDR);
     assign wb_i2c0_sel   = wb_cyc && wb_stb && (wb_adr[31:12] == I2C0_BASE[31:12]);
     assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12]);
     assign wb_flash_sel  = wb_cyc && wb_stb && (wb_adr[31:12] == FLASH_BASE[31:12]);
@@ -105,9 +110,10 @@ module top (
                       led_d2_ack  ? led_d2_dat  :
                       led0_ack    ? led0_dat    :
                       led1_ack    ? led1_dat    :
+                      timer_ack   ? timer_dat   :
                       sdram_ack   ? sdram_dat   :
                       32'h0000_0000;
-    assign wb_ack = rom_ack | ram_ack | led_d2_ack | led0_ack | led1_ack | nodenet_ack | i2c0_ack | flash_ack | sdram_ack;
+    assign wb_ack = rom_ack | ram_ack | led_d2_ack | led0_ack | led1_ack | timer_ack | nodenet_ack | i2c0_ack | flash_ack | sdram_ack;
     
     wire led0_out;
     wire led1_out;
@@ -185,6 +191,25 @@ module top (
         .wb_ack_o(led1_ack),
 
         .led(led1_out)
+    );
+
+    wb_timer #(
+        .ADDR(TIMER_ADDR),
+        .CLK_HZ(25_000_000)
+    ) timer0
+    (
+        .clk(clk_25mhz),
+        .rst(reset),
+
+        .wb_adr_i(wb_adr),
+        .wb_dat_i(wb_dat_o),
+        .wb_sel_i(wb_sel),
+        .wb_we_i(wb_we),
+        .wb_cyc_i(wb_timer_sel),
+        .wb_stb_i(wb_timer_sel),
+
+        .wb_dat_o(timer_dat),
+        .wb_ack_o(timer_ack)
     );
     
     wb_nodenet #(

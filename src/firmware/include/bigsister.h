@@ -8,6 +8,12 @@
 
 #include <stdint.h>
 
+static volatile uint32_t* const TIMER_MS = reinterpret_cast<volatile uint32_t*>(0x10000010UL);
+
+static bool bigsister_led_on = false;
+static bool bigsister_blink_initialized = false;
+static uint32_t bigsister_next_toggle_ms = 0u;
+
 // Override this from the build if your SoC clock changes.
 #ifndef BIGSISTER_CPU_HZ
 #define BIGSISTER_CPU_HZ 25000000UL
@@ -16,30 +22,12 @@
 // Bare-metal C++ runtime stub: called on invalid pure virtual dispatch.
 extern "C" inline void __cxa_pure_virtual() { while (1); }
 
-static inline uint64_t bigsister_read_mcycle(void) {
-#if defined(__INTELLISENSE__)
-    return 0;
-#else
-    uint32_t hi0;
-    uint32_t lo;
-    uint32_t hi1;
-
-    do {
-        asm volatile ("csrr %0, mcycleh" : "=r"(hi0));
-        asm volatile ("csrr %0, mcycle"  : "=r"(lo));
-        asm volatile ("csrr %0, mcycleh" : "=r"(hi1));
-    } while (hi0 != hi1);
-
-    return ((uint64_t)hi0 << 32) | lo;
-#endif
-}
-
 /**
- * Arduino-like millis(): milliseconds since boot.
+ * Arduino-like millis(): milliseconds since boot from hardware timer.
  * Wraps naturally on uint32_t, like Arduino's unsigned long behavior.
  */
 static inline uint32_t millis(void) {
-    return (uint32_t)((bigsister_read_mcycle() * 1000ULL) / (uint64_t)BIGSISTER_CPU_HZ);
+    return *TIMER_MS;
 }
 
 #endif /* BIGSISTER_H */

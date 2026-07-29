@@ -41,8 +41,8 @@
                     ↓
 ┌────────────────────────────────────────────────────────┐
 │    RS-485 Transceiver (Hardware Module)                │
-│    rx_i (H16) ← Data from bus                         │
-│    tx_o (H17) → Data to bus                           │
+│    rx_i (G5) ← Data from bus                          │
+│    tx_o (D16) → Data to bus                           │
 │    DE automatic (module handles driver enable)        │
 └────────────────────────────────────────────────────────┘
 ```
@@ -261,8 +261,8 @@ This prevents medium contention when multiple nodes transmit.
 ### Hardware Configuration
 
 **Pin assignments** (already configured in constraints):
-- **RX**: Colorlight i9 pin H16 (input from RS485 module)
-- **TX**: Colorlight i9 pin H17 (output to RS485 module)
+- **RX**: Colorlight i9 pin G5 (input from RS485 module)
+- **TX**: Colorlight i9 pin D16 (output to RS485 module)
 - **Driver Enable**: Not required (RS485 module handles automatically)
 
 **FPGA Wishbone Integration** (already in src/top.sv):
@@ -282,10 +282,10 @@ wb_nodenet #(
     .cyc_i(wb_nodenet_sel),
     .ack_o(nodenet_ack),
     
-   .uart_rx_i(rx0),      // H16
-   .uart_tx_o(tx0),      // H17
-   .tx_led_o(led_h18),   // H18 (TX activity pulse)
-   .rx_led_o(led_g18)    // G18 (RX default ON, pulse on RX)
+   .uart_rx_i(rx0),      // G5
+   .uart_tx_o(tx0),      // D16
+   .tx_led_o(led_h18),   // F4 (TX activity pulse)
+   .rx_led_o(led_g18)    // E5 (RX default ON, pulse on RX)
 );
 
 // Note: TX/RX LED pins are configured active-low with pull-up in LPF.

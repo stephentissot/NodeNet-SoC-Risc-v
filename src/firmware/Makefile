@@ -24,6 +24,7 @@ U8G2_SRCS=$(wildcard $(U8G2_DIR)/*.c)
 U8G2_CACHE=$(CACHE_ROOT)/u8g2
 U8G2_LIB=$(CACHE_ROOT)/libu8g2.a
 U8G2_OBJS=$(patsubst $(U8G2_DIR)/%.c,$(U8G2_CACHE)/%.o,$(U8G2_SRCS))
+DEPS=$(BUILD)/start.d $(MAIN_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(U8G2_OBJS:.o=.d)
 
 CFLAGS=-march=rv32im_zicsr -mabi=ilp32 \
        -Wall \
@@ -31,6 +32,8 @@ CFLAGS=-march=rv32im_zicsr -mabi=ilp32 \
        -ffreestanding \
        -ffunction-sections \
        -fdata-sections \
+        -MMD \
+        -MP \
        -I$(U8G2_DIR) \
        -Iinclude \
        -DFIRMWARE_VERSION='"$(VERSION)-$(GIT_HASH)"'
@@ -98,3 +101,5 @@ clean:
 
 distclean: clean
 	rm -rf $(CACHE_ROOT)
+
+-include $(DEPS)

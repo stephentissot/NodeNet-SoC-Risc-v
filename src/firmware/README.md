@@ -257,8 +257,8 @@ uint16_t len = header & 0xFFFF;
 - **Heartbeat**: Default ~10 seconds (configurable)
 
 **Hardware Integration**:
-- **RX Pin**: H16 (input from RS-485 transceiver)
-- **TX Pin**: H17 (output to RS-485 transceiver)
+- **RX Pin**: G5 (input from RS-485 transceiver)
+- **TX Pin**: D16 (output to RS-485 transceiver)
 - **Driver Enable**: Automatic (hardware module handles)
 - **Current Status**: Functional TX/RX framing with mailbox-based Wishbone API
 
@@ -414,7 +414,7 @@ I2C(I2C0_BASE).WaitBusy();
 u8g2 is cloned as a git submodule in `lib/u8g2/`.  
 The HAL (`u8g2_hal.h`/`u8g2_hal.cpp`) connects u8g2 to the hardware I2C peripheral.
 
-**Wiring**: SSD1306 OLED → SCL=H4, SDA=G3 (pmodg[0:1]) with 4.7 kΩ pullups to 3.3 V.
+**Wiring**: SSD1306 OLED → SCL=D18, SDA=D17 with 4.7 kΩ pullups to 3.3 V.
 
 #### 128×64 SSD1306
 

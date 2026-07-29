@@ -39,7 +39,7 @@
  * ══════════════
  * 1. Inspect status register at [base + NODENET_STATUS_OFS] for RX/TX/error bits
  * 2. Inspect RX header at [base + NODENET_RX_HDR_OFS] for [src, valid, len]
- * 3. Monitor wire protocol on H16 (RX), H17 (TX)
+ * 3. Monitor wire protocol on G5 (RX), D16 (TX)
  * 4. Inject known frames and verify CRC/error flags
  */
 

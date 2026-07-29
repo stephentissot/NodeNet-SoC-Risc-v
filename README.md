@@ -167,7 +167,7 @@ Address Range               Size      Purpose
 ## Device Pinout
 
 ### RS485 (NodeNet485 Protocol)
-- **Pins**: H16 (RX), H17 (TX)
+- **Pins**: G5 (RX), D16 (TX)
 - **Baud Rate**: 1 Mb/s (fixed, configurable via UART parameter)
 - **Protocol**: Multi-node RS-485 with HDLC framing, anti-collision, heartbeat
 - **Transceiver**: Any RS-485 module with auto-switching (MAX485, SN65HVD11, etc.)
@@ -189,8 +189,8 @@ NodeNet RJ45 pinout (both connectors):
 | 8 | GND |
 
 ### I2C (pmodg connector)
-- **SCL**: H4 (pmodg[0])
-- **SDA**: G3 (pmodg[1])
+- **SCL**: D18
+- **SDA**: D17
 - Requires external 4.7 kΩ pullup resistors to 3.3 V on both lines
 - Compatible with any I2C device: OLED, sensors, ADC, GPIO expanders…
 
@@ -198,16 +198,16 @@ NodeNet RJ45 pinout (both connectors):
 - **D2 LED**: GPIO output at 0x10000000 (bit [0] = LED state)
 
 ### RJ45 LEDs (`wb_led`)
-- **LED0 (E18)**: `0x10000004`
-- **LED1 (E16)**: `0x10000008`
+- **LED0 (F5)**: `0x10000004`
+- **LED1 (E6)**: `0x10000008`
 - Active-low wiring policy: GPIO high = LED OFF, GPIO low = LED ON.
 - LPF enables pull-up on these pins for deterministic OFF level during startup.
 - Write command bit0 triggers a non-blocking pulse (duration can be overridden by firmware).
 - Main firmware currently keeps RJ45 LEDs for dedicated test firmware (`test_main.cpp`).
 
 ### NodeNet Activity LEDs (100% hardware)
-- **RX activity LED (G18, green)**: default ON, pulses OFF when a valid frame is received.
-- **TX activity LED (H18, orange)**: pulses ON when a transmission is queued.
+- **RX activity LED (E5, green)**: default ON, pulses OFF when a valid frame is received.
+- **TX activity LED (F4, orange)**: pulses ON when a transmission is queued.
 - Active-low with pull-up: idle/high keeps LED OFF unless logic drives low.
 - Blink duration is configured by firmware through NodeNet register `0x1000601C` (milliseconds).
 

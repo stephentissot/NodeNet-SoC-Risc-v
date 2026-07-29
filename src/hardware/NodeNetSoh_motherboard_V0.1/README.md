@@ -130,10 +130,8 @@ Suggested firmware-visible control:
 ## Modbus RS485 Front-End (V1 Plan)
 
 - Start V1 with 4x RS485 modules already available
-- Use 2x TMUX4051 per RS485 channel (total 8x TMUX4051)
-- Add one 3-to-8 enable selector for TMUX enable lines
-	- Expected part family: 74HC138 or 74LVC138 (to confirm final reference)
-	- Control method: 3-bit address bus + EN pulse
+- Route each RS485 channel directly to dedicated A/B/GND field connectors
+- Keep per-channel silkscreen labeling explicit to reduce installation errors
 
 Design note:
 - The current RS485 modules are acceptable for bring-up.
@@ -157,8 +155,9 @@ Design note:
 - [ ] 3.3V rail validated at worst-case current (voltage drop, ripple, temperature)
 - [ ] SODIMM 200 footprint checked against TE 1473149-4 drawing
 - [ ] 25-degree insertion clearance validated in PCB mechanical view
+- [ ] Pin-by-pin validation against i9 SODIMM map for every connected net
 - [ ] RS485 120R termination switching validated (74LVC1G66 + GPIO control)
-- [ ] 3-bit address + EN pulse control validated for TMUX enable selector (74HC138/74LVC138 class)
+- [ ] Direct RS485 connector polarity and labeling validated (A/B/GND per channel)
 - [ ] Net classes defined (power, logic, bus)
 - [ ] PCB constraints configured (clearance, widths, vias)
 - [ ] DRC clean on layout

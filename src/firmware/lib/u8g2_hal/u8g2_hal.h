@@ -26,7 +26,7 @@
  *   u8x8_GetI2CAddress() returns this value; we shift right by 1 to get 7-bit.
  *   Most SSD1306 modules use 0x3C (128×32) or 0x3D (128×64).
  *
- * Hardware: SCL → H4 (pmodg[0]), SDA → G3 (pmodg[1]) on Colorlight i9
+ * Hardware: SCL → D18, SDA → D17 on Colorlight i9
  *           External 4.7 kΩ pullup resistors to 3.3 V required on both lines.
  */
 

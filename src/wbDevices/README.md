@@ -273,8 +273,8 @@ This module is used by both `wb_led.sv` (Wishbone wrapper) and `wb_nodenet.sv` (
 **Purpose**: Hardware-timed one-shot LED pulses over Wishbone, used for RJ45 LEDs.
 
 **Addresses in current top-level integration**:
-- `0x10000004`: LED0 (pin E18)
-- `0x10000008`: LED1 (pin E16)
+- `0x10000004`: LED0 (pin F5)
+- `0x10000008`: LED1 (pin E6)
 
 **Write Commands** (`wb_dat_i`):
 - `bit0 = 1`: trigger one-shot pulse
@@ -496,8 +496,8 @@ i2c.Read(0x48, &result, 1);
 - Maximum payload length: 2048 bytes
 
 **Hardware Pins**:
-- RX: H16 (input from RS-485 transceiver)
-- TX: H17 (output to RS-485 transceiver)
+- RX: G5 (input from RS-485 transceiver)
+- TX: D16 (output to RS-485 transceiver)
 - Driver Enable: automatic via transceiver module
 
 For full protocol details, state machines, and firmware API usage, see [README_NODENET.md](README_NODENET.md).
