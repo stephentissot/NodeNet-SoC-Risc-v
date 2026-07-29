@@ -14,7 +14,7 @@ module wb_gpio #(
     output reg [31:0]  wb_dat_o,
     output reg         wb_ack_o,
 
-    output reg         led
+    output reg         led = 1'b1
 );
 
     always @(posedge clk)

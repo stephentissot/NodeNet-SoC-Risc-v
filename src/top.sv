@@ -1,13 +1,13 @@
 
 module top (
     input  wire clk_25mhz,
-    // LEDs
+    // LEDs (physical mapping in LPF)
     output wire led_d2,
-    output wire led_g18,
-    output wire led_h18,
-    output wire led_e18,
-    output wire led_e16,
-    // UART0 (NodeNet485)
+    output wire led_g18, // E5 (NodeNet RX activity)
+    output wire led_h18, // F4 (NodeNet TX activity)
+    output wire led_e18, // F5 (wb_led LED0)
+    output wire led_e16, // E6 (wb_led LED1)
+    // UART0 (NodeNet485): RX=G5, TX=D16
     input  wire rx0,
     output wire tx0,
     // SPI Flash (W25Q64) — Configuration Flash Access
@@ -23,7 +23,7 @@ module top (
     output wire        sdram_ras_n,
     output wire        sdram_cas_n,
     output wire        sdram_we_n,
-    // I2C0 (open-drain, external 4.7 kΩ pullup to 3.3 V required)
+    // I2C0 (open-drain): SCL=D18, SDA=D17; external 4.7 kΩ pullup to 3.3 V required
     inout  wire        i2c0_scl,
     inout  wire        i2c0_sda
 );
@@ -38,21 +38,14 @@ module top (
     localparam [31:0] FLASH_BASE  = 32'h1000_7000;  // W25Q64 SPI flash (8 MB)
     localparam [31:0] SDRAM_BASE  = 32'h2000_0000;  // 8MB: 0x20000000–0x207FFFFF
 
-    wire reset;
-    reg [3:0] reset_cnt = 0;
-    always @(posedge clk_25mhz)
-    begin
-        if (reset_cnt != 4'hf)
-            reset_cnt <= reset_cnt + 1;
-    end
-    assign reset = (reset_cnt != 4'hf);
-    
+    // Hold reset active for a short and deterministic startup window.
+    reg [7:0] reset_cnt = 8'd0;
+    wire reset = (reset_cnt != 8'hff);
 
-    reg [24:0] counter = 25'd0;
     always @(posedge clk_25mhz) begin
-        counter <= counter + 1'b1;
+        if (reset_cnt != 8'hff)
+            reset_cnt <= reset_cnt + 8'd1;
     end
-//    assign led_d2 = counter[2];
 
     // RISC-V
     wire [31:0] wb_adr;
@@ -223,8 +216,8 @@ module top (
         .BARREL_SHIFTER(1),
         .ENABLE_FAST_MUL(1),
         .ENABLE_DIV(1),
-        .ENABLE_IRQ(1),
-        .ENABLE_IRQ_QREGS(1),
+        .ENABLE_IRQ(0),
+        .ENABLE_IRQ_QREGS(0),
         .LATCHED_IRQ(0),
         .PROGADDR_RESET(32'h00000000),
         .PROGADDR_IRQ(32'h00000004),

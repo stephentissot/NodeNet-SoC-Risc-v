@@ -13,11 +13,11 @@ module wb_rom #(
     output reg         wbs_ack_o
 );
 
-    reg [31:0] rom [0:(1<<ADDR_WIDTH)-1];
+    reg [7:0] rom [0:(1<<(ADDR_WIDTH+2))-1];
 
     initial begin
         $display("Loading firmware...");
-        $readmemh("../firmware/build/nodenet_riscv.hex", rom);
+        $readmemh("src/firmware/build/nodenet_riscv.hex", rom);
     end
 
 
@@ -26,7 +26,12 @@ module wb_rom #(
         wbs_ack_o <= wbs_cyc_i && wbs_stb_i;
 
         if(wbs_cyc_i && wbs_stb_i)
-            wbs_dat_o <= rom[wbs_adr_i[ADDR_WIDTH+1:2]];
+            wbs_dat_o <= {
+                rom[wbs_adr_i[ADDR_WIDTH+1:0] + 2'd3],
+                rom[wbs_adr_i[ADDR_WIDTH+1:0] + 2'd2],
+                rom[wbs_adr_i[ADDR_WIDTH+1:0] + 2'd1],
+                rom[wbs_adr_i[ADDR_WIDTH+1:0] + 2'd0]
+            };
     end
 
 endmodule

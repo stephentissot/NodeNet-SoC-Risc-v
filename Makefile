@@ -40,7 +40,7 @@ clean: clean-firmware
 
 
 $(BUILD):
-	mkdir $(BUILD)
+	mkdir -p $(BUILD)
 
 
 # Synthesis
@@ -76,12 +76,9 @@ $(BUILD)/$(TOP).svf: $(BUILD)/$(TOP).bit
 		$<
 
 
-# Program FPGA configuration RAM
-ram: $(BUILD)/$(TOP).svf
-	openocd \
-		-f interface/cmsis-dap.cfg \
-		-f target/lattice-ecp5.cfg \
-		-c "init; svf $<; exit"
+# Program FPGA configuration RAM (default: openFPGALoader)
+ram: $(BUILD)/$(TOP).bit
+	openFPGALoader -b colorlight-i9 $<
 
 
 # Generate SPI Flash image

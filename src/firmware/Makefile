@@ -12,6 +12,7 @@ GIT_HASH := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 # - Bring-up/test build uses test_main.cpp
 # You can still override manually: make MAIN_SRC=test_main.cpp
 MAIN_SRC ?= main.cpp
+MAIN_OBJ = $(BUILD)/$(basename $(notdir $(MAIN_SRC))).o
 
 # Persistent cache root for third-party library objects/archives.
 # Reuse this pattern if more vendored libraries need expensive rebuilds later.
@@ -66,13 +67,13 @@ $(BUILD):
 $(U8G2_CACHE):
 	mkdir -p $@
 
-$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(BUILD)/main.o $(BUILD)/u8g2_hal.o $(U8G2_LIB) | $(BUILD)
+$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(U8G2_LIB) | $(BUILD)
 	$(CROSS)g++ $(LDFLAGS) $^ -o $@
 
 $(BUILD)/start.o: start.S | $(BUILD)
 	$(CROSS)gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD)/main.o: $(MAIN_SRC) | $(BUILD)
+$(MAIN_OBJ): $(MAIN_SRC) | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/u8g2_hal.o: lib/u8g2_hal/u8g2_hal.cpp | $(BUILD)
