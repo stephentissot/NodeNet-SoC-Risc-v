@@ -10,10 +10,6 @@
 
 static volatile uint32_t* const TIMER_MS = reinterpret_cast<volatile uint32_t*>(0x10000010UL);
 
-static bool bigsister_led_on = false;
-static bool bigsister_blink_initialized = false;
-static uint32_t bigsister_next_toggle_ms = 0u;
-
 // Override this from the build if your SoC clock changes.
 #ifndef BIGSISTER_CPU_HZ
 #define BIGSISTER_CPU_HZ 25000000UL

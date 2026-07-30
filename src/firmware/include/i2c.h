@@ -69,7 +69,7 @@
 // 100 kHz @ 25 MHz → 62
 // 400 kHz @ 25 MHz → 15
 
-#define I2C_TIMEOUT_LOOPS 1000000u
+#define I2C_TIMEOUT_LOOPS 200000u
 
 // ─── Inline helpers ──────────────────────────────────────────────────────────
 
@@ -84,17 +84,25 @@ public:
 
     bool WaitBusy() const {
         uint32_t timeout = I2C_TIMEOUT_LOOPS;
-        while (!(reg(I2C_REG_FIFO) & I2C_FIFO_CMD_EMPTY) && timeout--) {}
+        while ((reg(I2C_REG_FIFO) & I2C_FIFO_CMD_EMPTY) == 0 && timeout > 0) { --timeout; }
         if (timeout == 0) return false;
 
         timeout = I2C_TIMEOUT_LOOPS;
-        while ((reg(I2C_REG_STATUS) & I2C_STATUS_BUSY) && timeout--) {}
-        return timeout != 0;
+        while ((reg(I2C_REG_STATUS) & I2C_STATUS_BUSY) && timeout > 0) { --timeout; }
+        return timeout > 0;
+    }
+
+    bool NackDetected() const {
+        return (reg(I2C_REG_STATUS) & I2C_STATUS_MISS_ACK) != 0;
+    }
+
+    void ClearNack() const {
+        reg(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK;
     }
 
     bool PushData(uint8_t data) const {
         uint32_t timeout = I2C_TIMEOUT_LOOPS;
-        while ((reg(I2C_REG_FIFO) & I2C_FIFO_WR_FULL) && timeout--) {}
+        while ((reg(I2C_REG_FIFO) & I2C_FIFO_WR_FULL) && timeout > 0) { --timeout; }
         if (timeout == 0) return false;
         reg(I2C_REG_DATA) = data;
         return true;
@@ -102,7 +110,7 @@ public:
 
     bool PushCmd(uint8_t cmd) const {
         uint32_t timeout = I2C_TIMEOUT_LOOPS;
-        while ((reg(I2C_REG_FIFO) & I2C_FIFO_CMD_FULL) && timeout--) {}
+        while ((reg(I2C_REG_FIFO) & I2C_FIFO_CMD_FULL) && timeout > 0) { --timeout; }
         if (timeout == 0) return false;
         reg(I2C_REG_CMD) = cmd;
         return true;
@@ -172,7 +180,7 @@ public:
         // Read bytes as they arrive
         for (uint8_t i = 0; i < len; i++) {
             uint32_t timeout = I2C_TIMEOUT_LOOPS;
-            while ((reg(I2C_REG_FIFO) & I2C_FIFO_RD_EMPTY) && timeout--) {}
+            while ((reg(I2C_REG_FIFO) & I2C_FIFO_RD_EMPTY) && timeout > 0) { --timeout; }
             if (timeout == 0) return 2;
             buf[i] = (uint8_t)(reg(I2C_REG_DATA) & 0xFFu);
         }

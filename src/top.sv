@@ -149,7 +149,7 @@ module top (
 
     wb_led #(
         .ADDR(LED0_ADDR),
-        .ACTIVE_LOW(1'b1),
+        .ACTIVE_LOW(1'b1),  // active-low: VCC -> R -> LED -> PIN (pin LOW = LED ON)
         .DEFAULT_STATE(1'b0),
         .BLINK_CYCLES(32'd2500000) // 100 ms @ 25 MHz
     ) led0
@@ -172,7 +172,7 @@ module top (
 
     wb_led #(
         .ADDR(LED1_ADDR),
-        .ACTIVE_LOW(1'b1),
+        .ACTIVE_LOW(1'b1),  // active-low: VCC -> R -> LED -> PIN (pin LOW = LED ON)
         .DEFAULT_STATE(1'b0),
         .BLINK_CYCLES(32'd2500000) // 100 ms @ 25 MHz
     ) led1

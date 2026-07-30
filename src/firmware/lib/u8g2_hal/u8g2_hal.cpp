@@ -111,6 +111,12 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
             s_tx_started = false;
             return 0;
         }
+        // Check for NACK: device not found or not responding at this address
+        if (s_i2c.NackDetected()) {
+            s_i2c.ClearNack();
+            s_tx_started = false;
+            return 0;  // signal failure to u8g2
+        }
         s_tx_started = false;
         break;
 

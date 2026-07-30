@@ -1,0 +1,534 @@
+#! 
+:ivl_version "14.0 (devel)" "(s20260301-322-ga4989d023-dirty)";
+:ivl_delay_selection "TYPICAL";
+:vpi_time_precision - 12;
+:vpi_module "D:\oss-cad-suite\lib\ivl\system.vpi";
+:vpi_module "D:\oss-cad-suite\lib\ivl\vhdl_sys.vpi";
+:vpi_module "D:\oss-cad-suite\lib\ivl\vhdl_textio.vpi";
+:vpi_module "D:\oss-cad-suite\lib\ivl\v2005_math.vpi";
+:vpi_module "D:\oss-cad-suite\lib\ivl\va_math.vpi";
+:vpi_module "D:\oss-cad-suite\lib\ivl\v2009.vpi";
+S_000001429262bd50 .scope package, "$unit" "$unit" 2 1;
+ .timescale 0 0;
+S_0000014292639ad0 .scope module, "tb_wb_led" "tb_wb_led" 3 3;
+ .timescale -9 -12;
+v0000014292690900_0 .var "clk", 0 0;
+v0000014292691c60_0 .net "led0_pin", 0 0, v0000014292615ef0_0;  1 drivers
+v0000014292690360_0 .var "rdata", 31 0;
+v00000142926916c0_0 .var "rst", 0 0;
+v0000014292691080_0 .net "wb_ack", 0 0, L_0000014292629390;  1 drivers
+v0000014292691120_0 .var "wb_adr", 31 0;
+v0000014292691d00_0 .var "wb_cyc", 0 0;
+v0000014292691ee0_0 .var "wb_dat", 31 0;
+v0000014292691da0_0 .net "wb_dat_o", 31 0, v0000014292690ae0_0;  1 drivers
+v0000014292691f80_0 .var "wb_sel", 3 0;
+v0000014292690b80_0 .var "wb_stb", 0 0;
+v00000142926900e0_0 .var "wb_we", 0 0;
+E_0000014292633c30 .event negedge, v0000014292606740_0;
+S_00000142926353e0 .scope module, "dut0" "wb_led" 3 31, 4 1 0, S_0000014292639ad0;
+ .timescale -9 -12;
+    .port_info 0 /INPUT 1 "clk";
+    .port_info 1 /INPUT 1 "rst";
+    .port_info 2 /INPUT 32 "wb_adr_i";
+    .port_info 3 /INPUT 32 "wb_dat_i";
+    .port_info 4 /INPUT 4 "wb_sel_i";
+    .port_info 5 /INPUT 1 "wb_we_i";
+    .port_info 6 /INPUT 1 "wb_cyc_i";
+    .port_info 7 /INPUT 1 "wb_stb_i";
+    .port_info 8 /OUTPUT 32 "wb_dat_o";
+    .port_info 9 /OUTPUT 1 "wb_ack_o";
+    .port_info 10 /OUTPUT 1 "led";
+P_000001429262c710 .param/l "ACTIVE_LOW" 0 4 3, +C4<00000000000000000000000000000001>;
+P_000001429262c748 .param/l "ADDR" 0 4 2, C4<00010000000000000000000000000100>;
+P_000001429262c780 .param/l "BLINK_CYCLES" 0 4 5, C4<00000000000000000000000000001010>;
+P_000001429262c7b8 .param/l "DEFAULT_STATE" 0 4 4, +C4<00000000000000000000000000000000>;
+L_00000142926288a0 .functor AND 1, v0000014292691d00_0, v0000014292690b80_0, C4<1>, C4<1>;
+L_0000014292629010 .functor AND 1, L_00000142926288a0, L_0000014292690180, C4<1>, C4<1>;
+L_0000014292629080 .functor AND 1, L_0000014292629010, L_0000014292690d60, C4<1>, C4<1>;
+L_00000142926290f0 .functor AND 1, L_0000014292629010, v00000142926900e0_0, C4<1>, C4<1>;
+L_00000142926287c0 .functor AND 1, L_00000142926290f0, L_0000014292690a40, C4<1>, C4<1>;
+L_0000014292628bb0 .functor AND 1, L_00000142926287c0, L_0000014292691800, C4<1>, C4<1>;
+L_0000014292628a60 .functor AND 1, L_0000014292629010, v00000142926900e0_0, C4<1>, C4<1>;
+L_0000014292628c20 .functor AND 1, L_0000014292628a60, L_0000014292691260, C4<1>, C4<1>;
+L_0000014292628d70 .functor AND 1, L_0000014292628c20, L_00000142926918a0, C4<1>, C4<1>;
+L_0000014292629320 .functor NOT 1, v0000014292607460_0, C4<0>, C4<0>, C4<0>;
+L_0000014292629390 .functor BUFZ 1, L_0000014292629010, C4<0>, C4<0>, C4<0>;
+v00000142926070a0_0 .net *"_ivl_1", 0 0, L_00000142926288a0;  1 drivers
+v0000014292606100_0 .net *"_ivl_13", 0 0, L_00000142926290f0;  1 drivers
+v0000014292607500_0 .net *"_ivl_15", 0 0, L_0000014292690a40;  1 drivers
+v0000014292607000_0 .net *"_ivl_17", 0 0, L_00000142926287c0;  1 drivers
+v0000014292605e80_0 .net *"_ivl_19", 0 0, L_0000014292691800;  1 drivers
+L_00000142926c0088 .functor BUFT 1, C4<00010000000000000000000000000100>, C4<0>, C4<0>, C4<0>;
+v00000142926073c0_0 .net/2u *"_ivl_2", 31 0, L_00000142926c0088;  1 drivers
+v0000014292606b00_0 .net *"_ivl_23", 0 0, L_0000014292628a60;  1 drivers
+v0000014292606240_0 .net *"_ivl_25", 0 0, L_0000014292691260;  1 drivers
+v0000014292605f20_0 .net *"_ivl_27", 0 0, L_0000014292628c20;  1 drivers
+v00000142926062e0_0 .net *"_ivl_29", 0 0, L_00000142926918a0;  1 drivers
+L_00000142926c00d0 .functor BUFT 1, C4<000>, C4<0>, C4<0>, C4<0>;
+v0000014292606380_0 .net/2u *"_ivl_34", 2 0, L_00000142926c00d0;  1 drivers
+v0000014292605980_0 .net *"_ivl_37", 28 0, L_0000014292690680;  1 drivers
+v0000014292606e20_0 .net *"_ivl_4", 0 0, L_0000014292690180;  1 drivers
+v0000014292605660_0 .net *"_ivl_9", 0 0, L_0000014292690d60;  1 drivers
+v0000014292606ec0_0 .var "blink_cycles_reg", 31 0;
+v0000014292607140_0 .net "busy_core", 0 0, v00000142926058e0_0;  1 drivers
+v00000142926071e0_0 .net "clk", 0 0, v0000014292690900_0;  1 drivers
+v0000014292607280_0 .net "default_state_core", 0 0, v0000014292606920_0;  1 drivers
+v0000014292607320_0 .var "default_value_reg", 0 0;
+v0000014292615ef0_0 .var "led", 0 0;
+v00000142926165d0_0 .net "led_core", 0 0, v0000014292607460_0;  1 drivers
+v00000142926156d0_0 .net "led_state_logical", 0 0, L_0000014292629320;  1 drivers
+v0000014292615bd0_0 .net "req_blink_cycles", 31 0, L_0000014292690e00;  1 drivers
+v0000014292615770_0 .net "req_default_value", 0 0, L_0000014292690c20;  1 drivers
+v0000014292615c70_0 .net "req_set_default", 0 0, L_0000014292628d70;  1 drivers
+v00000142926907c0_0 .net "req_trigger", 0 0, L_0000014292628bb0;  1 drivers
+v0000014292691760_0 .net "rst", 0 0, v00000142926916c0_0;  1 drivers
+v0000014292690400_0 .var "set_default_pulse", 0 0;
+v0000014292691e40_0 .var "trigger_pulse", 0 0;
+v0000014292691620_0 .net "wb_ack_o", 0 0, L_0000014292629390;  alias, 1 drivers
+v00000142926909a0_0 .net "wb_adr_i", 31 0, v0000014292691120_0;  1 drivers
+v0000014292691580_0 .net "wb_cyc_i", 0 0, v0000014292691d00_0;  1 drivers
+v0000014292691b20_0 .net "wb_dat_i", 31 0, v0000014292691ee0_0;  1 drivers
+v0000014292690ae0_0 .var "wb_dat_o", 31 0;
+v0000014292690f40_0 .net "wb_fire", 0 0, L_0000014292629080;  1 drivers
+v0000014292690860_0 .net "wb_hit", 0 0, L_0000014292629010;  1 drivers
+v0000014292690220_0 .var "wb_hit_d", 0 0;
+v00000142926919e0_0 .net "wb_sel_i", 3 0, v0000014292691f80_0;  1 drivers
+v0000014292690fe0_0 .net "wb_stb_i", 0 0, v0000014292690b80_0;  1 drivers
+v00000142926904a0_0 .net "wb_we_i", 0 0, v00000142926900e0_0;  1 drivers
+L_0000014292690180 .cmp/eq 32, v0000014292691120_0, L_00000142926c0088;
+L_0000014292690d60 .reduce/nor v0000014292690220_0;
+L_0000014292690a40 .part v0000014292691f80_0, 0, 1;
+L_0000014292691800 .part v0000014292691ee0_0, 0, 1;
+L_0000014292691260 .part v0000014292691f80_0, 0, 1;
+L_00000142926918a0 .part v0000014292691ee0_0, 1, 1;
+L_0000014292690c20 .part v0000014292691ee0_0, 2, 1;
+L_0000014292690680 .part v0000014292691ee0_0, 3, 29;
+L_0000014292690e00 .concat [ 29 3 0 0], L_0000014292690680, L_00000142926c00d0;
+S_000001429263a590 .scope module, "led_core_inst" "led_pulse_core" 4 54, 5 1 0, S_00000142926353e0;
+ .timescale -9 -12;
+    .port_info 0 /INPUT 1 "clk";
+    .port_info 1 /INPUT 1 "rst";
+    .port_info 2 /INPUT 1 "trigger_i";
+    .port_info 3 /INPUT 1 "set_default_i";
+    .port_info 4 /INPUT 1 "default_value_i";
+    .port_info 5 /INPUT 32 "blink_cycles_i";
+    .port_info 6 /OUTPUT 1 "led_o";
+    .port_info 7 /OUTPUT 1 "busy_o";
+    .port_info 8 /OUTPUT 1 "default_state_o";
+P_00000142926360f0 .param/l "ACTIVE_LOW" 0 5 2, +C4<00000000000000000000000000000001>;
+P_0000014292636128 .param/l "BLINK_CYCLES" 0 5 4, C4<00000000000000000000000000001010>;
+P_0000014292636160 .param/l "DEFAULT_STATE" 0 5 3, +C4<00000000000000000000000000000000>;
+L_00000142926c0118 .functor BUFT 1, C4<00000000000000000000000000000000>, C4<0>, C4<0>, C4<0>;
+v0000014292605d40_0 .net/2u *"_ivl_0", 31 0, L_00000142926c0118;  1 drivers
+v00000142926057a0_0 .net *"_ivl_2", 0 0, L_0000014292691a80;  1 drivers
+L_00000142926c0160 .functor BUFT 1, C4<00000000000000000000000000001010>, C4<0>, C4<0>, C4<0>;
+v0000014292605840_0 .net/2u *"_ivl_4", 31 0, L_00000142926c0160;  1 drivers
+v0000014292606d80_0 .var "blink_count", 31 0;
+v0000014292605fc0_0 .net "blink_cycles_cfg", 31 0, L_00000142926911c0;  1 drivers
+v0000014292606880_0 .net "blink_cycles_i", 31 0, v0000014292606ec0_0;  1 drivers
+v00000142926058e0_0 .var "busy_o", 0 0;
+v0000014292606060_0 .net "clk", 0 0, v0000014292690900_0;  alias, 1 drivers
+v0000014292606920_0 .var "default_state_o", 0 0;
+v0000014292605de0_0 .net "default_value_i", 0 0, v0000014292607320_0;  1 drivers
+v0000014292607460_0 .var "led_o", 0 0;
+v0000014292606740_0 .net "rst", 0 0, v00000142926916c0_0;  alias, 1 drivers
+v00000142926069c0_0 .net "set_default_i", 0 0, v0000014292690400_0;  1 drivers
+v0000014292606420_0 .net "trigger_i", 0 0, v0000014292691e40_0;  1 drivers
+E_0000014292633bf0 .event posedge, v0000014292606060_0;
+L_0000014292691a80 .cmp/ne 32, v0000014292606ec0_0, L_00000142926c0118;
+L_00000142926911c0 .functor MUXZ 32, L_00000142926c0160, v0000014292606ec0_0, L_0000014292691a80, C4<>;
+S_000001429263a720 .scope autofunction.vec4.s1, "to_pin_level" "to_pin_level" 5 22, 5 22 0, S_000001429263a590;
+ .timescale -9 -12;
+v0000014292605b60_0 .var "logical_state", 0 0;
+; Variable to_pin_level is vec4 return value of scope S_000001429263a720
+TD_tb_wb_led.dut0.led_core_inst.to_pin_level ;
+    %load/vec4 v0000014292605b60_0;
+    %inv;
+    %ret/vec4 0, 0, 1;  Assign to to_pin_level (store_vec4_to_lval)
+    %end;
+S_0000014292626290 .scope task, "wb_read" "wb_read" 3 67, 3 67 0, S_0000014292639ad0;
+ .timescale -9 -12;
+v00000142926902c0_0 .var "addr", 31 0;
+v0000014292690cc0_0 .var "rdata", 31 0;
+TD_tb_wb_led.wb_read ;
+    %wait E_0000014292633bf0;
+    %delay 1000, 0;
+    %load/vec4 v00000142926902c0_0;
+    %store/vec4 v0000014292691120_0, 0, 32;
+    %pushi/vec4 15, 0, 4;
+    %store/vec4 v0000014292691f80_0, 0, 4;
+    %pushi/vec4 0, 0, 1;
+    %store/vec4 v00000142926900e0_0, 0, 1;
+    %pushi/vec4 1, 0, 1;
+    %store/vec4 v0000014292691d00_0, 0, 1;
+    %pushi/vec4 1, 0, 1;
+    %store/vec4 v0000014292690b80_0, 0, 1;
+    %wait E_0000014292633bf0;
+T_1.0 ;
+    %load/vec4 v0000014292691080_0;
+    %nor/r;
+    %flag_set/vec4 8;
+    %jmp/0xz T_1.1, 8;
+    %wait E_0000014292633bf0;
+    %jmp T_1.0;
+T_1.1 ;
+    %load/vec4 v0000014292691da0_0;
+    %store/vec4 v0000014292690cc0_0, 0, 32;
+    %delay 1000, 0;
+    %pushi/vec4 0, 0, 1;
+    %store/vec4 v0000014292691d00_0, 0, 1;
+    %pushi/vec4 0, 0, 1;
+    %store/vec4 v0000014292690b80_0, 0, 1;
+    %end;
+S_000001429263bd00 .scope task, "wb_write" "wb_write" 3 46, 3 46 0, S_0000014292639ad0;
+ .timescale -9 -12;
+v0000014292691440_0 .var "addr", 31 0;
+v0000014292691bc0_0 .var "data", 31 0;
+TD_tb_wb_led.wb_write ;
+    %wait E_0000014292633bf0;
+    %delay 1000, 0;
+    %load/vec4 v0000014292691440_0;
+    %store/vec4 v0000014292691120_0, 0, 32;
+    %load/vec4 v0000014292691bc0_0;
+    %store/vec4 v0000014292691ee0_0, 0, 32;
+    %pushi/vec4 15, 0, 4;
+    %store/vec4 v0000014292691f80_0, 0, 4;
+    %pushi/vec4 1, 0, 1;
+    %store/vec4 v00000142926900e0_0, 0, 1;
+    %pushi/vec4 1, 0, 1;
+    %store/vec4 v0000014292691d00_0, 0, 1;
+    %pushi/vec4 1, 0, 1;
+    %store/vec4 v0000014292690b80_0, 0, 1;
+    %wait E_0000014292633bf0;
+T_2.2 ;
+    %load/vec4 v0000014292691080_0;
+    %nor/r;
+    %flag_set/vec4 8;
+    %jmp/0xz T_2.3, 8;
+    %wait E_0000014292633bf0;
+    %jmp T_2.2;
+T_2.3 ;
+    %delay 1000, 0;
+    %pushi/vec4 0, 0, 1;
+    %store/vec4 v0000014292691d00_0, 0, 1;
+    %pushi/vec4 0, 0, 1;
+    %store/vec4 v0000014292690b80_0, 0, 1;
+    %pushi/vec4 0, 0, 1;
+    %store/vec4 v00000142926900e0_0, 0, 1;
+    %end;
+    .scope S_000001429263a590;
+T_3 ;
+    %wait E_0000014292633bf0;
+    %load/vec4 v0000014292606740_0;
+    %flag_set/vec4 8;
+    %jmp/0xz  T_3.0, 8;
+    %alloc S_000001429263a720;
+    %pushi/vec4 0, 0, 1;
+    %store/vec4 v0000014292605b60_0, 0, 1;
+    %callf/vec4 TD_tb_wb_led.dut0.led_core_inst.to_pin_level, S_000001429263a720;
+    %free S_000001429263a720;
+    %assign/vec4 v0000014292607460_0, 0;
+    %pushi/vec4 0, 0, 1;
+    %assign/vec4 v00000142926058e0_0, 0;
+    %pushi/vec4 0, 0, 32;
+    %assign/vec4 v0000014292606d80_0, 0;
+    %pushi/vec4 0, 0, 1;
+    %assign/vec4 v0000014292606920_0, 0;
+    %jmp T_3.1;
+T_3.0 ;
+    %load/vec4 v00000142926058e0_0;
+    %flag_set/vec4 8;
+    %jmp/0xz  T_3.2, 8;
+    %load/vec4 v0000014292606d80_0;
+    %cmpi/e 0, 0, 32;
+    %jmp/0xz  T_3.4, 4;
+    %pushi/vec4 0, 0, 1;
+    %assign/vec4 v00000142926058e0_0, 0;
+    %alloc S_000001429263a720;
+    %load/vec4 v0000014292606920_0;
+    %store/vec4 v0000014292605b60_0, 0, 1;
+    %callf/vec4 TD_tb_wb_led.dut0.led_core_inst.to_pin_level, S_000001429263a720;
+    %free S_000001429263a720;
+    %assign/vec4 v0000014292607460_0, 0;
+    %jmp T_3.5;
+T_3.4 ;
+    %load/vec4 v0000014292606d80_0;
+    %subi 1, 0, 32;
+    %assign/vec4 v0000014292606d80_0, 0;
+T_3.5 ;
+T_3.2 ;
+    %load/vec4 v00000142926069c0_0;
+    %flag_set/vec4 8;
+    %jmp/0xz  T_3.6, 8;
+    %load/vec4 v0000014292605de0_0;
+    %assign/vec4 v0000014292606920_0, 0;
+    %alloc S_000001429263a720;
+    %load/vec4 v0000014292605de0_0;
+    %store/vec4 v0000014292605b60_0, 0, 1;
+    %callf/vec4 TD_tb_wb_led.dut0.led_core_inst.to_pin_level, S_000001429263a720;
+    %free S_000001429263a720;
+    %assign/vec4 v0000014292607460_0, 0;
+    %pushi/vec4 0, 0, 1;
+    %assign/vec4 v00000142926058e0_0, 0;
+    %pushi/vec4 0, 0, 32;
+    %assign/vec4 v0000014292606d80_0, 0;
+T_3.6 ;
+    %load/vec4 v0000014292606420_0;
+    %flag_set/vec4 8;
+    %jmp/0xz  T_3.8, 8;
+    %alloc S_000001429263a720;
+    %load/vec4 v0000014292606920_0;
+    %inv;
+    %store/vec4 v0000014292605b60_0, 0, 1;
+    %callf/vec4 TD_tb_wb_led.dut0.led_core_inst.to_pin_level, S_000001429263a720;
+    %free S_000001429263a720;
+    %assign/vec4 v0000014292607460_0, 0;
+    %pushi/vec4 1, 0, 1;
+    %assign/vec4 v00000142926058e0_0, 0;
+    %load/vec4 v0000014292605fc0_0;
+    %cmpi/u 0, 0, 32;
+    %flag_or 5, 4; GT is !LE
+    %flag_inv 5;
+    %flag_mov 8, 5;
+    %jmp/0 T_3.10, 8;
+    %load/vec4 v0000014292605fc0_0;
+    %subi 1, 0, 32;
+    %jmp/1 T_3.11, 8;
+T_3.10 ; End of true expr.
+    %pushi/vec4 0, 0, 32;
+    %jmp/0 T_3.11, 8;
+ ; End of false expr.
+    %blend;
+T_3.11;
+    %assign/vec4 v0000014292606d80_0, 0;
+T_3.8 ;
+T_3.1 ;
+    %jmp T_3;
+    .thread T_3;
+    .scope S_00000142926353e0;
+T_4 ;
+    %wait E_0000014292633bf0;
+    %load/vec4 v0000014292690860_0;
+    %assign/vec4 v0000014292690220_0, 0;
+    %pushi/vec4 0, 0, 1;
+    %assign/vec4 v0000014292691e40_0, 0;
+    %pushi/vec4 0, 0, 1;
+    %assign/vec4 v0000014292690400_0, 0;
+    %pushi/vec4 0, 0, 29;
+    %load/vec4 v0000014292607280_0;
+    %concat/vec4; draw_concat_vec4
+    %load/vec4 v0000014292607140_0;
+    %concat/vec4; draw_concat_vec4
+    %load/vec4 v00000142926156d0_0;
+    %concat/vec4; draw_concat_vec4
+    %assign/vec4 v0000014292690ae0_0, 0;
+    %load/vec4 v00000142926165d0_0;
+    %assign/vec4 v0000014292615ef0_0, 0;
+    %load/vec4 v0000014292691760_0;
+    %flag_set/vec4 8;
+    %jmp/0xz  T_4.0, 8;
+    %pushi/vec4 0, 0, 1;
+    %assign/vec4 v0000014292607320_0, 0;
+    %pushi/vec4 0, 0, 32;
+    %assign/vec4 v0000014292606ec0_0, 0;
+    %jmp T_4.1;
+T_4.0 ;
+    %load/vec4 v0000014292615c70_0;
+    %flag_set/vec4 8;
+    %jmp/0xz  T_4.2, 8;
+    %pushi/vec4 1, 0, 1;
+    %assign/vec4 v0000014292690400_0, 0;
+    %load/vec4 v0000014292615770_0;
+    %assign/vec4 v0000014292607320_0, 0;
+T_4.2 ;
+    %load/vec4 v00000142926907c0_0;
+    %flag_set/vec4 8;
+    %jmp/0xz  T_4.4, 8;
+    %load/vec4 v0000014292615bd0_0;
+    %assign/vec4 v0000014292606ec0_0, 0;
+    %pushi/vec4 1, 0, 1;
+    %assign/vec4 v0000014292691e40_0, 0;
+T_4.4 ;
+T_4.1 ;
+    %jmp T_4;
+    .thread T_4;
+    .scope S_0000014292639ad0;
+T_5 ;
+    %pushi/vec4 0, 0, 1;
+    %store/vec4 v0000014292690900_0, 0, 1;
+    %pushi/vec4 1, 0, 1;
+    %store/vec4 v00000142926916c0_0, 0, 1;
+    %pushi/vec4 0, 0, 32;
+    %store/vec4 v0000014292691120_0, 0, 32;
+    %pushi/vec4 0, 0, 32;
+    %store/vec4 v0000014292691ee0_0, 0, 32;
+    %pushi/vec4 0, 0, 4;
+    %store/vec4 v0000014292691f80_0, 0, 4;
+    %pushi/vec4 0, 0, 1;
+    %store/vec4 v00000142926900e0_0, 0, 1;
+    %pushi/vec4 0, 0, 1;
+    %store/vec4 v0000014292691d00_0, 0, 1;
+    %pushi/vec4 0, 0, 1;
+    %store/vec4 v0000014292690b80_0, 0, 1;
+    %end;
+    .thread T_5, $init;
+    .scope S_0000014292639ad0;
+T_6 ;
+    %delay 20000, 0;
+    %load/vec4 v0000014292690900_0;
+    %inv;
+    %store/vec4 v0000014292690900_0, 0, 1;
+    %jmp T_6;
+    .thread T_6;
+    .scope S_0000014292639ad0;
+T_7 ;
+    %delay 200000, 0;
+    %pushi/vec4 0, 0, 1;
+    %store/vec4 v00000142926916c0_0, 0, 1;
+    %end;
+    .thread T_7;
+    .scope S_0000014292639ad0;
+T_8 ;
+    %vpi_call/w 3 91 "$dumpfile", "sim/tb_wb_led.vcd" {0 0 0};
+    %vpi_call/w 3 92 "$dumpvars", 32'sb00000000000000000000000000000000, S_0000014292639ad0 {0 0 0};
+    %wait E_0000014292633c30;
+    %pushi/vec4 5, 0, 32;
+T_8.0 %dup/vec4;
+    %cmpi/s 0, 0, 32;
+    %jmp/1xz T_8.1, 5;
+    %jmp/1 T_8.1, 4;
+    %subi 1, 0, 32;
+    %wait E_0000014292633bf0;
+    %jmp T_8.0;
+T_8.1 ;
+    %pop/vec4 1;
+    %vpi_call/w 3 97 "$display", "=== Reset done ===" {0 0 0};
+    %vpi_call/w 3 98 "$display", "led0_pin (initial, should be 1=OFF): %b", v0000014292691c60_0 {0 0 0};
+    %vpi_call/w 3 101 "$display", "\012--- TEST 1: Set default ON ---" {0 0 0};
+    %pushi/vec4 268435460, 0, 32;
+    %store/vec4 v0000014292691440_0, 0, 32;
+    %pushi/vec4 6, 0, 32;
+    %store/vec4 v0000014292691bc0_0, 0, 32;
+    %fork TD_tb_wb_led.wb_write, S_000001429263bd00;
+    %join;
+    %pushi/vec4 3, 0, 32;
+T_8.2 %dup/vec4;
+    %cmpi/s 0, 0, 32;
+    %jmp/1xz T_8.3, 5;
+    %jmp/1 T_8.3, 4;
+    %subi 1, 0, 32;
+    %wait E_0000014292633bf0;
+    %jmp T_8.2;
+T_8.3 ;
+    %pop/vec4 1;
+    %vpi_call/w 3 104 "$display", "led0_pin after On() (expect 0=ON): %b", v0000014292691c60_0 {0 0 0};
+    %vpi_call/w 3 107 "$display", "\012--- TEST 2: Set default OFF ---" {0 0 0};
+    %pushi/vec4 268435460, 0, 32;
+    %store/vec4 v0000014292691440_0, 0, 32;
+    %pushi/vec4 2, 0, 32;
+    %store/vec4 v0000014292691bc0_0, 0, 32;
+    %fork TD_tb_wb_led.wb_write, S_000001429263bd00;
+    %join;
+    %pushi/vec4 3, 0, 32;
+T_8.4 %dup/vec4;
+    %cmpi/s 0, 0, 32;
+    %jmp/1xz T_8.5, 5;
+    %jmp/1 T_8.5, 4;
+    %subi 1, 0, 32;
+    %wait E_0000014292633bf0;
+    %jmp T_8.4;
+T_8.5 ;
+    %pop/vec4 1;
+    %vpi_call/w 3 110 "$display", "led0_pin after Off() (expect 1=OFF): %b", v0000014292691c60_0 {0 0 0};
+    %vpi_call/w 3 113 "$display", "\012--- TEST 3: Readback ---" {0 0 0};
+    %pushi/vec4 268435460, 0, 32;
+    %store/vec4 v00000142926902c0_0, 0, 32;
+    %fork TD_tb_wb_led.wb_read, S_0000014292626290;
+    %join;
+    %load/vec4 v0000014292690cc0_0;
+    %store/vec4 v0000014292690360_0, 0, 32;
+    %vpi_call/w 3 115 "$display", "readback=0x%08h  [bit0=state:%b bit1=busy:%b bit2=default:%b]", v0000014292690360_0, &PV<v0000014292690360_0, 0, 1>, &PV<v0000014292690360_0, 1, 1>, &PV<v0000014292690360_0, 2, 1> {0 0 0};
+    %vpi_call/w 3 119 "$display", "\012--- TEST 4: Blink trigger (default BLINK_CYCLES=10) ---" {0 0 0};
+    %pushi/vec4 268435460, 0, 32;
+    %store/vec4 v0000014292691440_0, 0, 32;
+    %pushi/vec4 1, 0, 32;
+    %store/vec4 v0000014292691bc0_0, 0, 32;
+    %fork TD_tb_wb_led.wb_write, S_000001429263bd00;
+    %join;
+    %vpi_call/w 3 121 "$display", "led0_pin after trigger (expect 0=ON): %b", v0000014292691c60_0 {0 0 0};
+    %pushi/vec4 5, 0, 32;
+T_8.6 %dup/vec4;
+    %cmpi/s 0, 0, 32;
+    %jmp/1xz T_8.7, 5;
+    %jmp/1 T_8.7, 4;
+    %subi 1, 0, 32;
+    %wait E_0000014292633bf0;
+    %jmp T_8.6;
+T_8.7 ;
+    %pop/vec4 1;
+    %pushi/vec4 268435460, 0, 32;
+    %store/vec4 v00000142926902c0_0, 0, 32;
+    %fork TD_tb_wb_led.wb_read, S_0000014292626290;
+    %join;
+    %load/vec4 v0000014292690cc0_0;
+    %store/vec4 v0000014292690360_0, 0, 32;
+    %vpi_call/w 3 124 "$display", "status mid-blink: busy=%b led=%b", &PV<v0000014292690360_0, 1, 1>, &PV<v0000014292690360_0, 0, 1> {0 0 0};
+    %pushi/vec4 8, 0, 32;
+T_8.8 %dup/vec4;
+    %cmpi/s 0, 0, 32;
+    %jmp/1xz T_8.9, 5;
+    %jmp/1 T_8.9, 4;
+    %subi 1, 0, 32;
+    %wait E_0000014292633bf0;
+    %jmp T_8.8;
+T_8.9 ;
+    %pop/vec4 1;
+    %vpi_call/w 3 126 "$display", "led0_pin after blink (expect 1=OFF): %b", v0000014292691c60_0 {0 0 0};
+    %vpi_call/w 3 129 "$display", "\012--- TEST 5: Blink with explicit 20 cycles ---" {0 0 0};
+    %pushi/vec4 268435460, 0, 32;
+    %store/vec4 v0000014292691440_0, 0, 32;
+    %pushi/vec4 161, 0, 32;
+    %store/vec4 v0000014292691bc0_0, 0, 32;
+    %fork TD_tb_wb_led.wb_write, S_000001429263bd00;
+    %join;
+    %pushi/vec4 5, 0, 32;
+T_8.10 %dup/vec4;
+    %cmpi/s 0, 0, 32;
+    %jmp/1xz T_8.11, 5;
+    %jmp/1 T_8.11, 4;
+    %subi 1, 0, 32;
+    %wait E_0000014292633bf0;
+    %jmp T_8.10;
+T_8.11 ;
+    %pop/vec4 1;
+    %vpi_call/w 3 133 "$display", "led0_pin mid-blink (expect 0=ON): %b", v0000014292691c60_0 {0 0 0};
+    %pushi/vec4 20, 0, 32;
+T_8.12 %dup/vec4;
+    %cmpi/s 0, 0, 32;
+    %jmp/1xz T_8.13, 5;
+    %jmp/1 T_8.13, 4;
+    %subi 1, 0, 32;
+    %wait E_0000014292633bf0;
+    %jmp T_8.12;
+T_8.13 ;
+    %pop/vec4 1;
+    %vpi_call/w 3 135 "$display", "led0_pin after blink (expect 1=OFF): %b", v0000014292691c60_0 {0 0 0};
+    %vpi_call/w 3 137 "$display", "\012=== Simulation complete ===" {0 0 0};
+    %vpi_call/w 3 138 "$finish" {0 0 0};
+    %end;
+    .thread T_8;
+    .scope S_0000014292639ad0;
+T_9 ;
+    %delay 1000000000, 0;
+    %vpi_call/w 3 144 "$display", "TIMEOUT" {0 0 0};
+    %vpi_call/w 3 145 "$finish" {0 0 0};
+    %end;
+    .thread T_9;
+# The file index is used to find the file name in the following table.
+:file_names 6;
+    "N/A";
+    "<interactive>";
+    "-";
+    "sim/tb_wb_led.v";
+    "src/wbDevices/wb_led.sv";
+    "src/wbDevices/led_pulse_core.sv";

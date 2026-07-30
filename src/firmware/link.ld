@@ -44,7 +44,9 @@ SECTIONS
 
     .bss :
     {
+        __bss_start = .;
         *(.bss*)
+        __bss_end = .;
     } > RAM
 
     end = .;  /* Symbol for sbrk() — marks end of BSS/start of heap */

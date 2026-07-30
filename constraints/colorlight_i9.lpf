@@ -110,5 +110,6 @@ LOCATE COMP "tx0" SITE "D16";  # TX output for NodeNet485
 IOBUF PORT "tx0" IO_TYPE=LVCMOS33 DRIVE=8;
 
 # I2C0 — moved pins on Colorlight i9 (external 4.7 kΩ pullup to 3.3 V required)
-LOCATE COMP "i2c0_scl" SITE "D18"; IOBUF PORT "i2c0_scl" IO_TYPE=LVCMOS33;
-LOCATE COMP "i2c0_sda" SITE "D17"; IOBUF PORT "i2c0_sda" IO_TYPE=LVCMOS33;
+# OPENDRAIN=ON: pin releases to high-Z when not driven (external pullup takes over)
+LOCATE COMP "i2c0_scl" SITE "D18"; IOBUF PORT "i2c0_scl" IO_TYPE=LVCMOS33 OPENDRAIN=ON;
+LOCATE COMP "i2c0_sda" SITE "D17"; IOBUF PORT "i2c0_sda" IO_TYPE=LVCMOS33 OPENDRAIN=ON;

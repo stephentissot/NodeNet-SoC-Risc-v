@@ -15,11 +15,13 @@ module wb_led #(
     input  wire        wb_stb_i,
 
     output reg [31:0]  wb_dat_o,
-    output reg         wb_ack_o,
+    output wire        wb_ack_o,
 
     output reg         led
 );
     wire wb_hit;
+    reg  wb_hit_d;
+    wire wb_fire;           // single-cycle pulse: rising edge of wb_hit only
     wire req_trigger;
     wire req_set_default;
     wire req_default_value;
@@ -35,8 +37,10 @@ module wb_led #(
     wire default_state_core;
     wire led_state_logical;
 
-    assign wb_hit = wb_cyc_i && wb_stb_i && (wb_adr_i == ADDR);
-    assign req_trigger = wb_hit && wb_we_i && wb_sel_i[0] && wb_dat_i[0];
+    assign wb_hit  = wb_cyc_i && wb_stb_i && (wb_adr_i == ADDR);
+    assign wb_fire = wb_hit && !wb_hit_d;   // rising-edge detect (for future use)
+
+    assign req_trigger     = wb_hit && wb_we_i && wb_sel_i[0] && wb_dat_i[0];
     assign req_set_default = wb_hit && wb_we_i && wb_sel_i[0] && wb_dat_i[1];
     assign req_default_value = wb_dat_i[2];
 
@@ -59,8 +63,11 @@ module wb_led #(
         .default_state_o(default_state_core)
     );
 
+    // ACK must be combinational (synchronous with wb_hit) for Wishbone compliance
+    assign wb_ack_o = wb_hit;
+
     always @(posedge clk) begin
-        wb_ack_o <= wb_hit;
+        wb_hit_d  <= wb_hit;
 
         trigger_pulse <= 1'b0;
         set_default_pulse <= 1'b0;
@@ -80,8 +87,8 @@ module wb_led #(
             end
 
             if (req_trigger) begin
+                blink_cycles_reg <= req_blink_cycles;                
                 trigger_pulse <= 1'b1;
-                blink_cycles_reg <= req_blink_cycles;
             end
         end
     end
