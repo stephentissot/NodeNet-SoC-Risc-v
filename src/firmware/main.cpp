@@ -12,7 +12,8 @@ static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x
 //#define LED0_BASE 0x10000004UL
 #define LED1_BASE 0x10000008UL
 #define I2C0_BASE 0x10005000u
-
+// Leds — template: address is compile-time constant, no constructor, global-scope safe
+WbLed<LED1_BASE> led1;
 
 // ─── OLED ────────────────────────────────────────────────────────────────────
 static u8g2_t u8g2;
@@ -102,13 +103,12 @@ int main(void)
     // Init I2C prescale then probe OLED before full init
 
     i2c0.Init(15); // 400 kHz @ 25 MHz
-    
+
     // if (s_oled_ok) {
     //     oled_init();
     //     oled_show("NodeNet SoC", "i9 v7.2", FIRMWARE_VERSION);
     // }
     //WbLed led0(LED0_BASE);  // Not static: no guard byte, base_ always set correctly
-    WbLed led1(LED1_BASE);
     while (1) {        
         s_oled_ok = i2c_probe(i2c0, 0x3C);
         uint32_t now_ms = millis();        
@@ -118,6 +118,7 @@ int main(void)
             next_toggle_ms += kBlinkPeriodMs;
 
             if (!s_oled_ok) led1.blink(600u);
+            else led1.blink(100u);
         }
     }
 }

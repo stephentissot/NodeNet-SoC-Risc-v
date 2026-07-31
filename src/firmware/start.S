@@ -5,6 +5,21 @@ _start:
 
     la sp, _stack_top
 
+    # Copy .data section from ROM (LMA) to RAM (VMA).
+    # Required for global objects initialized with compile-time constants
+    # (GCC emits them as static data in .data, not via .init_array).
+    la   a0, __data_load   # source: ROM address
+    la   a1, __data_start  # dest:   RAM address
+    la   a2, __data_end
+.Ldata_loop:
+    beq  a1, a2, .Ldata_done
+    lw   t0, 0(a0)
+    sw   t0, 0(a1)
+    addi a0, a0, 4
+    addi a1, a1, 4
+    j    .Ldata_loop
+.Ldata_done:
+
     # Zero-initialize .bss section (required for static local guard variables and
     # zero-initialized globals; FPGA BRAM may not start at 0 after reconfiguration)
     la   a0, __bss_start

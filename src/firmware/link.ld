@@ -39,8 +39,13 @@ SECTIONS
 
     .data :
     {
+        __data_start = .;
         *(.data*)
-    } > RAM
+        __data_end = .;
+    } > RAM AT > ROM
+
+    /* Load address of .data in ROM (for startup copy loop) */
+    __data_load = LOADADDR(.data);
 
     .bss :
     {
