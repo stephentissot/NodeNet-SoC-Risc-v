@@ -16,13 +16,6 @@ static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x
 static u8g2_t u8g2;
 static bool s_oled_ok = false;
 
-// Quick I2C probe via Wire API: send 1 byte (control byte 0x00) and check for ACK.
-static bool i2c_probe_wire(I2C &bus, uint8_t addr7bit) {
-    bus.beginTransmission(addr7bit);
-    bus.write(0x00u);
-    return bus.endTransmission() == 0;
-}
-
 static void oled_init() {
     u8g2_Setup_ssd1306_i2c_128x64_noname_f(&u8g2, U8G2_R0,
                                             u8x8_byte_i2c_hw,
@@ -100,9 +93,11 @@ int main(void)
     // ──────────────────────────────────ake ───────────────────────────────────────
 
     i2c0.begin(); // 400 kHz @ 25 MHz
-    while (1) {        
-        s_oled_ok = i2c_probe_wire(i2c0, 0x3C);
-        uint32_t now_ms = millis();        
+    while (1) {
+        i2c0.beginTransmission(0x3C);
+        i2c0.write(0x00u);
+        s_oled_ok = (i2c0.endTransmission() == 0);
+        uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             led_on = !led_on;
             *LED_D2 = led_on ? 0u : 1u;
