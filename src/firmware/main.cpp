@@ -21,11 +21,11 @@ I2C<I2C0_BASE> i2c0;
 static u8g2_t u8g2;
 static bool s_oled_ok = false;
 
-// Quick I2C probe: send 1 byte (control byte 0x00) and check for ACK.
-template<uint32_t BASE>
-static bool i2c_probe(const I2C<BASE> &bus, uint8_t addr7bit) {
-    const uint8_t ctrl = 0x00u;
-    return bus.Write(addr7bit, &ctrl, 1) == 0;
+// Quick I2C probe via Wire API: send 1 byte (control byte 0x00) and check for ACK.
+static bool i2c_probe_wire(uint8_t addr7bit) {
+    i2c0.beginTransmission(addr7bit);
+    i2c0.write(0x00u);
+    return i2c0.endTransmission() == 0;
 }
 
 static void oled_init() {
@@ -101,9 +101,9 @@ int main(void)
     // }
     // ──────────────────────────────────ake ───────────────────────────────────────
 
-    i2c0.Init(15); // 400 kHz @ 25 MHz  (called in main, after FPGA peripherals ready)
+    i2c0.begin(); // 400 kHz @ 25 MHz
     while (1) {        
-        s_oled_ok = i2c_probe(i2c0, 0x3C);
+        s_oled_ok = i2c_probe_wire(0x3C);
         uint32_t now_ms = millis();        
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             led_on = !led_on;

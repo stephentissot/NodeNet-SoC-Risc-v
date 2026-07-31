@@ -71,15 +71,29 @@
 
 #define I2C_TIMEOUT_LOOPS 200000u
 
+// ─── Buffer sizes ─────────────────────────────────────────────────────────────
+#define I2C_TX_BUFFER_SIZE 32u
+#define I2C_RX_BUFFER_SIZE 32u
+
 // ─── I2C class — BASE address as template parameter ──────────────────────────
 // Address baked in at compile-time: no constructor, no .sbss, global-scope safe.
+// Wire-compatible API (begin/beginTransmission/write/endTransmission/requestFrom/
+// read/available/peek/flush) is included — all methods are implicitly inline
+// (template), so GCC -Os cannot generate incorrect out-of-line member accesses.
+//
 // Usage:
-//   I2C<0x10005000u> i2c0;   // global scope — works correctly
-//   i2c0.Init(15);            // call in main() before use
+//   I2C<0x10005000u> i2c0;            // global scope — works correctly
+//   i2c0.begin();                     // 400 kHz @ 25 MHz
+//   i2c0.beginTransmission(0x3C);
+//   i2c0.write(0x00);
+//   uint8_t err = i2c0.endTransmission(); // 0 = ACK
 
 template<uint32_t BASE>
 class I2C {
 public:
+    static constexpr uint32_t CLK_HZ = 25000000UL;
+
+    // ── Low-level init ────────────────────────────────────────────────────────
     void Init(uint16_t prescale) const {
         reg(I2C_REG_PRESC_LO) = prescale & 0xFFu;
         reg(I2C_REG_PRESC_HI) = (prescale >> 8) & 0xFFu;
@@ -198,6 +212,70 @@ private:
     volatile uint32_t& reg(uint32_t offset) const {
         return *reinterpret_cast<volatile uint32_t*>(BASE + offset);  // compile-time constant
     }
+
+    // ── Wire API state ────────────────────────────────────────────────────────
+    // Zero-initialised by startup BSS zeroing (which now covers .sbss too).
+    uint8_t tx_address_;
+    uint8_t tx_buffer_[I2C_TX_BUFFER_SIZE];
+    uint8_t tx_length_;
+    uint8_t rx_buffer_[I2C_RX_BUFFER_SIZE];
+    uint8_t rx_length_;
+    uint8_t rx_position_;
+
+public:
+    // ── Arduino Wire-compatible API ───────────────────────────────────────────
+
+    // Initialise bus at 400 kHz (prescale = CLK_HZ / (400000 * 4) = 15 @ 25 MHz).
+    void begin() { Init((uint16_t)(CLK_HZ / (400000UL * 4UL))); }
+
+    // Set bus clock; call before begin() if a non-default frequency is needed.
+    void setClock(uint32_t freq) {
+        Init((uint16_t)(CLK_HZ / (freq * 4UL)));
+    }
+
+    void beginTransmission(uint8_t addr) {
+        tx_address_ = addr;
+        tx_length_  = 0;
+    }
+
+    uint8_t write(uint8_t value) {
+        if (tx_length_ >= I2C_TX_BUFFER_SIZE) return 0;
+        tx_buffer_[tx_length_++] = value;
+        return 1;
+    }
+
+    // sendStop is accepted for API compatibility; we always issue a stop for now.
+    uint8_t endTransmission(bool /*sendStop*/ = true) {
+        if (tx_length_ == 0) return 4;
+        int rc = Write(tx_address_, tx_buffer_, tx_length_);
+        tx_length_ = 0;
+        if (rc == 0) return 0;  // success
+        if (rc == 1) return 2;  // NACK (address or data)
+        return 4;               // timeout / other error
+    }
+
+    uint8_t requestFrom(uint8_t addr, uint8_t qty, bool /*stop*/ = true) {
+        rx_length_   = 0;
+        rx_position_ = 0;
+        if (qty == 0 || qty > I2C_RX_BUFFER_SIZE) return 0;
+        if (Read(addr, rx_buffer_, qty) != 0) return 0;
+        rx_length_ = qty;
+        return qty;
+    }
+
+    int available() const { return (int)(rx_length_ - rx_position_); }
+
+    int read() {
+        if (rx_position_ >= rx_length_) return -1;
+        return rx_buffer_[rx_position_++];
+    }
+
+    int peek() const {
+        if (rx_position_ >= rx_length_) return -1;
+        return rx_buffer_[rx_position_];
+    }
+
+    void flush() {}
 };
 
 #endif /* I2C_H */

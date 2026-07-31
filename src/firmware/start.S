@@ -3,6 +3,14 @@
 
 _start:
 
+    # Initialise the global pointer (gp) register.
+    # .option norelax prevents the assembler from converting "la gp,..." into
+    # a gp-relative load (which would be circular before gp is set).
+    .option push
+    .option norelax
+    la   gp, __global_pointer$
+    .option pop
+
     la sp, _stack_top
 
     # Copy .data section from ROM (LMA) to RAM (VMA).

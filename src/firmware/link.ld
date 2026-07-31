@@ -41,6 +41,9 @@ SECTIONS
     {
         __data_start = .;
         *(.data*)
+        /* .sdata: GCC small-data section (gp-relative); must be in RAM */
+        __global_pointer$ = . + 0x800;
+        *(.sdata*)
         __data_end = .;
     } > RAM AT > ROM
 
@@ -51,6 +54,8 @@ SECTIONS
     {
         __bss_start = .;
         *(.bss*)
+        /* .sbss: GCC small-BSS section (gp-relative); must be zeroed like .bss */
+        *(.sbss*)
         __bss_end = .;
     } > RAM
 
