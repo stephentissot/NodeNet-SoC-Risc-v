@@ -60,6 +60,11 @@ $(BUILD)/$(TOP).json: $(SOURCES) $(FIRMWARE_HEX) | $(BUILD)
 		-p "read_verilog -sv $(SOURCES); \
 		    synth_ecp5 -top $(TOP) -json $@"
 
+# 	yosys \
+# 		-p "read_verilog -sv $(SOURCES); \
+# 		    synth_ecp5 -top $(TOP); \
+# 		    write_json $@; \
+# 		    write_verilog $(BUILD)/$(TOP)_post_synth.v"
 
 # Place & Route
 $(BUILD)/$(TOP).config: $(BUILD)/$(TOP).json
@@ -70,7 +75,6 @@ $(BUILD)/$(TOP).config: $(BUILD)/$(TOP).json
 		--json $< \
 		--lpf $(LPF) \
 		--textcfg $@
-
 
 # Bitstream generation
 $(BUILD)/$(TOP).bit: $(BUILD)/$(TOP).config

@@ -125,6 +125,11 @@ public:
                            (reg(I2C_REG_PRESC_LO) & 0xFFu));
     }
 
+    bool Probe(uint8_t addr7bit) const {
+        uint8_t dummy = I2C_REG_STATUS;
+        return Write(addr7bit, &dummy, 1) == 0;
+    }
+
     int Write(uint8_t addr, const uint8_t *buf, uint8_t len) const {
         if (len == 0) return 0;
 

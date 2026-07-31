@@ -38,6 +38,7 @@ extern "C" {
 #endif
 
 #include <u8g2.h>
+#include "i2c.h"
 
 /**
  * u8x8_byte_i2c_hw — Hardware I2C byte-level callback for u8g2.

@@ -13,12 +13,11 @@
  */
 
 #include "u8g2_hal.h"
-#include "i2c.h"
 #include <stdint.h>
 
 // ─── Clock frequency (must match CLK_FREQ_MHZ in top.sv) ────────────────────
 static constexpr uint32_t I2C0_CLK_HZ = 25000000UL;
-static constexpr uint32_t I2C0_BASE = 0x10005000u;
+#define I2C0_BASE 0x10005000u
 
 // ─── RISC-V cycle counter ────────────────────────────────────────────────────
 

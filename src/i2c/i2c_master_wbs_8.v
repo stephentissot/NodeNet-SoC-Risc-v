@@ -63,7 +63,10 @@ module i2c_master_wbs_8 #
     output wire        i2c_scl_t,
     input  wire        i2c_sda_i,
     output wire        i2c_sda_o,
-    output wire        i2c_sda_t
+    output wire        i2c_sda_t,
+
+    // Debug interface //
+    output wire i2c_busy_debug
 );
 /*
 
@@ -159,7 +162,7 @@ read
     read data byte
     set start to force generation of a start condition
     start is implied when bus is inactive or active with write or different address
-    set stop to issue a stop condition after reading current byte
+    set stop to issue a stop con    dition after reading current byte
     if stop is set with read command, then data_out_last will be set
 
 write
@@ -288,6 +291,8 @@ wire data_out_ready_int;
 wire data_out_last_int;
 
 wire busy_int;
+assign i2c_busy_debug = busy_int; // for i2c_busy_debug output
+
 wire bus_control_int;
 wire bus_active_int;
 wire missed_ack_int;
