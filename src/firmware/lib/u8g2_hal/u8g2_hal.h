@@ -33,12 +33,14 @@
 #ifndef U8G2_HAL_H
 #define U8G2_HAL_H
 
+// i2c.h contains a C++ template — must be included OUTSIDE extern "C"
+#include "i2c.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #include <u8g2.h>
-#include "i2c.h"
 
 /**
  * u8x8_byte_i2c_hw — Hardware I2C byte-level callback for u8g2.

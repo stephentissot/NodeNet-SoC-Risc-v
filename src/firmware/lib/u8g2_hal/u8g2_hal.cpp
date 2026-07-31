@@ -19,6 +19,9 @@
 static constexpr uint32_t I2C0_CLK_HZ = 25000000UL;
 #define I2C0_BASE 0x10005000u
 
+// I2C0 — template: address compile-time constant, no constructor, global-scope safe
+static const I2C<I2C0_BASE> s_i2c;
+
 // ─── RISC-V cycle counter ────────────────────────────────────────────────────
 
 static inline uint32_t rdcycle32(void) {
@@ -51,8 +54,7 @@ static void delay_100ns(uint32_t count) {
 // ─── I2C transfer state ──────────────────────────────────────────────────────
 
 static uint8_t  s_i2c_addr   = 0;
-static bool     s_tx_started = false;  // True after first byte is queued
-static const I2C s_i2c(I2C0_BASE);
+static bool     s_tx_started = false;
 
 // ─── I2C byte callback ───────────────────────────────────────────────────────
 

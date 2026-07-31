@@ -71,12 +71,15 @@
 
 #define I2C_TIMEOUT_LOOPS 200000u
 
-// ─── Inline helpers ──────────────────────────────────────────────────────────
+// ─── I2C class — BASE address as template parameter ──────────────────────────
+// Address baked in at compile-time: no constructor, no .sbss, global-scope safe.
+// Usage:
+//   I2C<0x10005000u> i2c0;   // global scope — works correctly
+//   i2c0.Init(15);            // call in main() before use
 
+template<uint32_t BASE>
 class I2C {
 public:
-    explicit I2C(uint32_t base) : base_(base) {}
-
     void Init(uint16_t prescale) const {
         reg(I2C_REG_PRESC_LO) = prescale & 0xFFu;
         reg(I2C_REG_PRESC_HI) = (prescale >> 8) & 0xFFu;
@@ -120,13 +123,8 @@ public:
         reg(I2C_REG_ADDR) = addr;
     }
 
-    uint16_t Prescale() const {
-        return (uint16_t)(((reg(I2C_REG_PRESC_HI) & 0xFFu) << 8) |
-                           (reg(I2C_REG_PRESC_LO) & 0xFFu));
-    }
-
     bool Probe(uint8_t addr7bit) const {
-        uint8_t dummy = I2C_REG_STATUS;
+        uint8_t dummy = 0x00u;
         return Write(addr7bit, &dummy, 1) == 0;
     }
 
@@ -134,25 +132,21 @@ public:
         if (len == 0) return 0;
 
         if (reg(I2C_REG_STATUS) & I2C_STATUS_MISS_ACK) {
-            reg(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK; // Clear stale sticky bit
+            reg(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK;
         }
 
         SetAddress(addr);
 
         if (len == 1) {
-            // Single byte: START | WRITE | STOP in one command
             if (!PushData(buf[0])) return 2;
             if (!PushCmd(I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP)) return 2;
         } else {
-            // First byte
             if (!PushData(buf[0])) return 2;
             if (!PushCmd(I2C_CMD_START | I2C_CMD_WRITE)) return 2;
-            // Middle bytes
             for (uint8_t i = 1; i < len - 1; i++) {
                 if (!PushData(buf[i])) return 2;
                 if (!PushCmd(I2C_CMD_WRITE)) return 2;
             }
-            // Last byte with STOP
             if (!PushData(buf[len - 1])) return 2;
             if (!PushCmd(I2C_CMD_WRITE | I2C_CMD_STOP)) return 2;
         }
@@ -201,11 +195,9 @@ public:
     }
 
 private:
-    volatile uint32_t &reg(uint32_t offset) const {
-        return *reinterpret_cast<volatile uint32_t *>(base_ + offset);
+    volatile uint32_t& reg(uint32_t offset) const {
+        return *reinterpret_cast<volatile uint32_t*>(BASE + offset);  // compile-time constant
     }
-
-    uint32_t base_;
 };
 
 #endif /* I2C_H */
