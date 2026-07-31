@@ -19,8 +19,8 @@
 static constexpr uint32_t I2C0_CLK_HZ = 25000000UL;
 #define I2C0_BASE 0x10005000u
 
-// I2C0 — template: address compile-time constant, Wire state zero-init'd by BSS
-static I2C<I2C0_BASE> s_i2c;
+// I2C0 — constructor-based; global static so constructor runs via .init_array
+static I2C s_i2c(I2C0_BASE);
 
 // ─── RISC-V cycle counter ────────────────────────────────────────────────────
 

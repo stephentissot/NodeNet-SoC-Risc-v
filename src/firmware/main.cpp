@@ -9,23 +9,18 @@
 
 // Hardware setup
 static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x10000000UL);
-//#define LED0_BASE 0x10000004UL
 #define LED1_BASE 0x10000008UL
 #define I2C0_BASE 0x10005000u
-// Leds — template: address is compile-time constant, no constructor, global-scope safe
-WbLed<LED1_BASE> led1;
-// I2C0 — template: same pattern as WbLed, global-scope safe
-I2C<I2C0_BASE> i2c0;
 
 // ─── OLED ────────────────────────────────────────────────────────────────────
 static u8g2_t u8g2;
 static bool s_oled_ok = false;
 
 // Quick I2C probe via Wire API: send 1 byte (control byte 0x00) and check for ACK.
-static bool i2c_probe_wire(uint8_t addr7bit) {
-    i2c0.beginTransmission(addr7bit);
-    i2c0.write(0x00u);
-    return i2c0.endTransmission() == 0;
+static bool i2c_probe_wire(I2C &bus, uint8_t addr7bit) {
+    bus.beginTransmission(addr7bit);
+    bus.write(0x00u);
+    return bus.endTransmission() == 0;
 }
 
 static void oled_init() {
@@ -49,6 +44,9 @@ static void oled_show(const char *line0, const char *line1 = nullptr,
 
 int main(void)
 {
+    I2C    i2c0(I2C0_BASE);
+    WbLed  led1(LED1_BASE);
+
     static constexpr uint32_t kBlinkPeriodMs = 2000u;
     bool led_on = false;
     uint32_t next_toggle_ms = *TIMER_MS + kBlinkPeriodMs;
@@ -103,7 +101,7 @@ int main(void)
 
     i2c0.begin(); // 400 kHz @ 25 MHz
     while (1) {        
-        s_oled_ok = i2c_probe_wire(0x3C);
+        s_oled_ok = i2c_probe_wire(i2c0, 0x3C);
         uint32_t now_ms = millis();        
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             led_on = !led_on;

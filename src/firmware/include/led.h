@@ -11,9 +11,9 @@
  * Blink encoding: value = (cycles << 3) | 1
  *   where cycles = durationMs * 25000  (25 MHz clock)
  *
- * Usage (base address as template parameter — compile-time constant, no constructor):
- *   WbLed<LED1_BASE> led1;   // global scope safe: no constructor, no runtime init
- *   led1.blink(600u);        // GCC generates direct write to LED1_BASE
+ * Usage:
+ *   WbLed led1(0x10000008u);
+ *   led1.blink(600u);
  */
 
 #ifndef LED_H
@@ -21,16 +21,14 @@
 
 #include <cstdint>
 
-template<uint32_t BASE>
 class WbLed {
 public:
     static constexpr uint32_t CLK_KHZ = 25000u;  // 25 MHz
 
-    // Set LED to resting ON state
-    void on()  const { reg() = 0x6u; }  // bit1=SET_STATE, bit2=1
+    explicit WbLed(uint32_t base) : base_(base) {}
 
-    // Set LED to resting OFF state
-    void off() const { reg() = 0x2u; }  // bit1=SET_STATE, bit2=0
+    void on()  const { reg() = 0x6u; }   // bit1=SET_STATE, bit2=1
+    void off() const { reg() = 0x2u; }   // bit1=SET_STATE, bit2=0
 
     // Trigger a non-blocking one-shot blink pulse.
     // durationMs=0 uses the RTL default blink duration (100ms @ 25 MHz).
@@ -41,8 +39,10 @@ public:
 
 private:
     volatile uint32_t& reg() const {
-        return *reinterpret_cast<volatile uint32_t*>(BASE);  // compile-time constant
+        return *reinterpret_cast<volatile uint32_t*>(base_);
     }
+
+    uint32_t base_;
 };
 
 #endif /* LED_H */

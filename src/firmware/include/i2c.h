@@ -75,49 +75,53 @@
 #define I2C_TX_BUFFER_SIZE 32u
 #define I2C_RX_BUFFER_SIZE 32u
 
-// ─── I2C class — BASE address as template parameter ──────────────────────────
-// Address baked in at compile-time: no constructor, no .sbss, global-scope safe.
-// Wire-compatible API (begin/beginTransmission/write/endTransmission/requestFrom/
-// read/available/peek/flush) is included — all methods are implicitly inline
-// (template), so GCC -Os cannot generate incorrect out-of-line member accesses.
+// ─── I2C class ────────────────────────────────────────────────────────────────
+// Base address passed at construction time.
+// All low-level MMIO methods are inline so GCC -Os never generates
+// incorrect out-of-line member-array accesses via the `this` pointer.
+// Wire-compatible API (begin … flush) is declared here and implemented
+// in i2c.cpp so that endTransmission calls the inline Write() correctly.
 //
 // Usage:
-//   I2C<0x10005000u> i2c0;            // global scope — works correctly
-//   i2c0.begin();                     // 400 kHz @ 25 MHz
+//   I2C i2c0(0x10005000u);    // local or global — constructor sets base_
+//   i2c0.begin();             // 400 kHz @ 25 MHz
 //   i2c0.beginTransmission(0x3C);
 //   i2c0.write(0x00);
-//   uint8_t err = i2c0.endTransmission(); // 0 = ACK
+//   uint8_t err = i2c0.endTransmission();  // 0 = ACK
 
-template<uint32_t BASE>
 class I2C {
 public:
     static constexpr uint32_t CLK_HZ = 25000000UL;
 
-    // ── Low-level init ────────────────────────────────────────────────────────
-    void Init(uint16_t prescale) const {
+    explicit I2C(uint32_t base)
+        : base_(base), tx_address_(0), tx_length_(0),
+          rx_length_(0), rx_position_(0) {}
+
+    // ── Low-level MMIO (all inline — prevents GCC -Os out-of-line miscompile) ─
+
+    inline void Init(uint16_t prescale) const {
         reg(I2C_REG_PRESC_LO) = prescale & 0xFFu;
         reg(I2C_REG_PRESC_HI) = (prescale >> 8) & 0xFFu;
     }
 
-    bool WaitBusy() const {
+    inline bool WaitBusy() const {
         uint32_t timeout = I2C_TIMEOUT_LOOPS;
         while ((reg(I2C_REG_FIFO) & I2C_FIFO_CMD_EMPTY) == 0 && timeout > 0) { --timeout; }
         if (timeout == 0) return false;
-
         timeout = I2C_TIMEOUT_LOOPS;
         while ((reg(I2C_REG_STATUS) & I2C_STATUS_BUSY) && timeout > 0) { --timeout; }
         return timeout > 0;
     }
 
-    bool NackDetected() const {
+    inline bool NackDetected() const {
         return (reg(I2C_REG_STATUS) & I2C_STATUS_MISS_ACK) != 0;
     }
 
-    void ClearNack() const {
+    inline void ClearNack() const {
         reg(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK;
     }
 
-    bool PushData(uint8_t data) const {
+    inline bool PushData(uint8_t data) const {
         uint32_t timeout = I2C_TIMEOUT_LOOPS;
         while ((reg(I2C_REG_FIFO) & I2C_FIFO_WR_FULL) && timeout > 0) { --timeout; }
         if (timeout == 0) return false;
@@ -125,7 +129,7 @@ public:
         return true;
     }
 
-    bool PushCmd(uint8_t cmd) const {
+    inline bool PushCmd(uint8_t cmd) const {
         uint32_t timeout = I2C_TIMEOUT_LOOPS;
         while ((reg(I2C_REG_FIFO) & I2C_FIFO_CMD_FULL) && timeout > 0) { --timeout; }
         if (timeout == 0) return false;
@@ -133,24 +137,20 @@ public:
         return true;
     }
 
-    void SetAddress(uint8_t addr) const {
+    inline void SetAddress(uint8_t addr) const {
         reg(I2C_REG_ADDR) = addr;
     }
 
-    bool Probe(uint8_t addr7bit) const {
+    inline bool Probe(uint8_t addr7bit) const {
         uint8_t dummy = 0x00u;
         return Write(addr7bit, &dummy, 1) == 0;
     }
 
-    int Write(uint8_t addr, const uint8_t *buf, uint8_t len) const {
+    inline int Write(uint8_t addr, const uint8_t *buf, uint8_t len) const {
         if (len == 0) return 0;
-
-        if (reg(I2C_REG_STATUS) & I2C_STATUS_MISS_ACK) {
+        if (reg(I2C_REG_STATUS) & I2C_STATUS_MISS_ACK)
             reg(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK;
-        }
-
         SetAddress(addr);
-
         if (len == 1) {
             if (!PushData(buf[0])) return 2;
             if (!PushCmd(I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP)) return 2;
@@ -164,118 +164,62 @@ public:
             if (!PushData(buf[len - 1])) return 2;
             if (!PushCmd(I2C_CMD_WRITE | I2C_CMD_STOP)) return 2;
         }
-
         if (!WaitBusy()) return 2;
-
         if (reg(I2C_REG_STATUS) & I2C_STATUS_MISS_ACK) {
-            reg(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK; // W1C
-            return 1; // NACK
+            reg(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK;
+            return 1;
         }
         return 0;
     }
 
-    int Read(uint8_t addr, uint8_t *buf, uint8_t len) const {
+    inline int Read(uint8_t addr, uint8_t *buf, uint8_t len) const {
         if (len == 0) return 0;
-
-        if (reg(I2C_REG_STATUS) & I2C_STATUS_MISS_ACK) {
-            reg(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK; // Clear stale sticky bit
-        }
-
+        if (reg(I2C_REG_STATUS) & I2C_STATUS_MISS_ACK)
+            reg(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK;
         SetAddress(addr);
-
-        // Push N read commands (last one with STOP)
         for (uint8_t i = 0; i < len; i++) {
             uint8_t cmd = (i == 0) ? (I2C_CMD_START | I2C_CMD_READ) : I2C_CMD_READ;
             if (i == len - 1) cmd |= I2C_CMD_STOP;
             if (!PushCmd(cmd)) return 2;
         }
-
-        // Read bytes as they arrive
         for (uint8_t i = 0; i < len; i++) {
             uint32_t timeout = I2C_TIMEOUT_LOOPS;
             while ((reg(I2C_REG_FIFO) & I2C_FIFO_RD_EMPTY) && timeout > 0) { --timeout; }
             if (timeout == 0) return 2;
             buf[i] = (uint8_t)(reg(I2C_REG_DATA) & 0xFFu);
         }
-
         if (!WaitBusy()) return 2;
-
         if (reg(I2C_REG_STATUS) & I2C_STATUS_MISS_ACK) {
-            reg(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK; // W1C
+            reg(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK;
             return 1;
         }
-
         return 0;
     }
 
+    // ── Arduino Wire-compatible API (implemented in i2c.cpp) ─────────────────
+    void    begin();
+    void    setClock(uint32_t freq);
+    void    beginTransmission(uint8_t addr);
+    uint8_t write(uint8_t value);
+    uint8_t endTransmission(bool sendStop = true);
+    uint8_t requestFrom(uint8_t addr, uint8_t qty, bool stop = true);
+    int     available() const;
+    int     read();
+    int     peek() const;
+    void    flush();
+
 private:
-    volatile uint32_t& reg(uint32_t offset) const {
-        return *reinterpret_cast<volatile uint32_t*>(BASE + offset);  // compile-time constant
+    inline volatile uint32_t& reg(uint32_t offset) const {
+        return *reinterpret_cast<volatile uint32_t*>(base_ + offset);
     }
 
-    // ── Wire API state ────────────────────────────────────────────────────────
-    // Zero-initialised by startup BSS zeroing (which now covers .sbss too).
-    uint8_t tx_address_;
-    uint8_t tx_buffer_[I2C_TX_BUFFER_SIZE];
-    uint8_t tx_length_;
-    uint8_t rx_buffer_[I2C_RX_BUFFER_SIZE];
-    uint8_t rx_length_;
-    uint8_t rx_position_;
-
-public:
-    // ── Arduino Wire-compatible API ───────────────────────────────────────────
-
-    // Initialise bus at 400 kHz (prescale = CLK_HZ / (400000 * 4) = 15 @ 25 MHz).
-    void begin() { Init((uint16_t)(CLK_HZ / (400000UL * 4UL))); }
-
-    // Set bus clock; call before begin() if a non-default frequency is needed.
-    void setClock(uint32_t freq) {
-        Init((uint16_t)(CLK_HZ / (freq * 4UL)));
-    }
-
-    void beginTransmission(uint8_t addr) {
-        tx_address_ = addr;
-        tx_length_  = 0;
-    }
-
-    uint8_t write(uint8_t value) {
-        if (tx_length_ >= I2C_TX_BUFFER_SIZE) return 0;
-        tx_buffer_[tx_length_++] = value;
-        return 1;
-    }
-
-    // sendStop is accepted for API compatibility; we always issue a stop for now.
-    uint8_t endTransmission(bool /*sendStop*/ = true) {
-        if (tx_length_ == 0) return 4;
-        int rc = Write(tx_address_, tx_buffer_, tx_length_);
-        tx_length_ = 0;
-        if (rc == 0) return 0;  // success
-        if (rc == 1) return 2;  // NACK (address or data)
-        return 4;               // timeout / other error
-    }
-
-    uint8_t requestFrom(uint8_t addr, uint8_t qty, bool /*stop*/ = true) {
-        rx_length_   = 0;
-        rx_position_ = 0;
-        if (qty == 0 || qty > I2C_RX_BUFFER_SIZE) return 0;
-        if (Read(addr, rx_buffer_, qty) != 0) return 0;
-        rx_length_ = qty;
-        return qty;
-    }
-
-    int available() const { return (int)(rx_length_ - rx_position_); }
-
-    int read() {
-        if (rx_position_ >= rx_length_) return -1;
-        return rx_buffer_[rx_position_++];
-    }
-
-    int peek() const {
-        if (rx_position_ >= rx_length_) return -1;
-        return rx_buffer_[rx_position_];
-    }
-
-    void flush() {}
+    uint32_t base_;
+    uint8_t  tx_address_;
+    uint8_t  tx_buffer_[I2C_TX_BUFFER_SIZE];
+    uint8_t  tx_length_;
+    uint8_t  rx_buffer_[I2C_RX_BUFFER_SIZE];
+    uint8_t  rx_length_;
+    uint8_t  rx_position_;
 };
 
 #endif /* I2C_H */
