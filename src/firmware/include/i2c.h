@@ -39,6 +39,16 @@
 
 #include <stdint.h>
 
+// Temporary diagnostic: toggles D2 as the probe path advances.
+// If the LED stops changing, the last step before that is the stall point.
+static volatile uint32_t* const I2C_TRACE_LED = reinterpret_cast<volatile uint32_t*>(0x10000000UL);
+static inline void i2c_trace_toggle(void)
+{
+    *I2C_TRACE_LED = (*I2C_TRACE_LED ^ 1u);
+}
+
+// wb_i2c base address (compile-time constant for direct MMIO)
+#define I2C0_BASE  0x10005000u
 // ─── Register offsets ────────────────────────────────────────────────────────
 #define I2C_REG_STATUS   0x00u
 #define I2C_REG_FIFO     0x04u
@@ -73,118 +83,132 @@
 // ─── Timing ──────────────────────────────────────────────────────────────────
 // prescale = Fclk / (FI2C × 4)  →  100 kHz @ 25 MHz = 62,  400 kHz = 15
 #define I2C_CLK_HZ        25000000UL
-#define I2C_TIMEOUT_LOOPS 200000u
+#define I2C_TIMEOUT_LOOPS 2000000u
 
 // ─── Register accessor (volatile: every access goes to hardware) ─────────────
-#define I2C_REG(base, off) \
-    (*((volatile uint32_t *)((uint32_t)(base) + (uint32_t)(off))))
+#define I2C_REG(off) \
+    (*((volatile uint32_t *)((uint32_t)(I2C0_BASE) + (uint32_t)(off))))
 
 // ─── Primitives (all static inline: compiler folds base constant → direct addr)
 
-static inline void i2c_init(uint32_t base, uint16_t prescale)
+static inline void i2c_init(uint16_t prescale)
 {
-    I2C_REG(base, I2C_REG_PRESC_LO) = (uint32_t)(prescale & 0xFFu);
-    I2C_REG(base, I2C_REG_PRESC_HI) = (uint32_t)((prescale >> 8) & 0xFFu);
-}
-
-static inline bool i2c_nack_detected(uint32_t base)
-{
-    return (I2C_REG(base, I2C_REG_STATUS) & I2C_STATUS_MISS_ACK) != 0;
-}
-
-static inline void i2c_clear_nack(uint32_t base)
-{
-    I2C_REG(base, I2C_REG_STATUS) = I2C_STATUS_MISS_ACK;
-}
-
-static inline void i2c_set_address(uint32_t base, uint8_t addr)
-{
-    I2C_REG(base, I2C_REG_ADDR) = (uint32_t)addr;
-}
-
-static inline bool i2c_push_data(uint32_t base, uint8_t data)
-{
+    I2C_REG(I2C_REG_PRESC_LO) = (uint32_t)(prescale & 0xFFu);
+    I2C_REG(I2C_REG_PRESC_HI) = (uint32_t)((prescale >> 8) & 0xFFu);
+    I2C_REG(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK;
+    I2C_REG(I2C_REG_CMD) = I2C_CMD_STOP;
     uint32_t timeout = I2C_TIMEOUT_LOOPS;
-    while ((I2C_REG(base, I2C_REG_FIFO) & I2C_FIFO_WR_FULL) && timeout > 0) --timeout;
+    while ((I2C_REG(I2C_REG_FIFO) & I2C_FIFO_CMD_EMPTY) == 0 && timeout > 0) --timeout;
+    timeout = I2C_TIMEOUT_LOOPS;
+    while ((I2C_REG(I2C_REG_STATUS) & I2C_STATUS_BUSY) && timeout > 0) --timeout;
+}
+
+static inline bool i2c_nack_detected(void)
+{
+    return (I2C_REG(I2C_REG_STATUS) & I2C_STATUS_MISS_ACK) != 0;
+}
+
+static inline void i2c_clear_nack(void)
+{
+    I2C_REG(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK;
+}
+
+static inline void i2c_set_address(uint8_t addr)
+{
+    I2C_REG(I2C_REG_ADDR) = (uint32_t)addr;
+}
+
+static inline bool i2c_push_data(uint8_t data)
+{
+    i2c_trace_toggle();
+    uint32_t timeout = I2C_TIMEOUT_LOOPS;
+    while ((I2C_REG(I2C_REG_FIFO) & I2C_FIFO_WR_FULL) && timeout > 0) --timeout;
     if (timeout == 0) return false;
-    I2C_REG(base, I2C_REG_DATA) = (uint32_t)data;
+    I2C_REG(I2C_REG_DATA) = (uint32_t)data;
     return true;
 }
 
-static inline bool i2c_push_cmd(uint32_t base, uint8_t cmd)
+static inline bool i2c_push_cmd(uint8_t cmd)
 {
+    i2c_trace_toggle();
     uint32_t timeout = I2C_TIMEOUT_LOOPS;
-    while ((I2C_REG(base, I2C_REG_FIFO) & I2C_FIFO_CMD_FULL) && timeout > 0) --timeout;
+    while ((I2C_REG(I2C_REG_FIFO) & I2C_FIFO_CMD_FULL) && timeout > 0) --timeout;
     if (timeout == 0) return false;
-    I2C_REG(base, I2C_REG_CMD) = (uint32_t)cmd;
+    I2C_REG(I2C_REG_CMD) = (uint32_t)cmd;
     return true;
 }
 
-static inline bool i2c_wait_busy(uint32_t base)
+static inline bool i2c_wait_busy(void)
 {
+    i2c_trace_toggle();
     uint32_t timeout = I2C_TIMEOUT_LOOPS;
-    while ((I2C_REG(base, I2C_REG_FIFO) & I2C_FIFO_CMD_EMPTY) == 0 && timeout > 0) --timeout;
+    while ((I2C_REG(I2C_REG_FIFO) & I2C_FIFO_CMD_EMPTY) == 0 && timeout > 0) --timeout;
     if (timeout == 0) return false;
     timeout = I2C_TIMEOUT_LOOPS;
-    while ((I2C_REG(base, I2C_REG_STATUS) & I2C_STATUS_BUSY) && timeout > 0) --timeout;
+    while ((I2C_REG(I2C_REG_STATUS) & I2C_STATUS_BUSY) && timeout > 0) --timeout;
     return timeout > 0;
 }
 
 // ─── High-level operations ───────────────────────────────────────────────────
 
 // Write len bytes to 7-bit addr. Returns: 0=ACK, 1=NACK, 2=timeout.
-static inline int i2c_write(uint32_t base, uint8_t addr,
+static inline int i2c_write(uint8_t addr,
                              const uint8_t *buf, uint8_t len)
 {
+    i2c_trace_toggle();
     if (len == 0) return 0;
-    if (i2c_nack_detected(base)) i2c_clear_nack(base);
-    i2c_set_address(base, addr);
+    if (i2c_nack_detected()) i2c_clear_nack();
+    i2c_set_address(addr);
     if (len == 1) {
-        if (!i2c_push_data(base, buf[0])) return 2;
-        if (!i2c_push_cmd(base, I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP)) return 2;
+        if (!i2c_push_data(buf[0])) return 2;
+        if (!i2c_push_cmd(I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP)) return 2;
     } else {
-        if (!i2c_push_data(base, buf[0])) return 2;
-        if (!i2c_push_cmd(base, I2C_CMD_START | I2C_CMD_WRITE)) return 2;
+        if (!i2c_push_data(buf[0])) return 2;
+        if (!i2c_push_cmd(I2C_CMD_START | I2C_CMD_WRITE)) return 2;
         for (uint8_t i = 1; i < len - 1; i++) {
-            if (!i2c_push_data(base, buf[i])) return 2;
-            if (!i2c_push_cmd(base, I2C_CMD_WRITE)) return 2;
+            if (!i2c_push_data(buf[i])) return 2;
+            if (!i2c_push_cmd(I2C_CMD_WRITE)) return 2;
         }
-        if (!i2c_push_data(base, buf[len - 1])) return 2;
-        if (!i2c_push_cmd(base, I2C_CMD_WRITE | I2C_CMD_STOP)) return 2;
+        if (!i2c_push_data(buf[len - 1])) return 2;
+        if (!i2c_push_cmd(I2C_CMD_WRITE | I2C_CMD_STOP)) return 2;
     }
-    if (!i2c_wait_busy(base)) return 2;
-    if (i2c_nack_detected(base)) { i2c_clear_nack(base); return 1; }
+    if (!i2c_wait_busy()) return 2;
+    if (i2c_nack_detected()) { i2c_clear_nack(); return 1; }
     return 0;
 }
 
 // Read len bytes from 7-bit addr. Returns: 0=OK, 1=NACK, 2=timeout.
-static inline int i2c_read(uint32_t base, uint8_t addr,
+static inline int i2c_read(uint8_t addr,
                             uint8_t *buf, uint8_t len)
 {
     if (len == 0) return 0;
-    if (i2c_nack_detected(base)) i2c_clear_nack(base);
-    i2c_set_address(base, addr);
+    if (i2c_nack_detected()) i2c_clear_nack();
+    i2c_set_address(addr);
     for (uint8_t i = 0; i < len; i++) {
         uint8_t cmd = (i == 0) ? (I2C_CMD_START | I2C_CMD_READ) : I2C_CMD_READ;
         if (i == len - 1) cmd |= I2C_CMD_STOP;
-        if (!i2c_push_cmd(base, cmd)) return 2;
+        if (!i2c_push_cmd(cmd)) return 2;
     }
     for (uint8_t i = 0; i < len; i++) {
         uint32_t timeout = I2C_TIMEOUT_LOOPS;
-        while ((I2C_REG(base, I2C_REG_FIFO) & I2C_FIFO_RD_EMPTY) && timeout > 0) --timeout;
+        while ((I2C_REG(I2C_REG_FIFO) & I2C_FIFO_RD_EMPTY) && timeout > 0) --timeout;
         if (timeout == 0) return 2;
-        buf[i] = (uint8_t)(I2C_REG(base, I2C_REG_DATA) & 0xFFu);
+        buf[i] = (uint8_t)(I2C_REG(I2C_REG_DATA) & 0xFFu);
     }
-    if (!i2c_wait_busy(base)) return 2;
-    if (i2c_nack_detected(base)) { i2c_clear_nack(base); return 1; }
+    if (!i2c_wait_busy()) return 2;
+    if (i2c_nack_detected()) { i2c_clear_nack(); return 1; }
     return 0;
 }
 
 // Probe: returns true if device ACKs at 7-bit addr.
-static inline bool i2c_probe(uint32_t base, uint8_t addr)
+// We try a couple of times so a stale bus state or a prior missed ACK does
+// not leave the probe stuck forever on the first transaction.
+static inline bool i2c_probe(uint8_t addr)
 {
+    i2c_trace_toggle();
     uint8_t dummy = 0x00u;
-    return i2c_write(base, addr, &dummy, 1) == 0;
+    if (i2c_write(addr, &dummy, 1) == 0) return true;
+    return false;
 }
 
 #endif /* I2C_H */

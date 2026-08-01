@@ -127,7 +127,8 @@ module top (
     wire i2c_busy_debug;
     wire i2c_wb_debug;
     //assign led_e18 = i2c_busy_debug; // to debug: light LED on I2C bus activity
-    assign led_e18 = ~i2c_wb_debug; // to debug: light LED on I2C wishbone bus access
+    //assign led_e18 = ~i2c_wb_debug; // to debug: light LED on I2C wishbone bus access
+    assign led_e18 = led0_out;
     assign led_e16 = led1_out;
 
     wire led_d2_out;

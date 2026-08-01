@@ -2,7 +2,7 @@
 #include "bigsister.h"
 #include "sdram.h"
 #include "led.h"
-#include "i2c.h"
+#include "i2c0.h"
 #include "u8g2.h"
 #include "u8g2_hal.h"
 
@@ -10,7 +10,7 @@
 static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x10000000UL);
 #define LED0_BASE  0x10000004UL
 #define LED1_BASE  0x10000008UL
-#define I2C0_BASE  0x10005000u
+
 
 
 // ─── OLED ────────────────────────────────────────────────────────────────────
@@ -53,9 +53,10 @@ int main(void)
     uint32_t next_toggle_ms = *TIMER_MS + kBlinkPeriodMs;
     *LED_D2 = 1u;
 
-    i2c_init(I2C0_BASE, 15); // 400 kHz @ 25 MHz
+    i2c0_init(15); // 400 kHz @ 25 MHz
+    i2c0_set_address(0x3C); // OLED address
     while (1) {
-        if(!s_oled_ok) s_oled_ok = i2c_probe(I2C0_BASE, 0x3C); // Try i2c address 0x3C (OLED)
+        if(!s_oled_ok) s_oled_ok = i2c0_probe(0x3C); // Try i2c address 0x3C (OLED)
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             led_on = !led_on;
@@ -64,22 +65,18 @@ int main(void)
             if (!s_oled_ok) led1.blink(600u);
             
             if(s_oled_ok && !s_oled_init) {
-                // Diagnostic blinks: 1=before Setup, 2=before InitDisplay, 3=before PowerSave, 4=before Font → done
-                auto blink_n = [&](int n) { for(int i=0;i<n;++i){ led0.blink(150u); delay(250u); } delay(500u); };
-
-                blink_n(1);  // 1 blink → entering setup
+                // Diagnostic blinks: 1=before Setup, 2=before InitDisplay, 3=before PowerSave, 4=before Font → done                
+                for(int i=0;i<5;++i){ led0.blink(150u); delay(250u); }
                 u8g2_Setup_ssd1306_i2c_128x64_noname_f(&u8g2, U8G2_R0, u8x8_byte_i2c_hw, u8x8_gpio_delay_hw);
+                for(int i=0;i<4;++i){ led0.blink(150u); delay(250u); }
                 u8g2_SetI2CAddress(&u8g2, 0x3C << 1);
-
-                blink_n(2);  // 2 blinks → before InitDisplay (most likely crash point)
+                for(int i=0;i<3;++i){ led0.blink(150u); delay(250u); }
                 u8g2_InitDisplay(&u8g2);
-
-                blink_n(3);  // 3 blinks → before PowerSave
+                for(int i=0;i<2;++i){ led0.blink(150u); delay(250u); }
                 u8g2_SetPowerSave(&u8g2, 0);
 
-                blink_n(4);  // 4 blinks → before Font
+                for(int i=0;i<1;++i){ led0.blink(150u); delay(250u); }
                 u8g2_SetFont(&u8g2, u8g2_font_5x7_tf);
-
                 s_oled_init = true;
             }
             if(s_oled_ok && s_oled_init) {
