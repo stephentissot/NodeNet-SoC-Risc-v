@@ -65,19 +65,29 @@ int main(void)
             
             if(s_oled_ok && !s_oled_init) {
                 // Diagnostic blinks: 1=before Setup, 2=before InitDisplay, 3=before PowerSave, 4=before Font → done
-                auto blink_n = [&](int n) { for(int i=0;i<n;++i){ led0.blink(150u); delay(250u); } delay(500u); };
-
-                blink_n(1);  // 1 blink → entering setup
+                
+                for(int i=0;i<8;++i){ led0.blink(150u); delay(250u); }  // 8 blink → entering setup
                 u8g2_Setup_ssd1306_i2c_128x64_noname_f(&u8g2, U8G2_R0, u8x8_byte_i2c_hw, u8x8_gpio_delay_hw);
                 u8g2_SetI2CAddress(&u8g2, 0x3C << 1);
 
-                blink_n(2);  // 2 blinks → before InitDisplay (most likely crash point)
+                for(int i=0;i<7;++i){ led0.blink(150u); delay(250u); }  // 7 blinks → before InitDisplay (most likely crash point)
+
+                // Direct i2c_write test: SSD1306 "display off" command before letting u8g2 do it
+                // If this blinks FAST → i2c_write works fine at this point
+                // If no blink → i2c_write hangs here too
+                {
+                    static const uint8_t cmd[] = {0x00u, 0xAEu}; // control + display-off
+                    bool ok = (i2c_write(I2C0_BASE, 0x3C, cmd, 2) == 0);
+                    if(ok) { for(int i=0;i<3;++i){ led0.blink(50u); delay(100u); } } // 3 fast = OK
+                    else   { for(int i=0;i<3;++i){ led1.blink(500u); delay(600u); } } // 3 slow on led1 = FAIL
+                }
+
                 u8g2_InitDisplay(&u8g2);
 
-                blink_n(3);  // 3 blinks → before PowerSave
+                for(int i=0;i<6;++i){ led0.blink(150u); delay(250u); }  // 6 blinks → before PowerSave
                 u8g2_SetPowerSave(&u8g2, 0);
 
-                blink_n(4);  // 4 blinks → before Font
+                for(int i=0;i<5;++i){ led0.blink(150u); delay(250u); }  // 5 blinks → before Font
                 u8g2_SetFont(&u8g2, u8g2_font_5x7_tf);
 
                 s_oled_init = true;

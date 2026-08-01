@@ -145,12 +145,12 @@ static inline int i2c_write(uint32_t base, uint8_t addr,
     } else {
         if (!i2c_push_data(base, buf[0])) return 2;
         if (!i2c_push_cmd(base, I2C_CMD_START | I2C_CMD_WRITE)) return 2;
-        for (uint8_t i = 1; i < len - 1; i++) {
+        for (uint8_t i = 1; i < len; i++) {
             if (!i2c_push_data(base, buf[i])) return 2;
             if (!i2c_push_cmd(base, I2C_CMD_WRITE)) return 2;
         }
-        if (!i2c_push_data(base, buf[len - 1])) return 2;
-        if (!i2c_push_cmd(base, I2C_CMD_WRITE | I2C_CMD_STOP)) return 2;
+        // STOP as a standalone command — WRITE|STOP combined is unreliable on this core
+        if (!i2c_push_cmd(base, I2C_CMD_STOP)) return 2;
     }
     if (!i2c_wait_busy(base)) return 2;
     if (i2c_nack_detected(base)) { i2c_clear_nack(base); return 1; }
