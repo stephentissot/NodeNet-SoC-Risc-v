@@ -190,7 +190,7 @@ static inline int i2c0_write(uint8_t addr, const uint8_t *buf, size_t len)
         if (!i2c0_push_data(buf[len - 1u])) {
             return I2C0_FIFO_ERROR;
         }
-        if (!i2c0_push_cmd(I2C0_CMD_WRITE | I2C0_CMD_STOP)) {
+        if (!i2c0_push_cmd(I2C0_CMD_WRITE | I2C0_CMD_STOP)) { 
             return I2C0_FIFO_ERROR;
         }
     }

@@ -14,37 +14,34 @@
 
 #include "u8g2_hal.h"
 #include "i2c0.h"
+#include "bigsister.h"
 #include <stdint.h>
 
-// ─── Clock frequency (must match CLK_FREQ_MHZ in top.sv) ────────────────────
-static constexpr uint32_t I2C0_CLK_HZ = 25000000UL;
-
-// ─── RISC-V cycle counter ────────────────────────────────────────────────────
-
-static inline uint32_t rdcycle32(void) {
-    uint32_t v;
-    asm volatile("rdcycle %0" : "=r"(v));
-    return v;
-}
+// ─── Delay helpers ─────────────────────────────────────────────────────────
+// Use the SoC's hardware timer through millis() to stay aligned with the rest
+// of the bare-metal firmware instead of relying on rdcycle-based spin loops.
 
 static void delay_ms(uint32_t ms) {
-    uint32_t start = rdcycle32();
-    uint32_t ticks = (uint32_t)((uint64_t)ms * (I2C0_CLK_HZ / 1000UL));  // no overflow
-    while ((rdcycle32() - start) < ticks);
+    const uint32_t start = millis();
+    while ((uint32_t)(millis() - start) < ms) {
+        __asm__ volatile("" ::: "memory");
+    }
 }
 
 static void delay_us(uint32_t us) {
-    uint32_t start = rdcycle32();
-    uint32_t ticks = us * (I2C0_CLK_HZ / 1000000);
-    while ((rdcycle32() - start) < ticks);
+    const uint32_t start = millis();
+    const uint32_t target_ms = (us + 999u) / 1000u;
+    while ((uint32_t)(millis() - start) < target_ms) {
+        __asm__ volatile("" ::: "memory");
+    }
 }
 
 static void delay_100ns(uint32_t count) {
-    // count × 100 ns
-    // At 25 MHz, 100 ns = 2.5 cycles; use 64-bit intermediate to avoid overflow
-    uint32_t start = rdcycle32();
-    uint32_t ticks = (uint32_t)((uint64_t)count * I2C0_CLK_HZ / 10000000UL);
-    while ((rdcycle32() - start) < ticks);
+    const uint32_t start = millis();
+    const uint32_t target_ms = (count + 9999u) / 10000u;
+    while ((uint32_t)(millis() - start) < target_ms) {
+        __asm__ volatile("" ::: "memory");
+    }
 }
 
 // ─── I2C transfer state ──────────────────────────────────────────────────────
@@ -63,7 +60,7 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
     switch (msg) {
 
     case U8X8_MSG_BYTE_INIT:
-        i2c0_init((uint16_t)(I2C0_CLK_HZ / (400000UL * 4)));
+        //i2c0_init((uint16_t)(I2C0_CLK_HZ / (400000UL * 4))); // init already done in main.cpp
         s_buf_len = 0;
         break;
 

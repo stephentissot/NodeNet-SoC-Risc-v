@@ -23,9 +23,11 @@ SOURCES := $(call rwildcard,src/,*.sv) \
            $(call rwildcard,src/,*.v)
 
 
-.PHONY: all firmware-build firmware-test bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw
+.PHONY: all firmware-build firmware-test bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only
 
 all: firmware-build $(BUILD)/$(TOP).bit
+
+fw firmware-only: firmware-build
 
 LAB_FIRMWARE_HEX     = src/firmware/build/lab.hex
 LAB_PADDED_HEX       = $(BUILD)/lab.padded.hex
