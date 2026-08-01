@@ -48,11 +48,13 @@ static void delay_100ns(uint32_t count) {
 }
 
 // ─── I2C transfer state ──────────────────────────────────────────────────────
+// u8g2 never sends more than 32 bytes between START_TRANSFER and END_TRANSFER.
+// We accumulate into a buffer and call i2c_write() at END_TRANSFER — the same
+// proven path used by i2c_probe() that is confirmed working.
 
-static uint8_t  s_i2c_addr   = 0;
-static bool     s_tx_started = false;
-static uint8_t  s_last_data  = 0;     // last byte queued, held back to attach STOP
-static bool     s_has_pending = false; // true when s_last_data is waiting
+static uint8_t  s_i2c_addr  = 0;
+static uint8_t  s_buf[32];   // max 32 bytes per u8g2 transfer
+static uint8_t  s_buf_len   = 0;
 
 // ─── I2C byte callback ───────────────────────────────────────────────────────
 
@@ -62,52 +64,30 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
 
     case U8X8_MSG_BYTE_INIT:
         i2c_init(I2C0_BASE, (uint16_t)(I2C0_CLK_HZ / (400000UL * 4)));
-        s_tx_started = false;
+        s_buf_len = 0;
         break;
 
     case U8X8_MSG_BYTE_START_TRANSFER:
-        s_i2c_addr   = u8x8_GetI2CAddress(u8x8) >> 1;
-        s_tx_started = false;
-        s_has_pending = false;
-        if (i2c_nack_detected(I2C0_BASE)) i2c_clear_nack(I2C0_BASE);  // clear stale flag
-        i2c_set_address(I2C0_BASE, s_i2c_addr);
+        s_i2c_addr = u8x8_GetI2CAddress(u8x8) >> 1;
+        s_buf_len  = 0;
+        if (i2c_nack_detected(I2C0_BASE)) i2c_clear_nack(I2C0_BASE);
         break;
 
     case U8X8_MSG_BYTE_SEND: {
         const uint8_t *data = static_cast<const uint8_t *>(arg_ptr);
         for (uint8_t i = 0; i < arg_int; i++) {
-            // Flush the previously held byte (without STOP) before queuing next
-            if (s_has_pending) {
-                uint8_t cmd = I2C_CMD_WRITE;
-                if (!s_tx_started) { cmd |= I2C_CMD_START; s_tx_started = true; }
-                if (!i2c_push_data(I2C0_BASE, s_last_data)) { s_has_pending = false; s_tx_started = false; return 0; }
-                if (!i2c_push_cmd(I2C0_BASE, cmd))           { s_has_pending = false; s_tx_started = false; return 0; }
-            }
-            s_last_data   = data[i];
-            s_has_pending = true;
+            if (s_buf_len < sizeof(s_buf))
+                s_buf[s_buf_len++] = data[i];
         }
         break;
     }
 
     case U8X8_MSG_BYTE_END_TRANSFER:
-        // Flush the last pending byte WITH STOP attached (same as i2c_write confirmed path)
-        if (s_has_pending) {
-            uint8_t cmd = I2C_CMD_WRITE | I2C_CMD_STOP;
-            if (!s_tx_started) { cmd |= I2C_CMD_START; s_tx_started = true; }
-            if (!i2c_push_data(I2C0_BASE, s_last_data)) { s_has_pending = false; s_tx_started = false; return 0; }
-            if (!i2c_push_cmd(I2C0_BASE, cmd))           { s_has_pending = false; s_tx_started = false; return 0; }
-            s_has_pending = false;
+        // Send accumulated bytes using i2c_write — the proven probe path (WRITE|STOP)
+        if (s_buf_len > 0) {
+            i2c_write(I2C0_BASE, s_i2c_addr, s_buf, s_buf_len);
         }
-        if (!i2c_wait_busy(I2C0_BASE)) {
-            s_tx_started = false;
-            return 0;
-        }
-        if (i2c_nack_detected(I2C0_BASE)) {
-            i2c_clear_nack(I2C0_BASE);
-            s_tx_started = false;
-            return 0;
-        }
-        s_tx_started = false;
+        s_buf_len = 0;
         break;
 
     default:

@@ -15,7 +15,7 @@ static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x
 
 // ─── OLED ────────────────────────────────────────────────────────────────────
 static u8g2_t u8g2;
-static bool s_oled_ok = false;
+
 
 static void oled_init() {
     u8g2_Setup_ssd1306_i2c_128x64_noname_f(&u8g2, U8G2_R0,
@@ -34,6 +34,11 @@ static void oled_show(const char *line0, const char *line1 = nullptr,
     if (line1) u8g2_DrawStr(&u8g2, 0, 20, line1);
     if (line2) u8g2_DrawStr(&u8g2, 0, 30, line2);
     u8g2_SendBuffer(&u8g2);
+}
+
+static void delay(uint32_t ms) {
+    uint32_t start = millis();
+    while ((int32_t)(millis() - start - ms) < 0) {}
 }
 
 int main(void)
@@ -57,10 +62,25 @@ int main(void)
             *LED_D2 = led_on ? 0u : 1u;
             next_toggle_ms += kBlinkPeriodMs;
             if (!s_oled_ok) led1.blink(600u);
-            else led0.blink(100u);
+            
             if(s_oled_ok && !s_oled_init) {
-                oled_init();
-                s_oled_init = true;                
+                // Diagnostic blinks: 1=before Setup, 2=before InitDisplay, 3=before PowerSave, 4=before Font → done
+                auto blink_n = [&](int n) { for(int i=0;i<n;++i){ led0.blink(150u); delay(250u); } delay(500u); };
+
+                blink_n(1);  // 1 blink → entering setup
+                u8g2_Setup_ssd1306_i2c_128x64_noname_f(&u8g2, U8G2_R0, u8x8_byte_i2c_hw, u8x8_gpio_delay_hw);
+                u8g2_SetI2CAddress(&u8g2, 0x3C << 1);
+
+                blink_n(2);  // 2 blinks → before InitDisplay (most likely crash point)
+                u8g2_InitDisplay(&u8g2);
+
+                blink_n(3);  // 3 blinks → before PowerSave
+                u8g2_SetPowerSave(&u8g2, 0);
+
+                blink_n(4);  // 4 blinks → before Font
+                u8g2_SetFont(&u8g2, u8g2_font_5x7_tf);
+
+                s_oled_init = true;
             }
             if(s_oled_ok && s_oled_init) {
                 oled_show("I2C OK", "OLED found at 0x3C");
