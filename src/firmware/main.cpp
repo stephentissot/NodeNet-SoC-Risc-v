@@ -10,7 +10,7 @@
 static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x10000000UL);
 #define LED0_BASE  0x10000004UL
 #define LED1_BASE  0x10000008UL
-#define I2C0_BASE  0x10005000u
+/* I2C0_BASE défini dans i2c.h */
 
 
 // ─── OLED ────────────────────────────────────────────────────────────────────
@@ -53,9 +53,9 @@ int main(void)
     uint32_t next_toggle_ms = *TIMER_MS + kBlinkPeriodMs;
     *LED_D2 = 1u;
 
-    i2c_init(I2C0_BASE, 15); // 400 kHz @ 25 MHz
+    i2c_init(15); // 400 kHz @ 25 MHz
     while (1) {
-        if(!s_oled_ok) s_oled_ok = i2c_probe(I2C0_BASE, 0x3C); // Try i2c address 0x3C (OLED)
+        if(!s_oled_ok) s_oled_ok = i2c_probe(0x3C); // Try i2c address 0x3C (OLED)
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             led_on = !led_on;
@@ -77,7 +77,7 @@ int main(void)
                 // If no blink → i2c_write hangs here too
                 {
                     static const uint8_t cmd[] = {0x00u, 0xAEu}; // control + display-off
-                    bool ok = (i2c_write(I2C0_BASE, 0x3C, cmd, 2) == 0);
+                    bool ok = (i2c_write(0x3C, cmd, 2) == 0);
                     if(ok) { for(int i=0;i<3;++i){ led0.blink(50u); delay(100u); } } // 3 fast = OK
                     else   { for(int i=0;i<3;++i){ led1.blink(500u); delay(600u); } } // 3 slow on led1 = FAIL
                 }

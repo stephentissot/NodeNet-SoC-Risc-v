@@ -17,7 +17,7 @@
 
 // ─── Clock frequency (must match CLK_FREQ_MHZ in top.sv) ────────────────────
 static constexpr uint32_t I2C0_CLK_HZ = 25000000UL;
-#define I2C0_BASE 0x10005000u
+/* I2C0_BASE est défini dans i2c.h */
 
 // ─── RISC-V cycle counter ────────────────────────────────────────────────────
 
@@ -63,14 +63,14 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
     switch (msg) {
 
     case U8X8_MSG_BYTE_INIT:
-        i2c_init(I2C0_BASE, (uint16_t)(I2C0_CLK_HZ / (400000UL * 4)));
+        i2c_init((uint16_t)(I2C0_CLK_HZ / (400000UL * 4)));
         s_buf_len = 0;
         break;
 
     case U8X8_MSG_BYTE_START_TRANSFER:
         s_i2c_addr = u8x8_GetI2CAddress(u8x8) >> 1;
         s_buf_len  = 0;
-        if (i2c_nack_detected(I2C0_BASE)) i2c_clear_nack(I2C0_BASE);
+        if (i2c_nack_detected()) i2c_clear_nack();
         break;
 
     case U8X8_MSG_BYTE_SEND: {
@@ -85,7 +85,7 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
     case U8X8_MSG_BYTE_END_TRANSFER:
         // Send accumulated bytes using i2c_write — the proven probe path (WRITE|STOP)
         if (s_buf_len > 0) {
-            i2c_write(I2C0_BASE, s_i2c_addr, s_buf, s_buf_len);
+            i2c_write(s_i2c_addr, s_buf, s_buf_len);
         }
         s_buf_len = 0;
         break;
