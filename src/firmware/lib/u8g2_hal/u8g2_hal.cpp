@@ -17,15 +17,7 @@
 
 // ─── Clock frequency (must match CLK_FREQ_MHZ in top.sv) ────────────────────
 static constexpr uint32_t I2C0_CLK_HZ = 25000000UL;
-
-// I2C bus pointer — set by u8g2_hal_set_i2c() before any u8g2 call.
-// Using a pointer (no constructor) means no .init_array entry and no wasted
-// BSS storage when u8g2 is not active.  P1: shares the instance owned by main().
-static I2C* s_i2c_ptr = nullptr;
-
-void u8g2_hal_set_i2c(I2C* bus) {
-    s_i2c_ptr = bus;
-}
+#define I2C0_BASE 0x10005000u
 
 // ─── RISC-V cycle counter ────────────────────────────────────────────────────
 
@@ -64,39 +56,32 @@ static bool     s_tx_started = false;
 
 extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
                                      uint8_t arg_int, void *arg_ptr) {
-    if (!s_i2c_ptr) return 0;  // bus not configured via u8g2_hal_set_i2c()
     switch (msg) {
 
     case U8X8_MSG_BYTE_INIT:
-        // Set I2C clock to 400 kHz for fast display updates
-        s_i2c_ptr->Init((uint16_t)(I2C0_CLK_HZ / (400000UL * 4)));
+        i2c_init(I2C0_BASE, (uint16_t)(I2C0_CLK_HZ / (400000UL * 4)));
         s_tx_started = false;
         break;
 
     case U8X8_MSG_BYTE_START_TRANSFER:
-        // u8g2 stores address in 8-bit form (7-bit << 1); shift back to 7-bit
         s_i2c_addr   = u8x8_GetI2CAddress(u8x8) >> 1;
         s_tx_started = false;
-        s_i2c_ptr->SetAddress(s_i2c_addr);
+        i2c_set_address(I2C0_BASE, s_i2c_addr);
         break;
 
     case U8X8_MSG_BYTE_SEND: {
-        // Push bytes to I2C TX FIFO + one WRITE command per byte.
-        // For the very first byte of the transfer, add START to the command.
-        // The hardware stalls automatically when FIFOs are full.
         const uint8_t *data = static_cast<const uint8_t *>(arg_ptr);
         for (uint8_t i = 0; i < arg_int; i++) {
-            if (!s_i2c_ptr->PushData(data[i])) {
+            if (!i2c_push_data(I2C0_BASE, data[i])) {
                 s_tx_started = false;
                 return 0;
             }
-
             uint8_t cmd = I2C_CMD_WRITE;
             if (!s_tx_started) {
                 cmd |= I2C_CMD_START;
                 s_tx_started = true;
             }
-            if (!s_i2c_ptr->PushCmd(cmd)) {
+            if (!i2c_push_cmd(I2C0_BASE, cmd)) {
                 s_tx_started = false;
                 return 0;
             }
@@ -105,23 +90,20 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
     }
 
     case U8X8_MSG_BYTE_END_TRANSFER:
-        // Issue STOP to close the I2C frame
         if (s_tx_started) {
-            if (!s_i2c_ptr->PushCmd(I2C_CMD_STOP)) {
+            if (!i2c_push_cmd(I2C0_BASE, I2C_CMD_STOP)) {
                 s_tx_started = false;
                 return 0;
             }
         }
-        // Block until the hardware has physically finished
-        if (!s_i2c_ptr->WaitBusy()) {
+        if (!i2c_wait_busy(I2C0_BASE)) {
             s_tx_started = false;
             return 0;
         }
-        // Check for NACK: device not found or not responding at this address
-        if (s_i2c_ptr->NackDetected()) {
-            s_i2c_ptr->ClearNack();
+        if (i2c_nack_detected(I2C0_BASE)) {
+            i2c_clear_nack(I2C0_BASE);
             s_tx_started = false;
-            return 0;  // signal failure to u8g2
+            return 0;
         }
         s_tx_started = false;
         break;

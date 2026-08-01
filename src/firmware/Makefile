@@ -24,7 +24,7 @@ U8G2_SRCS=$(wildcard $(U8G2_DIR)/*.c)
 U8G2_CACHE=$(CACHE_ROOT)/u8g2
 U8G2_LIB=$(CACHE_ROOT)/libu8g2.a
 U8G2_OBJS=$(patsubst $(U8G2_DIR)/%.c,$(U8G2_CACHE)/%.o,$(U8G2_SRCS))
-DEPS=$(BUILD)/start.d $(MAIN_OBJ:.o=.d) $(BUILD)/i2c.d $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(U8G2_OBJS:.o=.d)
+DEPS=$(BUILD)/start.d $(MAIN_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(U8G2_OBJS:.o=.d)
 
 CFLAGS=-march=rv32im_zicsr -mabi=ilp32 \
        -Wall \
@@ -71,16 +71,13 @@ $(BUILD):
 $(U8G2_CACHE):
 	mkdir -p $@
 
-$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(BUILD)/i2c.o $(BUILD)/u8g2_hal.o $(U8G2_LIB) | $(BUILD)
+$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(U8G2_LIB) | $(BUILD)
 	$(CROSS)g++ $(LDFLAGS) $^ -o $@
 
 $(BUILD)/start.o: start.S | $(BUILD)
 	$(CROSS)gcc $(CFLAGS) -c $< -o $@
 
 $(MAIN_OBJ): $(MAIN_SRC) | $(BUILD)
-	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
-
-$(BUILD)/i2c.o: i2c.cpp | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/u8g2_hal.o: lib/u8g2_hal/u8g2_hal.cpp | $(BUILD)
