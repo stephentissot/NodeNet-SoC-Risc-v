@@ -42,6 +42,7 @@ CFLAGS=-march=rv32im_zicsr -mabi=ilp32 \
 # -I.            : src/firmware/ on include path (for i2c.h from lib/u8g2_hal/)
 # -Ilib/u8g2_hal : exposes u8g2_hal.h to main.cpp
 CXXFLAGS=$(CFLAGS) \
+
          -std=c++17 \
          -fno-exceptions \
          -fno-rtti \

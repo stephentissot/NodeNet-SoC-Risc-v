@@ -41,10 +41,7 @@ SECTIONS
     {
         __data_start = .;
         *(.data*)
-        /* .sdata: GCC small-data section (gp-relative); must be in RAM */
-        __global_pointer$ = . + 0x800;
         *(.sdata*)
-        . = ALIGN(4);       /* ensure word-aligned copy loop boundary */
         __data_end = .;
     } > RAM AT > ROM
 
@@ -55,9 +52,7 @@ SECTIONS
     {
         __bss_start = .;
         *(.bss*)
-        /* .sbss: GCC small-BSS section (gp-relative); must be zeroed like .bss */
         *(.sbss*)
-        . = ALIGN(4);       /* ensure word-aligned zero loop boundary */
         __bss_end = .;
     } > RAM
 
