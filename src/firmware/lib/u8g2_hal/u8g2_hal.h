@@ -33,7 +33,7 @@
 #ifndef U8G2_HAL_H
 #define U8G2_HAL_H
 
-// i2c.h contains a C++ template — must be included OUTSIDE extern "C"
+// i2c.h contains a C++ class — must be included OUTSIDE extern "C"
 #include "i2c.h"
 
 #ifdef __cplusplus
@@ -64,6 +64,11 @@ uint8_t u8x8_gpio_delay_hw(u8x8_t *u8x8, uint8_t msg,
 
 #ifdef __cplusplus
 }
+
+// Must be called once before any u8g2 display setup.
+// Shares the same I2C bus instance used by main() — avoids two independent
+// states (tx_buffer, tx_length, …) on the same MMIO peripheral.
+void u8g2_hal_set_i2c(I2C* bus);
 #endif
 
 #endif /* U8G2_HAL_H */

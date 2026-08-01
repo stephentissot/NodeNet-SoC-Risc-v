@@ -99,12 +99,12 @@ public:
 
     // ── Low-level MMIO (all inline — prevents GCC -Os out-of-line miscompile) ─
 
-    inline void Init(uint16_t prescale) const {
+    [[gnu::always_inline]] inline void Init(uint16_t prescale) const {
         reg(I2C_REG_PRESC_LO) = prescale & 0xFFu;
         reg(I2C_REG_PRESC_HI) = (prescale >> 8) & 0xFFu;
     }
 
-    inline bool WaitBusy() const {
+    [[gnu::always_inline]] inline bool WaitBusy() const {
         uint32_t timeout = I2C_TIMEOUT_LOOPS;
         while ((reg(I2C_REG_FIFO) & I2C_FIFO_CMD_EMPTY) == 0 && timeout > 0) { --timeout; }
         if (timeout == 0) return false;
@@ -113,15 +113,15 @@ public:
         return timeout > 0;
     }
 
-    inline bool NackDetected() const {
+    [[gnu::always_inline]] inline bool NackDetected() const {
         return (reg(I2C_REG_STATUS) & I2C_STATUS_MISS_ACK) != 0;
     }
 
-    inline void ClearNack() const {
+    [[gnu::always_inline]] inline void ClearNack() const {
         reg(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK;
     }
 
-    inline bool PushData(uint8_t data) const {
+    [[gnu::always_inline]] inline bool PushData(uint8_t data) const {
         uint32_t timeout = I2C_TIMEOUT_LOOPS;
         while ((reg(I2C_REG_FIFO) & I2C_FIFO_WR_FULL) && timeout > 0) { --timeout; }
         if (timeout == 0) return false;
@@ -129,7 +129,7 @@ public:
         return true;
     }
 
-    inline bool PushCmd(uint8_t cmd) const {
+    [[gnu::always_inline]] inline bool PushCmd(uint8_t cmd) const {
         uint32_t timeout = I2C_TIMEOUT_LOOPS;
         while ((reg(I2C_REG_FIFO) & I2C_FIFO_CMD_FULL) && timeout > 0) { --timeout; }
         if (timeout == 0) return false;
@@ -137,16 +137,16 @@ public:
         return true;
     }
 
-    inline void SetAddress(uint8_t addr) const {
+    [[gnu::always_inline]] inline void SetAddress(uint8_t addr) const {
         reg(I2C_REG_ADDR) = addr;
     }
 
-    inline bool Probe(uint8_t addr7bit) const {
+    [[gnu::always_inline]] inline bool Probe(uint8_t addr7bit) const {
         uint8_t dummy = 0x00u;
         return Write(addr7bit, &dummy, 1) == 0;
     }
 
-    inline int Write(uint8_t addr, const uint8_t *buf, uint8_t len) const {
+    [[gnu::always_inline]] inline int Write(uint8_t addr, const uint8_t *buf, uint8_t len) const {
         if (len == 0) return 0;
         if (reg(I2C_REG_STATUS) & I2C_STATUS_MISS_ACK)
             reg(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK;
@@ -172,7 +172,7 @@ public:
         return 0;
     }
 
-    inline int Read(uint8_t addr, uint8_t *buf, uint8_t len) const {
+    [[gnu::always_inline]] inline int Read(uint8_t addr, uint8_t *buf, uint8_t len) const {
         if (len == 0) return 0;
         if (reg(I2C_REG_STATUS) & I2C_STATUS_MISS_ACK)
             reg(I2C_REG_STATUS) = I2C_STATUS_MISS_ACK;
@@ -209,7 +209,7 @@ public:
     void    flush();
 
 private:
-    inline volatile uint32_t& reg(uint32_t offset) const {
+    [[gnu::always_inline]] inline volatile uint32_t& reg(uint32_t offset) const {
         return *reinterpret_cast<volatile uint32_t*>(base_ + offset);
     }
 

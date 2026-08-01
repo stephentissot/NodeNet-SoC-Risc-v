@@ -17,10 +17,15 @@
 
 // ─── Clock frequency (must match CLK_FREQ_MHZ in top.sv) ────────────────────
 static constexpr uint32_t I2C0_CLK_HZ = 25000000UL;
-#define I2C0_BASE 0x10005000u
 
-// I2C0 — constructor-based; global static so constructor runs via .init_array
-static I2C s_i2c(I2C0_BASE);
+// I2C bus pointer — set by u8g2_hal_set_i2c() before any u8g2 call.
+// Using a pointer (no constructor) means no .init_array entry and no wasted
+// BSS storage when u8g2 is not active.  P1: shares the instance owned by main().
+static I2C* s_i2c_ptr = nullptr;
+
+void u8g2_hal_set_i2c(I2C* bus) {
+    s_i2c_ptr = bus;
+}
 
 // ─── RISC-V cycle counter ────────────────────────────────────────────────────
 
@@ -32,7 +37,7 @@ static inline uint32_t rdcycle32(void) {
 
 static void delay_ms(uint32_t ms) {
     uint32_t start = rdcycle32();
-    uint32_t ticks = ms * (I2C0_CLK_HZ / 1000);
+    uint32_t ticks = (uint32_t)((uint64_t)ms * (I2C0_CLK_HZ / 1000UL));  // no overflow
     while ((rdcycle32() - start) < ticks);
 }
 
@@ -44,10 +49,9 @@ static void delay_us(uint32_t us) {
 
 static void delay_100ns(uint32_t count) {
     // count × 100 ns
-    // At 25 MHz, 100 ns = 2.5 cycles ≈ 3 cycles minimum
-    // For small values, a short loop is sufficient
+    // At 25 MHz, 100 ns = 2.5 cycles; use 64-bit intermediate to avoid overflow
     uint32_t start = rdcycle32();
-    uint32_t ticks = (count * I2C0_CLK_HZ) / 10000000UL;
+    uint32_t ticks = (uint32_t)((uint64_t)count * I2C0_CLK_HZ / 10000000UL);
     while ((rdcycle32() - start) < ticks);
 }
 
@@ -60,11 +64,12 @@ static bool     s_tx_started = false;
 
 extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
                                      uint8_t arg_int, void *arg_ptr) {
+    if (!s_i2c_ptr) return 0;  // bus not configured via u8g2_hal_set_i2c()
     switch (msg) {
 
     case U8X8_MSG_BYTE_INIT:
         // Set I2C clock to 400 kHz for fast display updates
-        s_i2c.Init((uint16_t)(I2C0_CLK_HZ / (400000UL * 4)));
+        s_i2c_ptr->Init((uint16_t)(I2C0_CLK_HZ / (400000UL * 4)));
         s_tx_started = false;
         break;
 
@@ -72,7 +77,7 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
         // u8g2 stores address in 8-bit form (7-bit << 1); shift back to 7-bit
         s_i2c_addr   = u8x8_GetI2CAddress(u8x8) >> 1;
         s_tx_started = false;
-        s_i2c.SetAddress(s_i2c_addr);
+        s_i2c_ptr->SetAddress(s_i2c_addr);
         break;
 
     case U8X8_MSG_BYTE_SEND: {
@@ -81,7 +86,7 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
         // The hardware stalls automatically when FIFOs are full.
         const uint8_t *data = static_cast<const uint8_t *>(arg_ptr);
         for (uint8_t i = 0; i < arg_int; i++) {
-            if (!s_i2c.PushData(data[i])) {
+            if (!s_i2c_ptr->PushData(data[i])) {
                 s_tx_started = false;
                 return 0;
             }
@@ -91,7 +96,7 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
                 cmd |= I2C_CMD_START;
                 s_tx_started = true;
             }
-            if (!s_i2c.PushCmd(cmd)) {
+            if (!s_i2c_ptr->PushCmd(cmd)) {
                 s_tx_started = false;
                 return 0;
             }
@@ -102,19 +107,19 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
     case U8X8_MSG_BYTE_END_TRANSFER:
         // Issue STOP to close the I2C frame
         if (s_tx_started) {
-            if (!s_i2c.PushCmd(I2C_CMD_STOP)) {
+            if (!s_i2c_ptr->PushCmd(I2C_CMD_STOP)) {
                 s_tx_started = false;
                 return 0;
             }
         }
         // Block until the hardware has physically finished
-        if (!s_i2c.WaitBusy()) {
+        if (!s_i2c_ptr->WaitBusy()) {
             s_tx_started = false;
             return 0;
         }
         // Check for NACK: device not found or not responding at this address
-        if (s_i2c.NackDetected()) {
-            s_i2c.ClearNack();
+        if (s_i2c_ptr->NackDetected()) {
+            s_i2c_ptr->ClearNack();
             s_tx_started = false;
             return 0;  // signal failure to u8g2
         }
