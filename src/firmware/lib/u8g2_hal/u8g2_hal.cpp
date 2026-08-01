@@ -51,6 +51,8 @@ static void delay_100ns(uint32_t count) {
 
 static uint8_t  s_i2c_addr   = 0;
 static bool     s_tx_started = false;
+static uint8_t  s_last_data  = 0;     // last byte queued, held back to attach STOP
+static bool     s_has_pending = false; // true when s_last_data is waiting
 
 // ─── I2C byte callback ───────────────────────────────────────────────────────
 
@@ -66,35 +68,35 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
     case U8X8_MSG_BYTE_START_TRANSFER:
         s_i2c_addr   = u8x8_GetI2CAddress(u8x8) >> 1;
         s_tx_started = false;
+        s_has_pending = false;
+        if (i2c_nack_detected(I2C0_BASE)) i2c_clear_nack(I2C0_BASE);  // clear stale flag
         i2c_set_address(I2C0_BASE, s_i2c_addr);
         break;
 
     case U8X8_MSG_BYTE_SEND: {
         const uint8_t *data = static_cast<const uint8_t *>(arg_ptr);
         for (uint8_t i = 0; i < arg_int; i++) {
-            if (!i2c_push_data(I2C0_BASE, data[i])) {
-                s_tx_started = false;
-                return 0;
+            // Flush the previously held byte (without STOP) before queuing next
+            if (s_has_pending) {
+                uint8_t cmd = I2C_CMD_WRITE;
+                if (!s_tx_started) { cmd |= I2C_CMD_START; s_tx_started = true; }
+                if (!i2c_push_data(I2C0_BASE, s_last_data)) { s_has_pending = false; s_tx_started = false; return 0; }
+                if (!i2c_push_cmd(I2C0_BASE, cmd))           { s_has_pending = false; s_tx_started = false; return 0; }
             }
-            uint8_t cmd = I2C_CMD_WRITE;
-            if (!s_tx_started) {
-                cmd |= I2C_CMD_START;
-                s_tx_started = true;
-            }
-            if (!i2c_push_cmd(I2C0_BASE, cmd)) {
-                s_tx_started = false;
-                return 0;
-            }
+            s_last_data   = data[i];
+            s_has_pending = true;
         }
         break;
     }
 
     case U8X8_MSG_BYTE_END_TRANSFER:
-        if (s_tx_started) {
-            if (!i2c_push_cmd(I2C0_BASE, I2C_CMD_STOP)) {
-                s_tx_started = false;
-                return 0;
-            }
+        // Flush the last pending byte WITH STOP attached (same as i2c_write confirmed path)
+        if (s_has_pending) {
+            uint8_t cmd = I2C_CMD_WRITE | I2C_CMD_STOP;
+            if (!s_tx_started) { cmd |= I2C_CMD_START; s_tx_started = true; }
+            if (!i2c_push_data(I2C0_BASE, s_last_data)) { s_has_pending = false; s_tx_started = false; return 0; }
+            if (!i2c_push_cmd(I2C0_BASE, cmd))           { s_has_pending = false; s_tx_started = false; return 0; }
+            s_has_pending = false;
         }
         if (!i2c_wait_busy(I2C0_BASE)) {
             s_tx_started = false;
