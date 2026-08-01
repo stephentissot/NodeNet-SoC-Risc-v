@@ -28,7 +28,8 @@ DEPS=$(BUILD)/start.d $(MAIN_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d
 
 CFLAGS=-march=rv32im_zicsr -mabi=ilp32 \
        -Wall \
-       -Os \
+       -O2 \
+       -fno-aggressive-loop-optimizations \
        -ffreestanding \
        -ffunction-sections \
        -fdata-sections \
