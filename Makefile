@@ -27,6 +27,45 @@ SOURCES := $(call rwildcard,src/,*.sv) \
 
 all: firmware-build $(BUILD)/$(TOP).bit
 
+LAB_FIRMWARE_HEX     = src/firmware/build/lab.hex
+LAB_PADDED_HEX       = $(BUILD)/lab.padded.hex
+
+.PHONY: lab lab-fw
+
+# Build the lab firmware (produces build/lab.{hex,lst,map} in src/firmware/build/)
+lab:
+	$(MAKE) -C src/firmware lab
+
+# Program lab firmware into FPGA BRAM via ecpbram patch.
+# Requires: 'make all' done at least once (provides top.config as BRAM baseline).
+# Uses the current nodenet_riscv.hex as the "from" image for ecpbram.
+lab-fw: lab
+	@if [ ! -f $(BUILD)/$(TOP).config ]; then \
+		echo "Missing $(BUILD)/$(TOP).config — run 'make all' first."; \
+		exit 1; \
+	fi
+	@if [ ! -f $(FIRMWARE_HEX) ]; then \
+		echo "Missing $(FIRMWARE_HEX) — run 'make firmware-build' first."; \
+		exit 1; \
+	fi
+	awk -v depth=$(ROM_BYTES) \
+	    'BEGIN{addr=0} {for(i=1;i<=NF;i++){tok=toupper($$i); if(tok~/^@/){addr=strtonum("0x" substr(tok,2));} else {mem[addr]=tok; addr++}}} END{for(i=0;i<depth;i++) print (i in mem)?mem[i]:"00"}' \
+	    $(FIRMWARE_HEX) > $(FIRMWARE_PREV_PADDED_HEX)
+	awk -v depth=$(ROM_BYTES) \
+	    'BEGIN{addr=0} {for(i=1;i<=NF;i++){tok=toupper($$i); if(tok~/^@/){addr=strtonum("0x" substr(tok,2));} else {mem[addr]=tok; addr++}}} END{for(i=0;i<depth;i++) print (i in mem)?mem[i]:"00"}' \
+	    $(LAB_FIRMWARE_HEX) > $(LAB_PADDED_HEX)
+	@if ecpbram \
+	        --input  $(BUILD)/$(TOP).config \
+	        --output $(FW_PATCH_CONFIG) \
+	        --from   $(FIRMWARE_PREV_PADDED_HEX) \
+	        --to     $(LAB_PADDED_HEX) && \
+	   ecppack --compress $(FW_PATCH_CONFIG) $(FW_PATCH_BIT); then \
+	    openFPGALoader -b colorlight-i9 $(FW_PATCH_BIT); \
+	else \
+	    echo "ecpbram patch failed — run 'make all' to rebuild the full bitstream."; \
+	    exit 1; \
+	fi
+
 # Default firmware build uses src/firmware/main.cpp.
 firmware-build:
 	$(MAKE) -C src/firmware

@@ -24,7 +24,7 @@ U8G2_SRCS=$(wildcard $(U8G2_DIR)/*.c)
 U8G2_CACHE=$(CACHE_ROOT)/u8g2
 U8G2_LIB=$(CACHE_ROOT)/libu8g2.a
 U8G2_OBJS=$(patsubst $(U8G2_DIR)/%.c,$(U8G2_CACHE)/%.o,$(U8G2_SRCS))
-DEPS=$(BUILD)/start.d $(MAIN_OBJ:.o=.d) $(BUILD)/i2c.d $(BUILD)/u8g2_hal.d $(U8G2_OBJS:.o=.d)
+DEPS=$(BUILD)/start.d $(MAIN_OBJ:.o=.d) $(BUILD)/i2c.d $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(U8G2_OBJS:.o=.d)
 
 CFLAGS=-march=rv32im_zicsr -mabi=ilp32 \
        -Wall \
@@ -104,5 +104,57 @@ clean:
 
 distclean: clean
 	rm -rf $(CACHE_ROOT)
+
+# ─── Memory Lab (toolchain / startup validation) ──────────────────────────────
+#
+# Builds memoryLab.cpp as a standalone firmware (no u8g2, no u8g2_hal).
+# Produces three analysis files alongside the hex:
+#   build/lab.map  — linker memory map: section sizes, symbol addresses
+#   build/lab.lst  — full disassembly with source (check gp init, BSS loop, ctors)
+#
+# Usage:
+#   make lab        → build everything
+#   make lab-fw     → build + program via ecpbram BRAM patch (from root Makefile)
+
+LAB_ELF     = $(BUILD)/lab.elf
+LAB_HEX     = $(BUILD)/lab.hex
+LAB_LST     = $(BUILD)/lab.lst
+LAB_MAP     = $(BUILD)/lab.map
+LAB_OBJ     = $(BUILD)/memoryLab.o
+
+# -g: debug symbols in ELF so objdump -S can interleave C++ source in .lst
+LAB_CXXFLAGS = $(CXXFLAGS) -g
+
+LAB_LDFLAGS = -T link.ld \
+              -nostartfiles \
+              -Wl,--gc-sections \
+              -Wl,-Map,$(LAB_MAP) \
+              --specs=nano.specs \
+              --specs=nosys.specs
+
+.PHONY: lab
+
+lab: $(LAB_HEX) $(LAB_LST)
+	@echo "────────────────────────────────────────────────"
+	@echo "  Lab firmware: $(LAB_HEX)"
+	@echo "  Memory map:   $(LAB_MAP)"
+	@echo "  Disassembly:  $(LAB_LST)"
+	@echo "────────────────────────────────────────────────"
+
+# ELF: start + memoryLab + i2c only (no u8g2)
+$(LAB_ELF): $(BUILD)/start.o $(LAB_OBJ) $(BUILD)/i2c.o | $(BUILD)
+	$(CROSS)g++ $(LAB_LDFLAGS) $^ -o $@
+
+# Compile memoryLab.cpp with debug symbols
+$(LAB_OBJ): memoryLab.cpp | $(BUILD)
+	$(CROSS)g++ $(LAB_CXXFLAGS) -c $< -o $@
+
+# Intel/Verilog hex for BRAM programming
+$(LAB_HEX): $(LAB_ELF)
+	$(CROSS)objcopy -O verilog $< $@
+
+# Full disassembly: -d=disasm, -S=interleave source, -l=file:line, -M no-aliases
+$(LAB_LST): $(LAB_ELF)
+	$(CROSS)objdump -d -S -l -M no-aliases $< > $@
 
 -include $(DEPS)
