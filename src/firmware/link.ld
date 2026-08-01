@@ -42,6 +42,7 @@ SECTIONS
         __data_start = .;
         *(.data*)
         *(.sdata*)
+        . = ALIGN(4);
         __data_end = .;
     } > RAM AT > ROM
 
@@ -53,6 +54,7 @@ SECTIONS
         __bss_start = .;
         *(.bss*)
         *(.sbss*)
+        . = ALIGN(4);
         __bss_end = .;
     } > RAM
 
