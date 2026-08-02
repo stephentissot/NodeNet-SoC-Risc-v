@@ -53,6 +53,7 @@ static void led_d2_blink()
 }
 int main(void)
 {
+    led_d2_blink();
     //sdram_wait_ready();
     WbLed  led0(LED0_BASE);
     WbLed  led1(LED1_BASE);
@@ -64,7 +65,7 @@ int main(void)
     *LED_D2 = 1u;
 
     i2c0_init(15); // 400 kHz @ 25 MHz
-    
+    uint8_t test = 0u;
     while (1) {
         if(!s_oled_ok) s_oled_ok = i2c0_probe(0x3C); // Try i2c address 0x3C (OLED)
         uint32_t now_ms = millis();
@@ -75,26 +76,59 @@ int main(void)
             if (!s_oled_ok) led1.blink(600u);
             
             if(s_oled_ok && !s_oled_init) {
-                // Diagnostic blinks: 1=before Setup, 2=before InitDisplay, 3=before PowerSave, 4=before Font → done                
-                for(int i=0;i<5;++i){ led0.blink(150u); delay(450u); }
-                u8g2_SetI2CAddress(u8g2_access(), 0x3C << 1);
-
-                // Diagnostic: exercise the len>1 write path directly.
-                const uint8_t len2_test_bytes[2] = {0x00u, 0x00u};
-                const int len2_result = i2c0_write(0x3C, len2_test_bytes, sizeof(len2_test_bytes));
-                if (len2_result != I2C0_OK) {
-                    for (int i = 0; i < 2; ++i) { led1.blink(150u); delay(450u); }
-                } else {
-                    for (int i = 0; i < 1; ++i) { led0.blink(150u); delay(450u); }
+                // blink led0 to indicate test number
+                for(int i=0;i<test;++i){ led0.blink(150u); delay(150u); }
+                switch (test) {
+                    case 0u:    // Test u2g2 init address : test only u8g2_access() and u8g2_SetI2CAddress()
+                    {
+                        u8g2_SetI2CAddress(u8g2_access(), 0x3C << 1);
+                        //for (int i = 0; i < 10; ++i) { led1.blink(50u); delay(10u); }
+                        break;
+                    }
+                    case 1u:
+                    {
+                        // Test i2c0 write with len == 1
+                        const uint8_t len2_test_bytes[2] = {0x00u, 0x00u};
+                        int res = i2c0_write(0x3C, len2_test_bytes, sizeof(len2_test_bytes));
+                        if (res == I2C0_OK) {
+                            for (int i = 0; i < 10; ++i) { led1.blink(100u); delay(400u); }
+                        }
+                        else if(res == I2C0_NACK) {
+                            for (int i = 0; i < 2; ++i) { led1.blink(100u); delay(400u); }
+                        }
+                        else if(res == I2C0_TIMEOUT) {
+                            for (int i = 0; i < 4; ++i) { led1.blink(100u); delay(400u); }
+                        }
+                        else if(res == I2C0_FIFO_ERROR) {
+                            for (int i = 0; i < 6; ++i) { led1.blink(100u); delay(400u); }
+                        }
+                        break;
+                    }
+                    case 2u:
+                    {
+                        //Test i2c0 write with len == 3
+                        const uint8_t len3_test_bytes[3] = {0x00u, 0x00u, 0x00u};
+                        if (i2c0_write(0x3C, len3_test_bytes, sizeof(len3_test_bytes)) == I2C0_OK) {
+                            for (int i = 0; i < 10; ++i) { led1.blink(50u); delay(10u); }
+                        }
+                        break;
+                    }
+                    case 3u:
+                    {
+                        test = 0u; // Restarting at first test
+                        for(int i=0;i<10;++i){ led0.blink(50u); delay(150u); }
+                        break;
+                    }
                 }
+                test++;
                 //Second test
-                const uint8_t len3_test_bytes[3] = {0x00u, 0x00u, 0x00u};
-                const int len3_result = i2c0_write(0x3C, len3_test_bytes, sizeof(len3_test_bytes));
-                if (len3_result != I2C0_OK) {
-                    for (int i = 0; i < 2; ++i) { led1.blink(150u); delay(450u); }
-                } else {
-                    for (int i = 0; i < 1; ++i) { led0.blink(150u); delay(450u); }
-                }
+                // const uint8_t len3_test_bytes[3] = {0x00u, 0x00u, 0x00u};
+                // const int len3_result = i2c0_write(0x3C, len3_test_bytes, sizeof(len3_test_bytes));
+                // if (len3_result != I2C0_OK) {
+                //     for (int i = 0; i < 2; ++i) { led1.blink(150u); delay(450u); }
+                // } else {
+                //     for (int i = 0; i < 1; ++i) { led0.blink(150u); delay(450u); }
+                // }
                 
                 // bool oledTest = oled_status_read_test(0x3C);
                 // if(!oledTest) {

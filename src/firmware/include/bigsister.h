@@ -37,20 +37,5 @@ static void delay_ms(uint32_t ms) {
     }
 }
 
-static void delay_us(uint32_t us) {
-    const uint32_t start = millis();
-    const uint32_t target_ms = (us + 999u) / 1000u;
-    while ((uint32_t)(millis() - start) < target_ms) {
-        __asm__ volatile("nop");
-    }
-}
-
-static void delay_100ns(uint32_t count) {
-    const uint32_t start = millis();
-    const uint32_t target_ms = (count + 9999u) / 10000u;
-    while ((uint32_t)(millis() - start) < target_ms) {
-        __asm__ volatile("nop");
-    }
-}
 
 #endif /* BIGSISTER_H */
