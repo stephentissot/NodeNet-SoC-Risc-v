@@ -43,7 +43,14 @@ static void delay(uint32_t ms) {
     uint32_t start = millis();
     while ((int32_t)(millis() - start - ms) < 0) {}
 }
-
+static void led_d2_blink()
+{
+    *LED_D2 = 1u;delay(200u);*LED_D2 = 0u;delay(200u); // led_d2 on/off
+    *LED_D2 = 1u;delay(200u);*LED_D2 = 0u;delay(200u); // led_d2 on/off
+    *LED_D2 = 1u;delay(200u);*LED_D2 = 0u;delay(200u); // led_d2 on/off
+    *LED_D2 = 1u;delay(200u);*LED_D2 = 0u;delay(200u); // led_d2 on/off
+    delay(500u);
+}
 int main(void)
 {
     //sdram_wait_ready();
@@ -57,7 +64,7 @@ int main(void)
     *LED_D2 = 1u;
 
     i2c0_init(15); // 400 kHz @ 25 MHz
-    i2c0_set_address(0x3C); // OLED address
+    
     while (1) {
         if(!s_oled_ok) s_oled_ok = i2c0_probe(0x3C); // Try i2c address 0x3C (OLED)
         uint32_t now_ms = millis();
@@ -74,23 +81,38 @@ int main(void)
 
                 // Diagnostic: exercise the len>1 write path directly.
                 const uint8_t len2_test_bytes[2] = {0x00u, 0x00u};
-                const int len2_result = i2c0_write(0x3C, len2_test_bytes, 2u);
+                const int len2_result = i2c0_write(0x3C, len2_test_bytes, sizeof(len2_test_bytes));
                 if (len2_result != I2C0_OK) {
                     for (int i = 0; i < 2; ++i) { led1.blink(150u); delay(450u); }
                 } else {
                     for (int i = 0; i < 1; ++i) { led0.blink(150u); delay(450u); }
                 }
+                //Second test
+                const uint8_t len3_test_bytes[3] = {0x00u, 0x00u, 0x00u};
+                const int len3_result = i2c0_write(0x3C, len3_test_bytes, sizeof(len3_test_bytes));
+                if (len3_result != I2C0_OK) {
+                    for (int i = 0; i < 2; ++i) { led1.blink(150u); delay(450u); }
+                } else {
+                    for (int i = 0; i < 1; ++i) { led0.blink(150u); delay(450u); }
+                }
+                
+                // bool oledTest = oled_status_read_test(0x3C);
+                // if(!oledTest) {
+                //     for(int i=0;i<3;++i){ led1.blink(150u); delay(450u); }
+                // } else {
+                //     for(int i=0;i<2;++i){ led0.blink(150u); delay(450u); }
+                // }
 
-                for(int i=0;i<4;++i){ led0.blink(150u); delay(450u); }
-                u8g2_Setup_ssd1306_i2c_128x64_noname_f(u8g2_access(), U8G2_R0, u8x8_byte_i2c_hw, u8x8_gpio_delay_hw);
-                for(int i=0;i<3;++i){ led0.blink(150u); delay(450u); }
-                u8g2_InitDisplay(u8g2_access());
-                for(int i=0;i<2;++i){ led0.blink(150u); delay(450u); }
-                u8g2_SetPowerSave(u8g2_access(), 0);
+                // for(int i=0;i<4;++i){ led0.blink(150u); delay(450u); }
+                // u8g2_Setup_ssd1306_i2c_128x64_noname_f(u8g2_access(), U8G2_R0, u8x8_byte_i2c_hw, u8x8_gpio_delay_hw);
+                // for(int i=0;i<3;++i){ led0.blink(150u); delay(450u); }
+                // u8g2_InitDisplay(u8g2_access());
+                // for(int i=0;i<2;++i){ led0.blink(150u); delay(450u); }
+                // u8g2_SetPowerSave(u8g2_access(), 0);
 
-                for(int i=0;i<1;++i){ led0.blink(150u); delay(450u); }
-                u8g2_SetFont(u8g2_access(), u8g2_font_5x7_tf);
-                s_oled_init = true;
+                // for(int i=0;i<1;++i){ led0.blink(150u); delay(450u); }
+                // u8g2_SetFont(u8g2_access(), u8g2_font_5x7_tf);
+                // s_oled_init = true;
             }
             if(s_oled_ok && s_oled_init) {
                 oled_show("I2C OK", "OLED found at 0x3C");

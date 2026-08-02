@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "bigsister.h"
 
 /*
  * Bare-metal Wishbone I2C driver for wb_i2c.sv.
@@ -25,6 +26,8 @@
 #ifndef I2C0_TIMEOUT_LOOP
 #define I2C0_TIMEOUT_LOOP 2000000u
 #endif
+
+#define I2C0_RELEASE_DELAY 80000u
 
 /* Register offsets (4-byte stride from base). */
 #define I2C0_REG_STATUS      0x00u
@@ -99,6 +102,7 @@ static inline bool i2c0_wait_idle(uint32_t timeout)
     uint32_t t = timeout != 0u ? timeout : I2C0_TIMEOUT_LOOP;
     while ((i2c0_reg_read32(I2C0_REG_FIFO) & I2C0_FIFO_CMD_EMPTY) == 0u && t > 0u) {
         --t;
+        asm volatile("" ::: "memory");
     }
     if (t == 0u) {
         return false;
@@ -107,8 +111,14 @@ static inline bool i2c0_wait_idle(uint32_t timeout)
     t = timeout != 0u ? timeout : I2C0_TIMEOUT_LOOP;
     while ((i2c0_reg_read32(I2C0_REG_STATUS) & I2C0_STATUS_BUSY) != 0u && t > 0u) {
         --t;
+        asm volatile("" ::: "memory");
     }
-    return t > 0u;
+
+    if (t == 0u) {
+        return false;
+    }
+    delay_ms(10u);
+    return 1u;
 }
 
 static inline bool i2c0_push_data(uint8_t data)
@@ -161,40 +171,77 @@ static inline int i2c0_write(uint8_t addr, const uint8_t *buf, size_t len)
         i2c0_clear_nack();
     }
 
-    i2c0_set_address(addr);
-
     if (len == 1u) {
-        if (!i2c0_push_data(buf[0])) {
-            return I2C0_FIFO_ERROR;
+        if (!i2c0_push_data(buf[0])) return I2C0_FIFO_ERROR;
+        
+        i2c0_set_address(addr);
+        asm volatile("" ::: "memory");
+        if (!i2c0_push_cmd(I2C0_CMD_START | I2C0_CMD_WRITE)) return I2C0_FIFO_ERROR;
+
+        // Attendre que la commande soit consommée avant de toucher à l'adresse pour le STOP
+        uint32_t t = I2C0_TIMEOUT_LOOP;
+        while (((i2c0_reg_read32(I2C0_REG_FIFO) & I2C0_FIFO_CMD_EMPTY) == 0u) && t > 0u) {
+            --t; asm volatile("nop" ::: "memory");
         }
-        if (!i2c0_push_cmd(I2C0_CMD_START | I2C0_CMD_WRITE | I2C0_CMD_STOP)) {
-            return I2C0_FIFO_ERROR;
-        }
+
+        i2c0_set_address(addr);
+        asm volatile("" ::: "memory");
+        if (!i2c0_push_cmd(I2C0_CMD_STOP)) return I2C0_FIFO_ERROR;
+
     } else {
-        if (!i2c0_push_data(buf[0])) {
-            return I2C0_FIFO_ERROR;
-        }
-        if (!i2c0_push_cmd(I2C0_CMD_START | I2C0_CMD_WRITE)) {
-            return I2C0_FIFO_ERROR;
-        }
-
+        // --- Premier octet (START + WRITE) ---
+        if (!i2c0_push_data(buf[0])) return I2C0_FIFO_ERROR;
+        
+        i2c0_set_address(addr);
+        asm volatile("nop" ::: "memory");
+        if (!i2c0_push_cmd(I2C0_CMD_START | I2C0_CMD_WRITE)) return I2C0_FIFO_ERROR;
+        
+        // --- Octets intermédiaires (len >= 3) ---
         for (size_t i = 1; i + 1u < len; ++i) {
-            if (!i2c0_push_data(buf[i])) {
-                return I2C0_FIFO_ERROR;
+            
+            // CRUCIAL : Attendre que la FIFO de commande soit TOTALEMENT VIDE.
+            // Cela prouve que l'IP a consommé l'adresse du cycle précédent, 
+            // on peut maintenant modifier le registre d'adresse sans écraser le passé.
+            uint32_t t = I2C0_TIMEOUT_LOOP;
+            while (((i2c0_reg_read32(I2C0_REG_FIFO) & I2C0_FIFO_CMD_EMPTY) == 0u) && t > 0u) {
+                --t; asm volatile("nop" ::: "memory");
             }
-            if (!i2c0_push_cmd(I2C0_CMD_WRITE)) {
-                return I2C0_FIFO_ERROR;
-            }
-        }
+            if (t == 0u) return I2C0_TIMEOUT;
 
-        if (!i2c0_push_data(buf[len - 1u])) {
-            return I2C0_FIFO_ERROR;
+            if (!i2c0_push_data(buf[i])) return I2C0_FIFO_ERROR;
+            
+            //i2c0_set_address(addr);
+            asm volatile("nop" ::: "memory");
+            if (!i2c0_push_cmd(I2C0_CMD_WRITE)) return I2C0_FIFO_ERROR;
         }
-        if (!i2c0_push_cmd(I2C0_CMD_WRITE | I2C0_CMD_STOP)) { 
-            return I2C0_FIFO_ERROR;
+        
+        // --- Dernier octet (WRITE puis STOP séparé) ---
+        // Attendre que la FIFO de commande soit vide avant de préparer le dernier WRITE
+        uint32_t t = I2C0_TIMEOUT_LOOP;
+        while (((i2c0_reg_read32(I2C0_REG_FIFO) & I2C0_FIFO_CMD_EMPTY) == 0u) && t > 0u) {
+            --t; asm volatile("nop" ::: "memory");
         }
+        if (t == 0u) return I2C0_TIMEOUT;
+
+        if (!i2c0_push_data(buf[len - 1u])) return I2C0_FIFO_ERROR;
+        
+        i2c0_set_address(addr);
+        asm volatile("nop" ::: "memory");
+        if (!i2c0_push_cmd(I2C0_CMD_WRITE)) return I2C0_FIFO_ERROR;
+
+        // Attendre à nouveau que la FIFO de commande se vide avant de poser le STOP
+        t = I2C0_TIMEOUT_LOOP;
+        while (((i2c0_reg_read32(I2C0_REG_FIFO) & I2C0_FIFO_CMD_EMPTY) == 0u) && t > 0u) {
+            --t; asm volatile("nop" ::: "memory");
+        }
+        if (t == 0u) return I2C0_TIMEOUT;
+
+        i2c0_set_address(addr);
+        asm volatile("nop" ::: "memory");
+        if (!i2c0_push_cmd(I2C0_CMD_STOP)) return I2C0_FIFO_ERROR;
     }
 
+    // Attente finale de libération complète du bus physique
     if (!i2c0_wait_idle(I2C0_TIMEOUT_LOOP)) {
         return I2C0_TIMEOUT;
     }

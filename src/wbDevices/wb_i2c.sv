@@ -52,10 +52,7 @@ module wb_i2c #(
 
     // I2C open-drain interface (SCL/SDA with external pullup)
     inout  wire        i2c_scl,
-    inout  wire        i2c_sda,
-    output wire i2c_busy_debug,
-    output wire i2c_wb_debug,
-    output wire debug_wb_access
+    inout  wire        i2c_sda
 );
 
     // ─── Tristate signals from i2c_master core ───────────────────────────────
@@ -70,9 +67,6 @@ module wb_i2c #(
     assign i2c_scl_i = i2c_scl;
     assign i2c_sda_i = i2c_sda;
 
-    // Debug wishbone access    
-    assign i2c_wb_debug = wb_cyc_i && wb_stb_i && wb_we_i;
-    assign debug_wb_access = wb_cyc_i;
     // ─── 8-bit data from inner module, zero-extended ─────────────────────────
     wire [7:0] i2c_dat_o_8;
     assign wb_dat_o = {24'h0, i2c_dat_o_8};
@@ -108,8 +102,6 @@ module wb_i2c #(
         .i2c_sda_i  (i2c_sda_i),
         .i2c_sda_o  (i2c_sda_o),
         .i2c_sda_t  (i2c_sda_t),
-        // Debug interface
-        .i2c_busy_debug(i2c_busy_debug)
     );
 
 endmodule

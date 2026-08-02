@@ -123,11 +123,7 @@ module top (
     assign led_d2 = led_d2_out;
     assign led_g18 = nodenet_rx_led_out;
     assign led_h18 = nodenet_tx_led_out;
-    //assign led_e18 = led0_out;
-    wire i2c_busy_debug;
-    wire i2c_wb_debug;
-    //assign led_e18 = i2c_busy_debug; // to debug: light LED on I2C bus activity
-    //assign led_e18 = ~i2c_wb_debug; // to debug: light LED on I2C wishbone bus access
+
     assign led_e18 = led0_out;
     assign led_e16 = led1_out;
 
@@ -341,9 +337,7 @@ module top (
         .wb_ack_o (i2c0_ack),
 
         .i2c_scl  (i2c0_scl),
-        .i2c_sda  (i2c0_sda),
-        .i2c_busy_debug(i2c_busy_debug), // for debug: light LED on I2C bus activity
-        .i2c_wb_debug(i2c_wb_debug)      // for debug: light LED on I2C wishbone bus access
+        .i2c_sda  (i2c0_sda)
     );
 
     wb_flash #(

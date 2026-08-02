@@ -26,4 +26,31 @@ static inline uint32_t millis(void) {
     return *TIMER_MS;
 }
 
+// ─── Delay helpers ─────────────────────────────────────────────────────────
+// Use the SoC's hardware timer through millis() to stay aligned with the rest
+// of the bare-metal firmware instead of relying on rdcycle-based spin loops.
+
+static void delay_ms(uint32_t ms) {
+    const uint32_t start = millis();
+    while ((uint32_t)(millis() - start) < ms) {
+        __asm__ volatile("nop");
+    }
+}
+
+static void delay_us(uint32_t us) {
+    const uint32_t start = millis();
+    const uint32_t target_ms = (us + 999u) / 1000u;
+    while ((uint32_t)(millis() - start) < target_ms) {
+        __asm__ volatile("nop");
+    }
+}
+
+static void delay_100ns(uint32_t count) {
+    const uint32_t start = millis();
+    const uint32_t target_ms = (count + 9999u) / 10000u;
+    while ((uint32_t)(millis() - start) < target_ms) {
+        __asm__ volatile("nop");
+    }
+}
+
 #endif /* BIGSISTER_H */

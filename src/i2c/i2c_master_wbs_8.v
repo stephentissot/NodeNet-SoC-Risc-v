@@ -65,8 +65,6 @@ module i2c_master_wbs_8 #
     output wire        i2c_sda_o,
     output wire        i2c_sda_t,
 
-    // Debug interface //
-    output wire i2c_busy_debug
 );
 /*
 
@@ -291,7 +289,6 @@ wire data_out_ready_int;
 wire data_out_last_int;
 
 wire busy_int;
-assign i2c_busy_debug = busy_int; // for i2c_busy_debug output
 
 wire bus_control_int;
 wire bus_active_int;
