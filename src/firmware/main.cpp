@@ -53,7 +53,6 @@ int main(void)
     //sdram_wait_ready();
     WbLed  led0(LED0_BASE);
     WbLed  led1(LED1_BASE);
-    ZipCpuI2C i2c0(I2C0_BASE);
     bool s_oled_ok = false;
     int probe_status = 0;
     bool s_oled_init = false;
@@ -62,14 +61,14 @@ int main(void)
     uint32_t next_toggle_ms = *TIMER_MS + kBlinkPeriodMs;
     *LED_D2 = 1u;
 
-    i2c0.begin();
-    i2c0.setClock(100000u); // 100 kHz
+    i2c.begin();
+    i2c.setClock(100000u); // 100 kHz
     uint8_t test = 0u;
     while (1) {
         if(!s_oled_ok) {
-            i2c0.beginTransmission(0x3C);
-            i2c0.write(0x00u);
-            const uint8_t tx_status = i2c0.endTransmission();
+            i2c.beginTransmission(0x3C);
+            i2c.write(0x00u);
+            const uint8_t tx_status = i2c.endTransmission();
             probe_status = tx_status;
             s_oled_ok = (tx_status == 0u);
         }
@@ -81,7 +80,10 @@ int main(void)
             if (!s_oled_ok){
                 for(int i=0;i<probe_status;++i){ led0.blink(150u); delay(150u); }
                 led1.blink(600u);
-            } 
+            }
+            else {
+                led1.blink(60u);
+            }
             
             // if(s_oled_ok && !s_oled_init) {
             //     // blink led0 to indicate test number

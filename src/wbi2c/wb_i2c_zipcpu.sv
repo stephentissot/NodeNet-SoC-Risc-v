@@ -34,6 +34,7 @@ module wb_i2c_zipcpu #(
     wire o_wb_stall;
     wire o_wb_ack;
     wire [31:0] o_wb_data;
+    wire [31:0] wb_addr_offset;
 
     wire i2c_scl_i;
     wire i2c_sda_i;
@@ -43,7 +44,8 @@ module wb_i2c_zipcpu #(
     assign i_wb_cyc  = wb_cyc_i;
     assign i_wb_stb  = wb_stb_i;
     assign i_wb_we   = wb_we_i;
-    assign i_wb_addr = wb_adr_i[(MEM_ADDR_BITS-2)+2:2];
+    assign wb_addr_offset = wb_adr_i - ADDR;
+    assign i_wb_addr = wb_addr_offset[(MEM_ADDR_BITS-1):2];
     assign i_wb_data = wb_dat_i;
     assign i_wb_sel  = wb_sel_i;
 

@@ -17,7 +17,7 @@
 #include "bigsister.h"
 #include <stdint.h>
 
-
+extern ZipCpuI2C i2c;
 
 // ─── I2C transfer state ──────────────────────────────────────────────────────
 // u8g2 never sends more than 32 bytes between START_TRANSFER and END_TRANSFER.
@@ -32,32 +32,34 @@ static uint8_t  s_buf_len   = 0;
 
 extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr) 
 {
-    I2C i2c0(I2C0_BASE);
     switch (msg) {
 
     case U8X8_MSG_BYTE_INIT:
-        i2c0.init(15); // init already done in main.cpp
         s_buf_len = 0;
         break;
 
     case U8X8_MSG_BYTE_START_TRANSFER:
         s_i2c_addr = u8x8_GetI2CAddress(u8x8) >> 1;
-        s_buf_len  = 0;        
+        s_buf_len  = 0;
         break;
 
     case U8X8_MSG_BYTE_SEND: {
         const uint8_t *data = static_cast<const uint8_t *>(arg_ptr);
-        for (uint8_t i = 0; i < arg_int; i++) {
-            if (s_buf_len < sizeof(s_buf))
-                s_buf[s_buf_len++] = data[i];
+        for (uint8_t idx = 0; idx < arg_int; ++idx) {
+            if (s_buf_len < sizeof(s_buf)) {
+                s_buf[s_buf_len++] = data[idx];
+            }
         }
         break;
     }
 
     case U8X8_MSG_BYTE_END_TRANSFER:
-        // Send accumulated bytes using i2c_write — the proven probe path (WRITE|STOP)
         if (s_buf_len > 0) {
-            i2c0.i2c_write(s_i2c_addr, s_buf, s_buf_len);
+            i2c.beginTransmission(static_cast<uint8_t>(s_i2c_addr));
+            for (uint8_t idx = 0; idx < s_buf_len; ++idx) {
+                (void)i2c.write(s_buf[idx]);
+            }
+            (void)i2c.endTransmission();
         }
         s_buf_len = 0;
         break;
