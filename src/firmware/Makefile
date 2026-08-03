@@ -24,7 +24,7 @@ U8G2_SRCS=$(wildcard $(U8G2_DIR)/*.c)
 U8G2_CACHE=$(CACHE_ROOT)/u8g2
 U8G2_LIB=$(CACHE_ROOT)/libu8g2.a
 U8G2_OBJS=$(patsubst $(U8G2_DIR)/%.c,$(U8G2_CACHE)/%.o,$(U8G2_SRCS))
-DEPS=$(BUILD)/start.d $(MAIN_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(U8G2_OBJS:.o=.d)
+DEPS=$(BUILD)/start.d $(MAIN_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(U8G2_OBJS:.o=.d)
 
 CFLAGS=-march=rv32im_zicsr -mabi=ilp32 \
        -Wall \
@@ -36,6 +36,7 @@ CFLAGS=-march=rv32im_zicsr -mabi=ilp32 \
         -MP \
        -I$(U8G2_DIR) \
        -Iinclude \
+       -Ilib/i2c \
        -DFIRMWARE_VERSION='"$(VERSION)-$(GIT_HASH)"'
 
 # C++ flags: no exceptions, no RTTI (keeps code small on bare-metal)
@@ -49,6 +50,10 @@ CXXFLAGS=$(CFLAGS) \
          -fno-use-cxa-atexit \
          -I. \
          -Ilib/u8g2_hal
+
+# Match the i2c library CMake target settings for this library only.
+# The CMake target uses -O2 -g and the same include path.
+I2C_CXXFLAGS=$(CXXFLAGS) -O2 -g
 
 # -nostartfiles: don't use toolchain crt0 (we have start.S)
 # --specs=nano.specs: newlib-nano provides memcpy/strlen/memset etc.
@@ -70,7 +75,7 @@ $(BUILD):
 $(U8G2_CACHE):
 	mkdir -p $@
 
-$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(U8G2_LIB) | $(BUILD)
+$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(BUILD)/i2c.o $(U8G2_LIB) | $(BUILD)
 	$(CROSS)g++ $(LDFLAGS) $^ -o $@
 
 $(BUILD)/start.o: start.S | $(BUILD)
@@ -81,6 +86,9 @@ $(MAIN_OBJ): $(MAIN_SRC) | $(BUILD)
 
 $(BUILD)/u8g2_hal.o: lib/u8g2_hal/u8g2_hal.cpp | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/i2c.o: lib/i2c/i2c.cpp | $(BUILD)
+	$(CROSS)g++ $(I2C_CXXFLAGS) -c $< -o $@
 
 # u8g2 C sources are cached outside $(BUILD) so a normal clean does not force
 # recompiling the whole graphics library on the next firmware rebuild.

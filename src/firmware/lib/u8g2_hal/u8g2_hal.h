@@ -33,9 +33,6 @@
 #ifndef U8G2_HAL_H
 #define U8G2_HAL_H
 
-// i2c0.h — new bare-metal Wishbone I2C driver
-#include "i2c0.h"
-
 #ifdef __cplusplus
 extern "C" {
 #endif

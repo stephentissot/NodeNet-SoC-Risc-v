@@ -15,9 +15,20 @@ static volatile uint32_t* const TIMER_MS = reinterpret_cast<volatile uint32_t*>(
 #define BIGSISTER_CPU_HZ 25000000UL
 #endif
 
+// Hardware definition
+#define LED0_BASE  0x10000004UL
+#define LED1_BASE  0x10000008UL
+#define I2C0_BASE  0x10005000UL
+
+
 // Bare-metal C++ runtime stub: called on invalid pure virtual dispatch.
 extern "C" inline void __cxa_pure_virtual() { while (1); }
 
+// picorv32_wb MMIO helpers
+#define picorv32_write32(addr, val)   (*(volatile uint32_t *const)(addr) = (uint32_t)(val))
+#define picorv32_read32(addr)         (*(volatile uint32_t *const)(addr))   
+#define compiler_barrier()      __asm__ volatile("" ::: "memory")
+#define nop_barrier()      __asm__ volatile("nop" ::: "memory")
 /**
  * Arduino-like millis(): milliseconds since boot from hardware timer.
  * Wraps naturally on uint32_t, like Arduino's unsigned long behavior.

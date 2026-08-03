@@ -13,7 +13,7 @@
  */
 
 #include "u8g2_hal.h"
-#include "i2c0.h"
+#include "i2c.h"
 #include "bigsister.h"
 #include <stdint.h>
 
@@ -30,19 +30,19 @@ static uint8_t  s_buf_len   = 0;
 
 // ─── I2C byte callback ───────────────────────────────────────────────────────
 
-extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
-                                     uint8_t arg_int, void *arg_ptr) {
+extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr) 
+{
+    I2C i2c0(I2C0_BASE);
     switch (msg) {
 
     case U8X8_MSG_BYTE_INIT:
-        //i2c0_init((uint16_t)(I2C0_CLK_HZ / (400000UL * 4))); // init already done in main.cpp
+        i2c0.init(15); // init already done in main.cpp
         s_buf_len = 0;
         break;
 
     case U8X8_MSG_BYTE_START_TRANSFER:
         s_i2c_addr = u8x8_GetI2CAddress(u8x8) >> 1;
-        s_buf_len  = 0;
-        if (i2c0_nack_detected()) i2c0_clear_nack();
+        s_buf_len  = 0;        
         break;
 
     case U8X8_MSG_BYTE_SEND: {
@@ -57,7 +57,7 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
     case U8X8_MSG_BYTE_END_TRANSFER:
         // Send accumulated bytes using i2c_write — the proven probe path (WRITE|STOP)
         if (s_buf_len > 0) {
-            i2c0_write(s_i2c_addr, s_buf, s_buf_len);
+            i2c0.i2c_write(s_i2c_addr, s_buf, s_buf_len);
         }
         s_buf_len = 0;
         break;

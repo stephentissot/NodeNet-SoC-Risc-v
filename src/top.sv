@@ -319,9 +319,12 @@ module top (
         .sdram_we_n(sdram_we_n)
     );
 
-    wb_i2c #(
+    wb_i2c_zipcpu #(
         .ADDR            (I2C0_BASE),
-        .DEFAULT_PRESCALE(16'd62)   // 100 kHz @ 25 MHz
+        .TICKBITS        (6'd20),
+        .CLOCKS_PER_TICK (20'd1000),
+        .MEM_ADDR_BITS   (8),
+        .LITTLE_ENDIAN   (1'b1)
     ) i2c0 (
         .clk      (clk_25mhz),
         .rst      (reset),
