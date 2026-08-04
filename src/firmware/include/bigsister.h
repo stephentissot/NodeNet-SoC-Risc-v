@@ -7,8 +7,10 @@
 #define BIGSISTER_H
 
 #include <stdint.h>
+#include <stddef.h>
 
-static volatile uint32_t* const TIMER_MS = reinterpret_cast<volatile uint32_t*>(0x10000010UL);
+static volatile uint32_t * const LED_D2 = (volatile uint32_t *)(uintptr_t)0x10000000UL;
+static volatile uint32_t * const TIMER_MS = (volatile uint32_t *)(uintptr_t)0x10000010UL;
 
 // Override this from the build if your SoC clock changes.
 #ifndef BIGSISTER_CPU_HZ
@@ -16,17 +18,15 @@ static volatile uint32_t* const TIMER_MS = reinterpret_cast<volatile uint32_t*>(
 #endif
 
 // Hardware definition
-#define LED0_BASE  0x10000004UL
-#define LED1_BASE  0x10000008UL
+#define LED0_BASE  0x10000004UL // GREEN
+#define LED1_BASE  0x10000008UL // YELLOW
 #define I2C0_BASE  0x10005000UL
 
 
-// Bare-metal C++ runtime stub: called on invalid pure virtual dispatch.
-extern "C" inline void __cxa_pure_virtual() { while (1); }
-
 // picorv32_wb MMIO helpers
+#define reg(base) (*(volatile uint32_t *)(uintptr_t)(base))
 #define picorv32_write32(addr, val)   (*(volatile uint32_t *const)(addr) = (uint32_t)(val))
-#define picorv32_read32(addr)         (*(volatile uint32_t *const)(addr))   
+#define picorv32_read32(addr)         (*(volatile uint32_t *const)(addr))
 #define compiler_barrier()      __asm__ volatile("" ::: "memory")
 #define nop_barrier()      __asm__ volatile("nop" ::: "memory")
 /**
@@ -35,6 +35,12 @@ extern "C" inline void __cxa_pure_virtual() { while (1); }
  */
 static inline uint32_t millis(void) {
     return *TIMER_MS;
+}
+static void delay(uint32_t ms) {
+    uint32_t start = millis();
+    while ((int32_t)(millis() - start - ms) < 0) {
+        nop_barrier();
+    }
 }
 
 // ─── Delay helpers ─────────────────────────────────────────────────────────

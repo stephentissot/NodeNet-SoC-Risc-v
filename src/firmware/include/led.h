@@ -19,31 +19,22 @@
 #ifndef LED_H
 #define LED_H
 
-#include <cstdint>
+#include <stdint.h>
 
-class WbLed {
-public:
-    static constexpr uint32_t CLK_KHZ = 25000u;  // 25 MHz
+#define CLK_KHZ 25000u  // 25 MHz
 
-    explicit WbLed(uint32_t base) : base_(base) {}
+static inline void wbLedOn(uint32_t base) { reg(base) = 0x6u; }   // bit1=SET_STATE, bit2=1
+static inline void wbLedOff(uint32_t base) { reg(base) = 0x2u; }   // bit1=SET_STATE, bit2=0
 
-    void on()  const { reg() = 0x6u; }   // bit1=SET_STATE, bit2=1
-    void off() const { reg() = 0x2u; }   // bit1=SET_STATE, bit2=0
+// Trigger a non-blocking one-shot blink pulse.
+// durationMs=0 uses the RTL default blink duration (100ms @ 25 MHz).
+static inline void wbLedBlink(uint32_t base, uint32_t durationMs) {
+    uint32_t cycles = durationMs * CLK_KHZ;
+    reg(base) = ((cycles & 0x1FFFFFFFu) << 3) | 0x1u;
+}
 
-    // Trigger a non-blocking one-shot blink pulse.
-    // durationMs=0 uses the RTL default blink duration (100ms @ 25 MHz).
-    void blink(uint32_t durationMs) const {
-        uint32_t cycles = durationMs * CLK_KHZ;
-        reg() = ((cycles & 0x1FFFFFFFu) << 3) | 0x1u;
-    }
 
-private:
-    volatile uint32_t& reg() const {
-        return *reinterpret_cast<volatile uint32_t*>(base_);
-    }
 
-    uint32_t base_;
-};
 
 #endif /* LED_H */
 

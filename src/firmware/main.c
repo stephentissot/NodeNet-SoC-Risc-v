@@ -1,44 +1,13 @@
-#include <cstdint>
+#include <stdbool.h>
+#include <stdint.h>
 #include "bigsister.h"
 #include "sdram.h"
 #include "led.h"
-#include "lib/i2c/i2c.h"
-#include "u8g2.h"
-#include "u8g2_hal.h"
+#include "i2c.h"
+#include "i2c_regs.h"
 
-// Hardware — compile-time constants so GCC emits direct MMIO addresses
-static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x10000000UL);
+#define K_BLINK_PERIOD_MS 2000u
 
-// ─── OLED ────────────────────────────────────────────────────────────────────
-static volatile u8g2_t u8g2;
-
-static inline u8g2_t *u8g2_access() {
-    return const_cast<u8g2_t *>(&u8g2);
-}
-
-static void oled_init() {
-    u8g2_Setup_ssd1306_i2c_128x64_noname_f(u8g2_access(), U8G2_R0,
-                                            u8x8_byte_i2c_hw,
-                                            u8x8_gpio_delay_hw);
-    u8g2_SetI2CAddress(u8g2_access(), 0x3C << 1);  // explicit 0x3C (7-bit)
-    u8g2_InitDisplay(u8g2_access());
-    u8g2_SetPowerSave(u8g2_access(), 0);
-    u8g2_SetFont(u8g2_access(), u8g2_font_5x7_tf);
-}
-
-static void oled_show(const char *line0, const char *line1 = nullptr,
-                      const char *line2 = nullptr) {
-    u8g2_ClearBuffer(u8g2_access());
-    u8g2_DrawStr(u8g2_access(), 0, 10, line0);
-    if (line1) u8g2_DrawStr(u8g2_access(), 0, 20, line1);
-    if (line2) u8g2_DrawStr(u8g2_access(), 0, 30, line2);
-    u8g2_SendBuffer(u8g2_access());
-}
-
-static void delay(uint32_t ms) {
-    uint32_t start = millis();
-    while ((int32_t)(millis() - start - ms) < 0) {}
-}
 static void led_d2_blink()
 {
     *LED_D2 = 1u;delay(200u);*LED_D2 = 0u;delay(200u); // led_d2 on/off
@@ -50,41 +19,65 @@ static void led_d2_blink()
 int main(void)
 {
     led_d2_blink();
-    //sdram_wait_ready();
-    WbLed  led0(LED0_BASE);
-    WbLed  led1(LED1_BASE);
+
     bool s_oled_ok = false;
-    int probe_status = 0;
     bool s_oled_init = false;
-    static constexpr uint32_t kBlinkPeriodMs = 2000u;
     bool led_on = false;
-    uint32_t next_toggle_ms = *TIMER_MS + kBlinkPeriodMs;
+    uint32_t next_toggle_ms = *TIMER_MS + K_BLINK_PERIOD_MS;
     *LED_D2 = 1u;
 
-    i2c.begin();
-    i2c.setClock(100000u); // 100 kHz
+    i2c_begin();
+    
+
+    // // 1. Écriture manuelle de la valeur 42 dans le registre de vitesse (Offset d'octet 4)
+    // // On passe bien l'adresse de base ET l'offset    
+    // i2c_master_reg_wr(I2C0_BASE, I2C_MASTER_SPD, 42u);
+    
+    // // Barrière mémoire indispensable pour forcer l'exécution de l'écriture Wishbone
+    // __asm__ volatile("" ::: "memory");
+
+    // // 2. Relecture immédiate avec les deux paramètres requis
+    // uint32_t read_back = i2c_master_reg_rd(I2C0_BASE, I2C_MASTER_SPD); 
+
+    // // 3. Remise en place de la configuration nominale pour la suite du programme
+    // i2c_setClock(100000u);
+
+    // // 4. Code de diagnostic par LED basé sur la valeur miroir
+    // if (read_back == 42u) {
+    //     // LE BUS ET LES TAILLES DE REGISTRES SONT ENFIN ALIGNÉS !
+    //     for(int i=0; i<3; ++i) { wbLedBlink(LED0_BASE, 150u); delay(450u); } // 3 LEDs vertes
+    // } else {
+    //     for(int i=0; i<3; ++i) { wbLedBlink(LED1_BASE, 150u); delay(450u); } // 3 LEDs jaunes
+    // }
+
     uint8_t test = 0u;
-    while (1) {
-        if(!s_oled_ok) {
-            i2c.beginTransmission(0x3C);
-            i2c.write(0x00u);
-            const uint8_t tx_status = i2c.endTransmission();
-            probe_status = tx_status;
-            s_oled_ok = (tx_status == 0u);
-        }
+    while (1) {          
+        // Test in the loop to see sda scl trace on the logic analyzer
+        i2c_beginTransmission(0x3C);
+        i2c_write(0x00u);        
+        int tx_status = 1;
+        tx_status = i2c_endTransmission();
+        s_oled_ok = (tx_status == 0u);
+        
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             led_on = !led_on;
             *LED_D2 = led_on ? 0u : 1u;
-            next_toggle_ms += kBlinkPeriodMs;
+            next_toggle_ms += K_BLINK_PERIOD_MS;
+
+
+
+    
             if (!s_oled_ok){
-                for(int i=0;i<probe_status;++i){ led0.blink(150u); delay(150u); }
-                led1.blink(600u);
+                for(int i=0;i<tx_status;++i){ wbLedBlink(LED0_BASE, 150u); delay(150u); }
+                wbLedBlink(LED1_BASE, 600u);
             }
             else {
-                led1.blink(60u);
+                wbLedBlink(LED0_BASE, 60u);
             }
-            
+            // if(s_oled_ok){
+            //     oled.test();
+            // }            
             // if(s_oled_ok && !s_oled_init) {
             //     // blink led0 to indicate test number
             //     for(int i=0;i<test;++i){ led0.blink(150u); delay(150u); }

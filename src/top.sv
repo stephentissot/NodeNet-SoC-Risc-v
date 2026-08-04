@@ -86,7 +86,7 @@ module top (
     wire wb_led0_sel;
     wire wb_led1_sel;
     wire wb_timer_sel;
-    wire wb_i2c0_sel;
+    
     wire wb_nodenet_sel;
     wire wb_flash_sel;
     wire wb_sdram_sel;
@@ -97,7 +97,7 @@ module top (
     assign wb_led0_sel   = wb_cyc && wb_stb && (wb_adr == LED0_ADDR);
     assign wb_led1_sel   = wb_cyc && wb_stb && (wb_adr == LED1_ADDR);
     assign wb_timer_sel  = wb_cyc && wb_stb && (wb_adr == TIMER_ADDR);
-    assign wb_i2c0_sel   = wb_cyc && wb_stb && (wb_adr[31:12] == I2C0_BASE[31:12]);
+    
     assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12]);
     assign wb_flash_sel  = wb_cyc && wb_stb && (wb_adr[31:12] == FLASH_BASE[31:12]);
     assign wb_sdram_sel  = wb_cyc && wb_stb && (wb_adr[31:23] == SDRAM_BASE[31:23]);
@@ -321,10 +321,9 @@ module top (
 
     wb_i2c_zipcpu #(
         .ADDR            (I2C0_BASE),
-        .TICKBITS        (6'd20),
-        .CLOCKS_PER_TICK (20'd1000),
-        .MEM_ADDR_BITS   (8),
-        .LITTLE_ENDIAN   (1'b1)
+        .TICKBITS        (6'd8),
+        .CLOCKS_PER_TICK (20'd250),
+        .MEM_ADDR_BITS   (7)
     ) i2c0 (
         .clk      (clk_25mhz),
         .rst      (reset),
@@ -333,8 +332,8 @@ module top (
         .wb_dat_i (wb_dat_o),
         .wb_sel_i (wb_sel),
         .wb_we_i  (wb_we),
-        .wb_cyc_i (wb_i2c0_sel),
-        .wb_stb_i (wb_i2c0_sel),
+        .wb_cyc_i (wb_cyc && (wb_adr[31:12] == I2C0_BASE[31:12])),
+        .wb_stb_i (wb_stb && (wb_adr[31:12] == I2C0_BASE[31:12])),
 
         .wb_dat_o (i2c0_dat),
         .wb_ack_o (i2c0_ack),

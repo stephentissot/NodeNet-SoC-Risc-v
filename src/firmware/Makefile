@@ -8,10 +8,10 @@ VERSION = 0.1.0
 GIT_HASH := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 
 # Entry-point source selection:
-# - Default build uses main.cpp
-# - Bring-up/test build uses test_main.cpp
-# You can still override manually: make MAIN_SRC=test_main.cpp
-MAIN_SRC ?= main.cpp
+# - Default build uses main.c
+# - Bring-up/test build uses test_main.c
+# You can still override manually: make MAIN_SRC=test_main.c
+MAIN_SRC ?= main.c
 MAIN_OBJ = $(BUILD)/$(basename $(notdir $(MAIN_SRC))).o
 
 # Persistent cache root for third-party library objects/archives.
@@ -24,7 +24,9 @@ U8G2_SRCS=$(wildcard $(U8G2_DIR)/*.c)
 U8G2_CACHE=$(CACHE_ROOT)/u8g2
 U8G2_LIB=$(CACHE_ROOT)/libu8g2.a
 U8G2_OBJS=$(patsubst $(U8G2_DIR)/%.c,$(U8G2_CACHE)/%.o,$(U8G2_SRCS))
-DEPS=$(BUILD)/start.d $(MAIN_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(U8G2_OBJS:.o=.d)
+I2C_SRC=lib/i2c/i2c.c
+I2C_OBJ=$(BUILD)/i2c.o
+DEPS=$(BUILD)/start.d $(MAIN_OBJ:.o=.d) $(I2C_OBJ:.o=.d) #$(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(U8G2_OBJS:.o=.d)
 
 CFLAGS=-march=rv32im_zicsr -mabi=ilp32 \
        -Wall \
@@ -41,19 +43,12 @@ CFLAGS=-march=rv32im_zicsr -mabi=ilp32 \
 
 # C++ flags: no exceptions, no RTTI (keeps code small on bare-metal)
 # -I.            : src/firmware/ on include path (for i2c.h from lib/u8g2_hal/)
-# -Ilib/u8g2_hal : exposes u8g2_hal.h to main.cpp
-CXXFLAGS=$(CFLAGS) \
-         -std=c++17 \
-         -fno-exceptions \
-         -fno-rtti \
-         -fno-threadsafe-statics \
-         -fno-use-cxa-atexit \
-         -I. \
-         -Ilib/u8g2_hal
+# -Ilib/u8g2_hal : exposes u8g2_hal.h to main.c
+
 
 # Match the i2c library CMake target settings for this library only.
 # The CMake target uses -O2 -g and the same include path.
-I2C_CXXFLAGS=$(CXXFLAGS) -O2 -g
+I2C_CXXFLAGS=$(CXXFLAGS) -Os -g
 
 # -nostartfiles: don't use toolchain crt0 (we have start.S)
 # --specs=nano.specs: newlib-nano provides memcpy/strlen/memset etc.
@@ -75,20 +70,17 @@ $(BUILD):
 $(U8G2_CACHE):
 	mkdir -p $@
 
-$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(BUILD)/i2c.o $(U8G2_LIB) | $(BUILD)
-	$(CROSS)g++ $(LDFLAGS) $^ -o $@
+$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(I2C_OBJ) | $(BUILD)
+	$(CROSS)gcc $(LDFLAGS) $^ -o $@
 
 $(BUILD)/start.o: start.S | $(BUILD)
 	$(CROSS)gcc $(CFLAGS) -c $< -o $@
 
 $(MAIN_OBJ): $(MAIN_SRC) | $(BUILD)
-	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
+	$(CROSS)gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD)/u8g2_hal.o: lib/u8g2_hal/u8g2_hal.cpp | $(BUILD)
-	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
-
-$(BUILD)/i2c.o: lib/i2c/i2c.cpp | $(BUILD)
-	$(CROSS)g++ $(I2C_CXXFLAGS) -c $< -o $@
+$(I2C_OBJ): $(I2C_SRC) | $(BUILD)
+	$(CROSS)gcc $(CFLAGS) -c $< -o $@
 
 # u8g2 C sources are cached outside $(BUILD) so a normal clean does not force
 # recompiling the whole graphics library on the next firmware rebuild.
@@ -110,49 +102,6 @@ clean:
 distclean: clean
 	rm -rf $(CACHE_ROOT)
 
-# ─── Memory Lab (toolchain / startup validation) ──────────────────────────────
-#
-# Builds memoryLab.cpp as a standalone firmware (no u8g2, no u8g2_hal).
-# Produces three analysis files alongside the hex:
-#   build/lab.map  — linker memory map: section sizes, symbol addresses
-#   build/lab.lst  — full disassembly with source (check gp init, BSS loop, ctors)
-#
-# Usage:
-#   make lab        → build everything
-#   make lab-fw     → build + program via ecpbram BRAM patch (from root Makefile)
-
-LAB_ELF     = $(BUILD)/lab.elf
-LAB_HEX     = $(BUILD)/lab.hex
-LAB_LST     = $(BUILD)/lab.lst
-LAB_MAP     = $(BUILD)/lab.map
-LAB_OBJ     = $(BUILD)/memoryLab.o
-
-# -g: debug symbols in ELF so objdump -S can interleave C++ source in .lst
-LAB_CXXFLAGS = $(CXXFLAGS) -g
-
-LAB_LDFLAGS = -T link.ld \
-              -nostartfiles \
-              -Wl,--gc-sections \
-              -Wl,-Map,$(LAB_MAP) \
-              --specs=nano.specs \
-              --specs=nosys.specs
-
-.PHONY: lab
-
-lab: $(LAB_HEX) $(LAB_LST)
-	@echo "────────────────────────────────────────────────"
-	@echo "  Lab firmware: $(LAB_HEX)"
-	@echo "  Memory map:   $(LAB_MAP)"
-	@echo "  Disassembly:  $(LAB_LST)"
-	@echo "────────────────────────────────────────────────"
-
-# ELF: start + memoryLab + i2c only (no u8g2)
-$(LAB_ELF): $(BUILD)/start.o $(LAB_OBJ) $(BUILD)/i2c.o | $(BUILD)
-	$(CROSS)g++ $(LAB_LDFLAGS) $^ -o $@
-
-# Compile memoryLab.cpp with debug symbols
-$(LAB_OBJ): memoryLab.cpp | $(BUILD)
-	$(CROSS)g++ $(LAB_CXXFLAGS) -c $< -o $@
 
 # Intel/Verilog hex for BRAM programming
 $(LAB_HEX): $(LAB_ELF)
