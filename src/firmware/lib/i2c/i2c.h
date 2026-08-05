@@ -3,6 +3,19 @@
 
 #include <cstdint>
 
+enum class WbI2cStatus : uint8_t
+{
+    Init,
+    Idle,
+    Ready,
+    Writing,
+    Reading,
+    StartTimeout,
+    WriteTimeout,
+    ReadTimeout,
+    StopTimeout,
+};
+
 class WbI2c {
 public:
     static constexpr uint32_t CLK_KHZ = 25000u;  // 25 MHz
@@ -35,9 +48,10 @@ public:
     uint8_t requestFrom(uint8_t slaveAddr, uint8_t numBytes);
     uint8_t read(void);
     uint8_t write(uint8_t b);
+    WbI2cStatus status() const { return status_; }
 
 private:
-    volatile uint32_t& reg_read32(uint32_t reg) const {
+    volatile uint32_t reg_read32(uint32_t reg) const {
         return *reinterpret_cast<volatile uint32_t*>(base_ + reg);
     }
 
@@ -47,12 +61,14 @@ private:
         __asm__ volatile("" ::: "memory");
     }
 
-    void waitForDone() const {
+    bool waitForDone() const {
         for (uint32_t i = 0u; i < 1000000u; ++i) {
+            __asm__ volatile("" ::: "memory");
             if ((reg_read32(REG_STATUS) & STATUS_TIP) == 0u) {
-                return;
+                return true;
             }
         }
+        return false;
     }
 
     uint32_t base_;
@@ -62,6 +78,7 @@ private:
     uint8_t rx_buffer_[16] = {0u};
     uint8_t rx_count_ = 0u;
     uint8_t rx_index_ = 0u;
+    WbI2cStatus status_ = WbI2cStatus::Init;
 };
 
 #endif /* I2C_H */

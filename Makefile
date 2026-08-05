@@ -23,7 +23,13 @@ SOURCES := $(call rwildcard,src/,*.sv) \
            $(call rwildcard,src/,*.v)
 
 
-.PHONY: all firmware-build firmware-test bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only
+.PHONY: all firmware-build firmware-test bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only sim
+
+SIM_VVP=sim/tb_wb_i2c.vvp
+SIM_SOURCES := sim/tb_wb_i2c.v \
+               src/wbDevices/wb_i2c.sv \
+               $(wildcard src/i2c-master/*.v) \
+               $(wildcard src/i2c/*.v)
 
 all: firmware-build $(BUILD)/$(TOP).bit
 
@@ -130,6 +136,13 @@ $(BUILD)/$(TOP).svf: $(BUILD)/$(TOP).bit
 	ecppack \
 		--svf $@ \
 		$<
+
+# Rebuild and run the I2C wrapper simulation.
+sim: $(SIM_VVP)
+	vvp $(SIM_VVP)
+
+$(SIM_VVP): $(SIM_SOURCES)
+	iverilog -g2012 -I src/i2c-master -o $@ $(SIM_SOURCES)
 
 
 # Program FPGA configuration RAM (default: openFPGALoader)

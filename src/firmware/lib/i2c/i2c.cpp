@@ -11,6 +11,7 @@ void WbI2c::begin() {
     tx_started_ = false;
     rx_count_ = 0u;
     rx_index_ = 0u;
+    status_ = WbI2cStatus::Init;
 }
 
 void WbI2c::setClock(uint32_t clockSpeedHz) {
@@ -37,6 +38,7 @@ void WbI2c::beginTransmission(uint8_t slaveAddr) {
     rx_count_ = 0u;
     rx_index_ = 0u;
     reg_write32(REG_ADDR, static_cast<uint32_t>(slaveAddr));
+    status_ = WbI2cStatus::Ready;
 }
 
 uint8_t WbI2c::write(uint8_t b) {
@@ -47,13 +49,20 @@ uint8_t WbI2c::write(uint8_t b) {
     if (!tx_started_) {
         reg_write32(REG_DATA, static_cast<uint32_t>((slave_addr_ << 1u) & 0xFEu));
         reg_write32(REG_CMD, CMD_START_WRITE);
-        waitForDone();
+        if(!waitForDone()) {
+            status_ = WbI2cStatus::StartTimeout;
+            return 0u;
+        }        
         tx_started_ = true;
     }
 
     reg_write32(REG_DATA, static_cast<uint32_t>(b));
     reg_write32(REG_CMD, CMD_WRITE);
-    waitForDone();
+    if(!waitForDone()) {
+        status_ = WbI2cStatus::WriteTimeout;
+        return 0u;
+    }
+    status_ = WbI2cStatus::Writing;
     return 1u;
 }
 
@@ -98,7 +107,12 @@ uint8_t WbI2c::read(void) {
 uint8_t WbI2c::endTransmission() {
     if (active_tx_) {
         reg_write32(REG_CMD, CMD_WRITE_STOP);
-        waitForDone();
+        if(!waitForDone()) {
+            status_ = WbI2cStatus::StopTimeout;
+        }
+        else {
+            status_ = WbI2cStatus::Idle;
+        }
         active_tx_ = false;
         tx_started_ = false;
     }

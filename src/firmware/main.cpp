@@ -50,12 +50,29 @@ static void led_d2_blink()
     *LED_D2 = 1u;delay(200u);*LED_D2 = 0u;delay(200u); // led_d2 on/off
     delay(500u);
 }
+
+static void blinkStatus(WbLed &led, WbI2cStatus status){
+    // 1 blink : WbI2cStatus::Init
+    // 2 blinks : WbI2cStatus::Idle
+    // 3 blinks : WbI2cStatus::Ready
+    // 4 blinks : WbI2cStatus::Writing
+    // 5 blinks : WbI2cStatus::Reading
+    // 6 blinks : WbI2cStatus::StartTimeout
+    // 7 blinks : WbI2cStatus::WriteTimeout
+    // 8 blinks : WbI2cStatus::ReadTimeout
+    // 9 blinks : WbI2cStatus::StopTimeout
+    for(int i = 0;i<static_cast<int>(status) + 1;i++){
+        led.blink(100u);
+        delay(200u);
+    }
+}
+
 int main(void)
 {
-    led_d2_blink();
+    led_d2_blink(); // 4 blinks : the main() has started
     //sdram_wait_ready();
-    WbLed  led0(LED0_BASE);
-    WbLed  led1(LED1_BASE);
+    WbLed  ledGreen(LED0_BASE);
+    WbLed  ledYellow(LED1_BASE);
     WbI2c  i2c0(I2C0_BASE);
     bool s_oled_ok = false;
     bool s_oled_init = false;
@@ -64,13 +81,47 @@ int main(void)
     uint32_t next_toggle_ms = *TIMER_MS + kBlinkPeriodMs;
     *LED_D2 = 1u;
     i2c0.begin();
+    if(i2c0.status() != WbI2cStatus::Init) {
+        blinkStatus(ledYellow, i2c0.status());
+        delay(400u);
+    }
+    else {
+        ledGreen.blink(100u);
+        delay(400u);
+    }
     i2c0.setClock(100000u); // 100 kHz @ 25 MHz
     uint8_t test = 0u;
     while (1) {
         if(!s_oled_ok){
+            ledYellow.blink(100u);
+            delay(400u);
             i2c0.beginTransmission(0x3C); // probe for OLED at 0x3C
+            if(i2c0.status() != WbI2cStatus::Ready) {
+                blinkStatus(ledYellow, i2c0.status());
+                delay(400u);
+            }
+            else {
+                ledGreen.blink(100u);
+                delay(400u);
+            }
             i2c0.write(0x3C); // probe for OLED at 0x3C
+            if(i2c0.status() != WbI2cStatus::Writing) {
+                blinkStatus(ledYellow, i2c0.status());
+                delay(400u);
+            }
+            else {
+                ledGreen.blink(100u);
+                delay(400u);
+            }
             int tx_status = i2c0.endTransmission();
+            if(i2c0.status() != WbI2cStatus::Idle) {
+                blinkStatus(ledYellow, i2c0.status());
+                delay(400u);
+            }
+            else {
+                ledGreen.blink(100u);
+                delay(400u);
+            }
             if(tx_status == 0) {
                 s_oled_ok = true;
             }
@@ -80,8 +131,8 @@ int main(void)
             led_on = !led_on;
             *LED_D2 = led_on ? 0u : 1u;
             next_toggle_ms += kBlinkPeriodMs;
-            if (!s_oled_ok) led1.blink(600u);
-            else led0.blink(60u);            
+            if (!s_oled_ok) ledYellow.blink(600u);
+            else ledGreen.blink(60u);            
         }
     }
 }
