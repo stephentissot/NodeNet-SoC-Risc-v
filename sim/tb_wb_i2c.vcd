@@ -1,0 +1,1354 @@
+$date
+	Wed Aug 05 08:24:35 2026
+$end
+$version
+	Icarus Verilog
+$end
+$timescale
+	1ps
+$end
+$scope module tb_wb_i2c $end
+$var wire 1 ! i2c_scl $end
+$var wire 1 " i2c_sda $end
+$var wire 32 # wb_dat_o [31:0] $end
+$var wire 1 $ wb_ack $end
+$var parameter 32 % I2C_BASE $end
+$var reg 1 & clk $end
+$var reg 1 ' rst $end
+$var reg 32 ( wb_adr [31:0] $end
+$var reg 1 ) wb_cyc $end
+$var reg 32 * wb_dat [31:0] $end
+$var reg 4 + wb_sel [3:0] $end
+$var reg 1 , wb_stb $end
+$var reg 1 - wb_we $end
+$scope module dut $end
+$var wire 1 & clk $end
+$var wire 1 ! i2c_scl $end
+$var wire 1 " i2c_sda $end
+$var wire 1 ' rst $end
+$var wire 32 . wb_adr_i [31:0] $end
+$var wire 1 ) wb_cyc_i $end
+$var wire 32 / wb_dat_i [31:0] $end
+$var wire 4 0 wb_sel_i [3:0] $end
+$var wire 1 , wb_stb_i $end
+$var wire 1 - wb_we_i $end
+$var wire 8 1 core_dat_o [7:0] $end
+$var wire 1 2 core_ack $end
+$var parameter 32 3 ADDR $end
+$var parameter 16 4 DEFAULT_PRESCALE $end
+$var parameter 3 5 REG_ADDR $end
+$var parameter 3 6 REG_CMD $end
+$var parameter 3 7 REG_DATA $end
+$var parameter 3 8 REG_FIFO $end
+$var parameter 3 9 REG_PRESC_HI $end
+$var parameter 3 : REG_PRESC_LO $end
+$var parameter 3 ; REG_STATUS $end
+$var parameter 2 < ST_IDLE $end
+$var parameter 2 = ST_WAIT $end
+$var reg 8 > cmd_reg [7:0] $end
+$var reg 3 ? core_adr [2:0] $end
+$var reg 1 @ core_cyc $end
+$var reg 8 A core_dat_i [7:0] $end
+$var reg 1 B core_enabled $end
+$var reg 1 C core_stb $end
+$var reg 1 D core_we $end
+$var reg 8 E data_reg [7:0] $end
+$var reg 8 F fifo_reg [7:0] $end
+$var reg 1 G pending_read $end
+$var reg 8 H prescale_hi_reg [7:0] $end
+$var reg 8 I prescale_lo_reg [7:0] $end
+$var reg 32 J read_back [31:0] $end
+$var reg 8 K slave_addr_reg [7:0] $end
+$var reg 2 L state [1:0] $end
+$var reg 1 $ wb_ack_o $end
+$var reg 32 M wb_dat_o [31:0] $end
+$scope module i2c_inst $end
+$var wire 1 N arst_i $end
+$var wire 1 O rst_i $end
+$var wire 1 ! scl $end
+$var wire 1 P scl_pad_i $end
+$var wire 1 Q scl_pad_o $end
+$var wire 1 " sda $end
+$var wire 1 R sda_pad_i $end
+$var wire 1 S sda_pad_o $end
+$var wire 3 T wb_adr_i [2:0] $end
+$var wire 1 & wb_clk_i $end
+$var wire 1 @ wb_cyc_i $end
+$var wire 8 U wb_dat_i [7:0] $end
+$var wire 1 ' wb_rst_i $end
+$var wire 1 C wb_stb_i $end
+$var wire 1 V wb_wacc $end
+$var wire 1 D wb_we_i $end
+$var wire 1 W wr $end
+$var wire 8 X txr [7:0] $end
+$var wire 1 Y sto $end
+$var wire 1 Z sta $end
+$var wire 8 [ sr [7:0] $end
+$var wire 1 \ sda_padoen_o $end
+$var wire 1 ] scl_padoen_o $end
+$var wire 8 ^ rxr [7:0] $end
+$var wire 1 _ rd $end
+$var wire 16 ` prer [15:0] $end
+$var wire 1 a irxack $end
+$var wire 1 b ien $end
+$var wire 1 c iack $end
+$var wire 1 d i2c_busy $end
+$var wire 1 e i2c_al $end
+$var wire 1 f done $end
+$var wire 8 g ctr [7:0] $end
+$var wire 8 h cr [7:0] $end
+$var wire 1 i core_txd $end
+$var wire 1 j core_rxd $end
+$var wire 1 k core_en $end
+$var wire 4 l core_cmd [3:0] $end
+$var wire 1 m core_ack $end
+$var wire 1 n ack $end
+$var parameter 1 o ARST_LVL $end
+$var reg 1 2 wb_ack_o $end
+$var reg 8 p wb_dat_o [7:0] $end
+$var reg 1 q wb_inta_o $end
+$scope module bit_controller $end
+$var wire 1 & clk $end
+$var wire 1 k ena $end
+$var wire 1 O nReset $end
+$var wire 1 ' rst $end
+$var wire 1 P scl_i $end
+$var wire 1 Q scl_o $end
+$var wire 1 R sda_i $end
+$var wire 1 S sda_o $end
+$var wire 1 r slave_wait $end
+$var wire 1 i din $end
+$var wire 4 s cmd [3:0] $end
+$var wire 16 t clk_cnt [15:0] $end
+$var parameter 17 u idle $end
+$var parameter 17 v rd_a $end
+$var parameter 17 w rd_b $end
+$var parameter 17 x rd_c $end
+$var parameter 17 y rd_d $end
+$var parameter 17 z start_a $end
+$var parameter 17 { start_b $end
+$var parameter 17 | start_c $end
+$var parameter 17 } start_d $end
+$var parameter 17 ~ start_e $end
+$var parameter 17 !" stop_a $end
+$var parameter 17 "" stop_b $end
+$var parameter 17 #" stop_c $end
+$var parameter 17 $" stop_d $end
+$var parameter 17 %" wr_a $end
+$var parameter 17 &" wr_b $end
+$var parameter 17 '" wr_c $end
+$var parameter 17 (" wr_d $end
+$var reg 1 e al $end
+$var reg 1 d busy $end
+$var reg 17 )" c_state [16:0] $end
+$var reg 1 *" clk_en $end
+$var reg 1 m cmd_ack $end
+$var reg 1 +" cmd_stop $end
+$var reg 16 ," cnt [15:0] $end
+$var reg 1 -" dSCL $end
+$var reg 1 ." dSDA $end
+$var reg 1 j dout $end
+$var reg 1 /" dscl_oen $end
+$var reg 1 0" sSCL $end
+$var reg 1 1" sSDA $end
+$var reg 1 ] scl_oen $end
+$var reg 1 2" sda_chk $end
+$var reg 1 \ sda_oen $end
+$var reg 1 3" sta_condition $end
+$var reg 1 4" sto_condition $end
+$upscope $end
+$scope module byte_controller $end
+$var wire 1 n ack_in $end
+$var wire 1 & clk $end
+$var wire 1 5" cnt_done $end
+$var wire 1 m core_ack $end
+$var wire 1 j core_rxd $end
+$var wire 8 6" dout [7:0] $end
+$var wire 1 7" go $end
+$var wire 1 e i2c_al $end
+$var wire 1 O nReset $end
+$var wire 1 _ read $end
+$var wire 1 ' rst $end
+$var wire 1 Z start $end
+$var wire 1 Y stop $end
+$var wire 1 W write $end
+$var wire 8 8" din [7:0] $end
+$var wire 16 9" clk_cnt [15:0] $end
+$var parameter 5 :" ST_ACK $end
+$var parameter 5 ;" ST_IDLE $end
+$var parameter 5 <" ST_READ $end
+$var parameter 5 =" ST_START $end
+$var parameter 5 >" ST_STOP $end
+$var parameter 5 ?" ST_WRITE $end
+$var reg 1 a ack_out $end
+$var reg 5 @" c_state [4:0] $end
+$var reg 1 f cmd_ack $end
+$var reg 4 A" core_cmd [3:0] $end
+$var reg 1 i core_txd $end
+$var reg 3 B" dcnt [2:0] $end
+$var reg 1 C" ld $end
+$var reg 1 D" shift $end
+$var reg 8 E" sr [7:0] $end
+$upscope $end
+$scope module registers $end
+$var wire 1 f done $end
+$var wire 1 e i2c_al $end
+$var wire 1 d i2c_busy $end
+$var wire 1 a irxack $end
+$var wire 1 O rst_i $end
+$var wire 3 F" wb_adr_i [2:0] $end
+$var wire 1 & wb_clk_i $end
+$var wire 8 G" wb_dat_i [7:0] $end
+$var wire 1 ' wb_rst_i $end
+$var wire 1 V wb_wacc $end
+$var wire 8 H" sr [7:0] $end
+$var reg 1 I" al $end
+$var reg 8 J" cr [7:0] $end
+$var reg 8 K" ctr [7:0] $end
+$var reg 1 L" irq_flag $end
+$var reg 16 M" prer [15:0] $end
+$var reg 1 N" rxack $end
+$var reg 1 O" tip $end
+$var reg 8 P" txr [7:0] $end
+$upscope $end
+$upscope $end
+$upscope $end
+$scope task mmio_write $end
+$var reg 32 Q" data [31:0] $end
+$var reg 32 R" offset [31:0] $end
+$upscope $end
+$scope task wb_write $end
+$var reg 32 S" addr [31:0] $end
+$var reg 32 T" data [31:0] $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+$comment Show the parameter values. $end
+$dumpall
+b100 ?"
+b10000 >"
+b1 ="
+b10 <"
+b0 ;"
+b1000 :"
+b10000000000000000 ("
+b1000000000000000 '"
+b100000000000000 &"
+b10000000000000 %"
+b100000000 $"
+b10000000 #"
+b1000000 ""
+b100000 !"
+b10000 ~
+b1000 }
+b100 |
+b10 {
+b1 z
+b1000000000000 y
+b100000000000 x
+b10000000000 w
+b1000000000 v
+b0 u
+0o
+b1 =
+b0 <
+b0 ;
+b110 :
+b111 9
+b1 8
+b100 7
+b11 6
+b10 5
+b111110 4
+b10000000000000101000000000000 3
+b10000000000000101000000000000 %
+$end
+#0
+$dumpvars
+bx T"
+bx S"
+bx R"
+bx Q"
+bx P"
+xO"
+xN"
+bx M"
+xL"
+bx K"
+bx J"
+xI"
+bx000xx H"
+b0 G"
+b0 F"
+bx E"
+xD"
+xC"
+bx B"
+bx A"
+bx @"
+bx 9"
+bx 8"
+x7"
+bx 6"
+x5"
+x4"
+x3"
+x2"
+x1"
+x0"
+x/"
+x."
+x-"
+bx ,"
+x+"
+x*"
+bx )"
+bx t
+bx s
+xr
+xq
+bx p
+xn
+xm
+bx l
+xk
+xj
+xi
+bx h
+bx g
+xf
+xe
+xd
+xc
+xb
+xa
+bx `
+x_
+bx ^
+x]
+x\
+bx000xx [
+xZ
+xY
+bx X
+xW
+0V
+b0 U
+b0 T
+0S
+xR
+0Q
+xP
+0O
+0N
+b0 M
+b0 L
+b0 K
+b0 J
+b111110 I
+b0 H
+0G
+b0 F
+b0 E
+0D
+0C
+xB
+b0 A
+0@
+b0 ?
+b0 >
+x2
+bx 1
+b1111 0
+b0 /
+b0 .
+0-
+0,
+b1111 +
+b0 *
+0)
+b0 (
+1'
+0&
+0$
+b0 #
+x"
+x!
+$end
+#1000
+07"
+b0 [
+b0 H"
+15"
+0r
+1R
+1"
+1P
+1!
+0b
+0k
+0c
+0n
+0W
+0_
+0Y
+0Z
+b0 ^
+b0 6"
+b0 E"
+b0 B"
+0a
+b0 @"
+0f
+0C"
+0D"
+0i
+b0 l
+b0 s
+b0 A"
+1*"
+b0 ,"
+1."
+1-"
+11"
+10"
+04"
+03"
+0d
+0+"
+0e
+02"
+1\
+1]
+0m
+b0 )"
+b0 X
+b0 8"
+b0 P"
+b0 g
+b0 K"
+b1111111111111111 `
+b1111111111111111 t
+b1111111111111111 9"
+b1111111111111111 M"
+b0 h
+b0 J"
+0L"
+0O"
+0N"
+0I"
+0q
+#20000
+1&
+#21000
+1/"
+02
+b11111111 1
+b11111111 p
+#40000
+0&
+#60000
+1&
+#80000
+0&
+#100000
+1&
+#120000
+0&
+#140000
+1&
+#160000
+0&
+#180000
+1&
+#200000
+1O
+1N
+0&
+0'
+#220000
+1&
+#221000
+b1111111111111111 ,"
+#240000
+0&
+#260000
+1&
+#280000
+0&
+#300000
+1&
+#320000
+0&
+#340000
+1&
+#360000
+0&
+#380000
+b111110 T"
+b10000000000000101000000011000 S"
+b111110 Q"
+b11000 R"
+1&
+#400000
+0&
+#420000
+1&
+#421000
+1,
+1)
+1-
+b111110 *
+b111110 /
+b10000000000000101000000011000 (
+b10000000000000101000000011000 .
+#440000
+0&
+#460000
+1V
+b1 L
+1@
+1C
+1D
+b111110 A
+b111110 U
+b111110 G"
+1&
+#480000
+0&
+#500000
+1@
+1C
+1&
+#501000
+b1111111100111110 `
+b1111111100111110 t
+b1111111100111110 9"
+b1111111100111110 M"
+12
+#520000
+0&
+#540000
+b0 L
+1$
+1@
+1C
+1&
+#541000
+b1111111100111110 ,"
+b111110 1
+b111110 p
+02
+#560000
+0&
+#580000
+b1 L
+0$
+1@
+1C
+1&
+#581000
+12
+b0 T"
+b10000000000000101000000011100 S"
+b0 Q"
+b11100 R"
+0-
+0,
+0)
+#600000
+0&
+#620000
+b0 L
+1$
+1@
+1C
+1&
+#621000
+02
+1,
+1)
+1-
+b0 *
+b0 /
+b10000000000000101000000011100 (
+b10000000000000101000000011100 .
+#640000
+0&
+#660000
+b1 L
+b0 A
+b0 U
+b0 G"
+b1 ?
+b1 T
+b1 F"
+0$
+1@
+1C
+1&
+#661000
+12
+b1000 T"
+b10000000000000101000000000000 S"
+b1000 Q"
+b0 R"
+0-
+0,
+0)
+#680000
+0&
+#700000
+b0 L
+1$
+1@
+1C
+1&
+#701000
+b111110 `
+b111110 t
+b111110 9"
+b111110 M"
+b11111111 1
+b11111111 p
+02
+1,
+1)
+1-
+b1000 *
+b1000 /
+b10000000000000101000000000000 (
+b10000000000000101000000000000 .
+#720000
+0&
+#740000
+0V
+0$
+0@
+0C
+1&
+#741000
+b111110 ,"
+12
+b0 1
+b0 p
+b1000000 T"
+b10000000000000101000000001100 S"
+b1000000 Q"
+b1100 R"
+0-
+0,
+0)
+#760000
+0&
+#780000
+1&
+#781000
+02
+1,
+1)
+1-
+b1000000 *
+b1000000 /
+b10000000000000101000000001100 (
+b10000000000000101000000001100 .
+#800000
+0&
+#820000
+1V
+b1 L
+1@
+1C
+b1000000 A
+b1000000 U
+b1000000 G"
+b100 ?
+b100 T
+b100 F"
+b1000000 >
+1&
+#840000
+0&
+#860000
+1@
+1C
+1&
+#861000
+12
+#880000
+0&
+#900000
+b0 L
+1$
+1@
+1C
+1&
+#901000
+02
+#920000
+0&
+#940000
+b1 L
+0$
+1@
+1C
+1&
+#941000
+12
+0-
+0,
+0)
+#960000
+0&
+#980000
+b0 L
+1$
+1@
+1C
+1&
+#981000
+02
+#1000000
+0&
+#1020000
+0V
+0$
+0@
+0C
+1&
+#1021000
+12
+#1040000
+0&
+#1060000
+1&
+#1061000
+02
+#1080000
+0&
+#1100000
+1&
+#1120000
+0&
+#1140000
+1&
+#1160000
+0&
+#1180000
+1&
+#1200000
+0&
+#1220000
+1&
+#1240000
+0&
+#1260000
+1&
+#1280000
+0&
+#1300000
+1&
+#1320000
+0&
+#1340000
+b111110 T"
+b10000000000000101000000011000 S"
+b111110 Q"
+b11000 R"
+1&
+#1360000
+0&
+#1380000
+1&
+#1381000
+1,
+1)
+1-
+b111110 *
+b111110 /
+b10000000000000101000000011000 (
+b10000000000000101000000011000 .
+#1400000
+0&
+#1420000
+1V
+b1 L
+1@
+1C
+b111110 A
+b111110 U
+b111110 G"
+b0 ?
+b0 T
+b0 F"
+1&
+#1440000
+0&
+#1460000
+1@
+1C
+1&
+#1461000
+12
+b111110 1
+b111110 p
+#1480000
+0&
+#1500000
+b0 L
+1$
+1@
+1C
+1&
+#1501000
+02
+#1520000
+0&
+#1540000
+b1 L
+0$
+1@
+1C
+1&
+#1541000
+12
+b0 T"
+b10000000000000101000000011100 S"
+b0 Q"
+b11100 R"
+0-
+0,
+0)
+#1560000
+0&
+#1580000
+b0 L
+1$
+1@
+1C
+1&
+#1581000
+02
+1,
+1)
+1-
+b0 *
+b0 /
+b10000000000000101000000011100 (
+b10000000000000101000000011100 .
+#1600000
+0&
+#1620000
+b1 L
+b0 A
+b0 U
+b0 G"
+b1 ?
+b1 T
+b1 F"
+0$
+1@
+1C
+1&
+#1621000
+12
+0-
+0,
+0)
+#1640000
+0&
+#1660000
+b0 L
+1$
+1@
+1C
+1&
+#1661000
+b0 1
+b0 p
+02
+#1680000
+0&
+#1700000
+0V
+0$
+0@
+0C
+1&
+#1701000
+12
+#1720000
+0&
+#1740000
+1&
+#1741000
+02
+#1760000
+0&
+#1780000
+1&
+#1800000
+0&
+#1820000
+1&
+#1840000
+0&
+#1860000
+1&
+#1880000
+0&
+#1900000
+1&
+#1920000
+0&
+#1940000
+1&
+#1960000
+0&
+#1980000
+1&
+#2000000
+0&
+#2020000
+b111100 T"
+b10000000000000101000000001000 S"
+b111100 Q"
+b1000 R"
+1&
+#2040000
+0&
+#2060000
+1&
+#2061000
+1,
+1)
+1-
+b111100 *
+b111100 /
+b10000000000000101000000001000 (
+b10000000000000101000000001000 .
+#2080000
+0&
+#2100000
+1$
+b111100 K
+1&
+#2120000
+0&
+#2140000
+1$
+1&
+#2141000
+0-
+0,
+0)
+#2160000
+0&
+#2180000
+0$
+1&
+#2200000
+0&
+#2220000
+1&
+#2240000
+0&
+#2260000
+1&
+#2280000
+0&
+#2300000
+1&
+#2320000
+0&
+#2340000
+1&
+#2360000
+0&
+#2380000
+b10000000000000101000000010000 S"
+b10000 R"
+1&
+#2400000
+0&
+#2420000
+1&
+#2421000
+1,
+1)
+1-
+b10000000000000101000000010000 (
+b10000000000000101000000010000 .
+#2440000
+0&
+#2460000
+1V
+b1 L
+1@
+1C
+b111100 A
+b111100 U
+b111100 G"
+b11 ?
+b11 T
+b11 F"
+b111100 E
+1&
+#2480000
+0&
+#2500000
+1@
+1C
+1&
+#2501000
+b111100 X
+b111100 8"
+b111100 P"
+12
+#2520000
+0&
+#2540000
+b0 L
+1$
+1@
+1C
+1&
+#2541000
+02
+#2560000
+0&
+#2580000
+b1 L
+0$
+1@
+1C
+1&
+#2581000
+12
+b10010000 T"
+b10000000000000101000000001100 S"
+b10010000 Q"
+b1100 R"
+0-
+0,
+0)
+#2600000
+0&
+#2620000
+b0 L
+1$
+1@
+1C
+1&
+#2621000
+02
+1,
+1)
+1-
+b10010000 *
+b10010000 /
+b10000000000000101000000001100 (
+b10000000000000101000000001100 .
+#2640000
+0&
+#2660000
+b1 L
+b10010000 A
+b10010000 U
+b10010000 G"
+b100 ?
+b100 T
+b100 F"
+b10010000 >
+0$
+1@
+1C
+1&
+#2661000
+12
+0-
+0,
+0)
+#2680000
+0&
+#2700000
+b0 L
+1$
+1@
+1C
+1&
+#2701000
+02
+#2720000
+0&
+#2740000
+0V
+0$
+0@
+0C
+1&
+#2741000
+12
+#2760000
+0&
+#2780000
+1&
+#2781000
+02
+#2800000
+0&
+#2820000
+1&
+#2840000
+0&
+#2860000
+1&
+#2880000
+0&
+#2900000
+1&
+#2920000
+0&
+#2940000
+1&
+#2960000
+0&
+#2980000
+1&
+#3000000
+0&
+#3020000
+1&
+#3040000
+0&
+#3060000
+1&
+#3080000
+0&
+#3100000
+1&
+#3120000
+0&
+#3140000
+1&
+#3160000
+0&
+#3180000
+1&
+#3200000
+0&
+#3220000
+1&
+#3240000
+0&
+#3260000
+1&
+#3280000
+0&
+#3300000
+1&
+#3320000
+0&
+#3340000
+1&
+#3360000
+0&
+#3380000
+1&
+#3400000
+0&
+#3420000
+1&
+#3440000
+0&
+#3460000
+1&
+#3480000
+0&
+#3500000
+1&
+#3520000
+0&
+#3540000
+1&
+#3560000
+0&
+#3580000
+1&
+#3600000
+0&
+#3620000
+1&
+#3640000
+0&
+#3660000
+1&
+#3680000
+0&
+#3700000
+1&
+#3720000
+0&
+#3740000
+1&
+#3760000
+0&
+#3780000
+1&
+#3800000
+0&
+#3820000
+1&
+#3840000
+0&
+#3860000
+b1000000 T"
+b1000000 Q"
+1&
+#3880000
+0&
+#3900000
+1&
+#3901000
+1,
+1)
+1-
+b1000000 *
+b1000000 /
+#3920000
+0&
+#3940000
+1V
+b1 L
+1@
+1C
+b1000000 A
+b1000000 U
+b1000000 G"
+b1000000 >
+1&
+#3960000
+0&
+#3980000
+1@
+1C
+1&
+#3981000
+12
+#4000000
+0&
+#4020000
+b0 L
+1$
+1@
+1C
+1&
+#4021000
+02
+#4040000
+0&
+#4060000
+b1 L
+0$
+1@
+1C
+1&
+#4061000
+12
+0-
+0,
+0)
+#4080000
+0&
+#4100000
+b0 L
+1$
+1@
+1C
+1&
+#4101000
+02
+#4120000
+0&
+#4140000
+0V
+0$
+0@
+0C
+1&
+#4141000
+12
+#4160000
+0&
+#4180000
+1&
+#4181000
+02
+#4200000
+0&
+#4220000
+1&
+#4240000
+0&
+#4260000
+1&
+#4280000
+0&
+#4300000
+1&
+#4320000
+0&
+#4340000
+1&
+#4360000
+0&
+#4380000
+1&
+#4400000
+0&
+#4420000
+1&
+#4440000
+0&
+#4460000
+1&
+#4480000
+0&
+#4500000
+1&
+#4520000
+0&
+#4540000
+1&
+#4560000
+0&
+#4580000
+1&
+#4600000
+0&
+#4620000
+1&
+#4640000
+0&
+#4660000
+1&
+#4680000
+0&
+#4700000
+1&
+#4720000
+0&
+#4740000
+1&
+#4760000
+0&
+#4780000
+1&
+#4800000
+0&
+#4820000
+1&
+#4840000
+0&
+#4860000
+1&

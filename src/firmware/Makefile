@@ -13,6 +13,7 @@ GIT_HASH := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 # You can still override manually: make MAIN_SRC=test_main.cpp
 MAIN_SRC ?= main.cpp
 MAIN_OBJ = $(BUILD)/$(basename $(notdir $(MAIN_SRC))).o
+I2C_OBJ = $(BUILD)/i2c.o
 
 # Persistent cache root for third-party library objects/archives.
 # Reuse this pattern if more vendored libraries need expensive rebuilds later.
@@ -70,7 +71,7 @@ $(BUILD):
 $(U8G2_CACHE):
 	mkdir -p $@
 
-$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(U8G2_LIB) | $(BUILD)
+$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(U8G2_LIB) | $(BUILD)
 	$(CROSS)g++ $(LDFLAGS) $^ -o $@
 
 $(BUILD)/start.o: start.S | $(BUILD)
@@ -80,6 +81,9 @@ $(MAIN_OBJ): $(MAIN_SRC) | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/u8g2_hal.o: lib/u8g2_hal/u8g2_hal.cpp | $(BUILD)
+	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
+
+$(I2C_OBJ): lib/i2c/i2c.cpp | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
 # u8g2 C sources are cached outside $(BUILD) so a normal clean does not force
