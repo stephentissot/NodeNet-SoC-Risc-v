@@ -71,6 +71,7 @@ module wb_i2c_zipcpu #(
     wbi2cmaster #(
         .CONSTANT_SPEED(1'b0),
         .READ_ONLY(1'b0),
+        .LITTLE_ENDIAN(1'b1),
         .TICKBITS(TICKBITS),
         .CLOCKS_PER_TICK(CLOCKS_PER_TICK),
         .MEM_ADDR_BITS(MEM_ADDR_BITS)
