@@ -6,8 +6,6 @@
 #ifndef BIGSISTER_H
 #define BIGSISTER_H
 
-#include <stdint.h>
-
 static volatile uint32_t* const TIMER_MS = reinterpret_cast<volatile uint32_t*>(0x10000010UL);
 
 // Override this from the build if your SoC clock changes.
@@ -30,11 +28,9 @@ static inline uint32_t millis(void) {
 // Use the SoC's hardware timer through millis() to stay aligned with the rest
 // of the bare-metal firmware instead of relying on rdcycle-based spin loops.
 
-static void delay_ms(uint32_t ms) {
-    const uint32_t start = millis();
-    while ((uint32_t)(millis() - start) < ms) {
-        __asm__ volatile("nop");
-    }
+static void delay(uint32_t ms) {
+    uint32_t start = millis();
+    while ((int32_t)(millis() - start - ms) < 0) {}
 }
 
 

@@ -193,11 +193,9 @@ static inline int i2c0_write(uint8_t addr, const uint8_t *buf, size_t len)
     if (i2c0_nack_detected()) {
         i2c0_clear_nack();
     }
-
+    i2c0_set_address(addr);
     if (len == 1u) {
-        if (!i2c0_push_data(buf[0])) return I2C0_FIFO_ERROR;
-        
-        i2c0_set_address(addr);
+        if (!i2c0_push_data(buf[0])) return I2C0_FIFO_ERROR;    
         asm volatile("" ::: "memory");
         if (!i2c0_push_cmd(I2C0_CMD_START | I2C0_CMD_WRITE)) return I2C0_FIFO_ERROR;
 
@@ -208,16 +206,13 @@ static inline int i2c0_write(uint8_t addr, const uint8_t *buf, size_t len)
                 return I2C0_TIMEOUT;
             }
         }
-
-        i2c0_set_address(addr);
         asm volatile("" ::: "memory");
         if (!i2c0_push_cmd(I2C0_CMD_STOP)) return I2C0_FIFO_ERROR;
 
     } else {
+        i2c0_set_address(addr);
         // --- Premier octet (START + WRITE) ---
         if (!i2c0_push_data(buf[0])) return I2C0_FIFO_ERROR;
-        
-        i2c0_set_address(addr);
         asm volatile("nop" ::: "memory");
         if (!i2c0_push_cmd(I2C0_CMD_START | I2C0_CMD_WRITE)) return I2C0_FIFO_ERROR;
         
@@ -233,10 +228,7 @@ static inline int i2c0_write(uint8_t addr, const uint8_t *buf, size_t len)
                     return I2C0_TIMEOUT;
                 }
             }
-
             if (!i2c0_push_data(buf[i])) return I2C0_FIFO_ERROR;
-            
-            //i2c0_set_address(addr);
             asm volatile("nop" ::: "memory");
             if (!i2c0_push_cmd(I2C0_CMD_WRITE)) return I2C0_FIFO_ERROR;
         }

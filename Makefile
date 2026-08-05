@@ -16,11 +16,16 @@ FW_PATCH_CONFIG=$(BUILD)/$(TOP)_fw.config
 FW_PATCH_BIT=$(BUILD)/$(TOP)_fw.bit
 ROM_BYTES=16384
 
-# Recursive source discovery
-rwildcard=$(foreach d,$(wildcard $1*),$(call rwildcard,$d/,$2) $(filter $(subst *,%,$2),$d))
+# Synthesis sources.
+# Keep this explicit so the build uses the Alex Forencich RTL from src/verilog-i2c/rtl
+# and does not accidentally pull in testbenches or any legacy i2c directory.
+SOURCES := src/top.sv \
+           $(wildcard src/wbDevices/*.sv) \
+           src/picorv32/picorv32.v \
+           $(wildcard src/uart/*.v) \
+           $(wildcard src/verilog-i2c/rtl/*.v)
 
-SOURCES := $(call rwildcard,src/,*.sv) \
-           $(call rwildcard,src/,*.v)
+SOURCES := $(sort $(SOURCES))
 
 
 .PHONY: all firmware-build firmware-test bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only

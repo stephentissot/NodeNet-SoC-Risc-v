@@ -9,11 +9,11 @@ IOBUF PORT "led_d2" IO_TYPE=LVCMOS33;
 
 # NodeNet activity LEDs + wb_led outputs
 # led_g18: NodeNet RX activity (default ON, pulses OFF on RX)
-LOCATE COMP "led_g18" SITE "E5";
-IOBUF PORT "led_g18" IO_TYPE=LVCMOS33 DRIVE=8 PULLMODE=UP;
+#LOCATE COMP "led_g18" SITE "E5";
+#&IOBUF PORT "led_g18" IO_TYPE=LVCMOS33 DRIVE=8 PULLMODE=UP;
 # led_h18: NodeNet TX activity pulse
-LOCATE COMP "led_h18" SITE "F4";
-IOBUF PORT "led_h18" IO_TYPE=LVCMOS33 DRIVE=8 PULLMODE=UP;
+#LOCATE COMP "led_h18" SITE "F4";
+#IOBUF PORT "led_h18" IO_TYPE=LVCMOS33 DRIVE=8 PULLMODE=UP;
 # led_e18: wb_led LED0 output
 LOCATE COMP "led_e18" SITE "F5";
 IOBUF PORT "led_e18" IO_TYPE=LVCMOS33 DRIVE=8 PULLMODE=UP;
@@ -111,5 +111,5 @@ IOBUF PORT "tx0" IO_TYPE=LVCMOS33 DRIVE=8;
 
 # I2C0 — moved pins on Colorlight i9 (external 4.7 kΩ pullup to 3.3 V required)
 # OPENDRAIN=ON: pin releases to high-Z when not driven (external pullup takes over)
-LOCATE COMP "i2c0_scl" SITE "D18"; IOBUF PORT "i2c0_scl" IO_TYPE=LVCMOS33 PULLMODE=UP;
-LOCATE COMP "i2c0_sda" SITE "D17"; IOBUF PORT "i2c0_sda" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "i2c0_scl" SITE "E5"; IOBUF PORT "i2c0_scl" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "i2c0_sda" SITE "F4"; IOBUF PORT "i2c0_sda" IO_TYPE=LVCMOS33 PULLMODE=UP;

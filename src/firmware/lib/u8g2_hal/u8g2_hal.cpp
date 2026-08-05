@@ -82,15 +82,15 @@ extern "C" uint8_t u8x8_gpio_delay_hw(u8x8_t *u8x8, uint8_t msg,
         break;
 
     case U8X8_MSG_DELAY_MILLI:
-        delay_ms(arg_int);
+        delay(arg_int);
         break;
 
     case U8X8_MSG_DELAY_10MICRO:
-        delay_ms(arg_int / 10);
+        delay(arg_int / 10);
         break;
 
     case U8X8_MSG_DELAY_100NANO:
-        delay_ms(arg_int / 100);
+        delay(arg_int / 100);
         break;
 
     case U8X8_MSG_GPIO_RESET:
