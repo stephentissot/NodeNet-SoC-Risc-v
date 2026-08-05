@@ -191,7 +191,7 @@ module	wbi2cmaster #(
 	//
 	//
 
-	lli2cm lowlvl(i_clk, r_speed, ll_i2c_cyc, ll_i2c_stb, ll_i2c_we,
+	lli2cm lowlvl(i_clk, i_reset, r_speed, ll_i2c_cyc, ll_i2c_stb, ll_i2c_we,
 				ll_i2c_tx_data,
 			ll_i2c_ack, ll_i2c_stall, ll_i2c_err, ll_i2c_rx_data,
 			i_i2c_scl, i_i2c_sda, o_i2c_scl, o_i2c_sda, ll_dbg);

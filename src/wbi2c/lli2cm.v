@@ -49,6 +49,7 @@ module lli2cm #(
 	) (
 		// {{{
 		input	wire		i_clk,
+		input	wire		i_reset,
 		//
 		input	wire	[(TICKBITS-1):0]	i_clocks,
 		//
@@ -200,11 +201,39 @@ module lli2cm #(
 	initial	o_sda  = 1'b1;
 	always @(posedge i_clk)
 	begin
-		o_ack  <= 1'b0;
-		o_err  <= 1'b0;
-		o_busy <= 1'b1;
-		r_cyc <= (r_cyc) && (i_cyc);
-		if (zclk) case(state)
+		if (i_reset)
+		begin
+			state <= I2CMIDLE;
+			o_ack <= 1'b0;
+			o_err <= 1'b0;
+			o_busy <= 1'b0;
+			o_data <= 8'h00;
+			o_scl <= 1'b1;
+			o_sda <= 1'b1;
+			clock <= 0;
+			zclk <= 1'b1;
+			r_cyc <= 1'b1;
+			r_err <= 1'b0;
+			r_we <= 1'b0;
+			nbits <= 3'h0;
+			r_data <= 8'h00;
+			q_scl <= 1'b1;
+			q_sda <= 1'b1;
+			ck_scl <= 1'b1;
+			ck_sda <= 1'b1;
+			lst_scl <= 1'b1;
+			lst_sda <= 1'b1;
+			start_bit <= 1'b0;
+			stop_bit <= 1'b0;
+			channel_busy <= 1'b0;
+			watchdog_timeout <= 1'b0;
+			watchdog <= 0;
+		end else begin
+			o_ack  <= 1'b0;
+			o_err  <= 1'b0;
+			o_busy <= 1'b1;
+			r_cyc <= (r_cyc) && (i_cyc);
+			if (zclk) case(state)
 			I2CMIDLE: begin
 				r_err <= 1'b0;
 				nbits <= 3'h0;
@@ -343,7 +372,8 @@ module lli2cm #(
 				else if (watchdog_timeout)
 					state <= I2CMSTOP;
 				end
-		endcase
+			endcase
+		end
 	end
 	// }}}
 

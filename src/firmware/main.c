@@ -31,24 +31,24 @@ int main(void)
 
     // // 1. Écriture manuelle de la valeur 42 dans le registre de vitesse (Offset d'octet 4)
     // // On passe bien l'adresse de base ET l'offset    
-    // i2c_master_reg_wr(I2C0_BASE, I2C_MASTER_SPD, 42u);
+    i2c_master_reg_wr(I2C0_BASE, I2C_MASTER_SPD, 42u);
     
     // // Barrière mémoire indispensable pour forcer l'exécution de l'écriture Wishbone
-    // __asm__ volatile("" ::: "memory");
+    __asm__ volatile("" ::: "memory");
 
     // // 2. Relecture immédiate avec les deux paramètres requis
-    // uint32_t read_back = i2c_master_reg_rd(I2C0_BASE, I2C_MASTER_SPD); 
+    uint32_t read_back = i2c_master_reg_rd(I2C0_BASE, I2C_MASTER_SPD); 
 
     // // 3. Remise en place de la configuration nominale pour la suite du programme
-    // i2c_setClock(100000u);
+    i2c_setClock(100000u);
 
-    // // 4. Code de diagnostic par LED basé sur la valeur miroir
-    // if (read_back == 42u) {
-    //     // LE BUS ET LES TAILLES DE REGISTRES SONT ENFIN ALIGNÉS !
-    //     for(int i=0; i<3; ++i) { wbLedBlink(LED0_BASE, 150u); delay(450u); } // 3 LEDs vertes
-    // } else {
-    //     for(int i=0; i<3; ++i) { wbLedBlink(LED1_BASE, 150u); delay(450u); } // 3 LEDs jaunes
-    // }
+    // 4. Code de diagnostic par LED basé sur la valeur miroir
+    if (read_back == 42u) {
+        // LE BUS ET LES TAILLES DE REGISTRES SONT ENFIN ALIGNÉS !
+        for(int i=0; i<3; ++i) { wbLedBlink(LED0_BASE, 150u); delay(450u); } // 3 LEDs vertes
+    } else {
+        for(int i=0; i<3; ++i) { wbLedBlink(LED1_BASE, 150u); delay(450u); } // 3 LEDs jaunes
+    }
 
     uint8_t test = 0u;
     while (1) {          
