@@ -25,13 +25,19 @@ static uint32_t s_num_bytes     = 0u;
 
 /* ─── Primitives d'accès à la RAM Proxy (zone mémoire byte-addressée) ─── */
 static inline uint8_t i2c_mem_read_byte(uint32_t idx) {
-    volatile uint8_t *i2c_mem = (volatile uint8_t*)(I2C_MASTER_BASE + I2C_MASTER_MEM_BASE);
-    return i2c_mem[idx];
+    const uint32_t lane = idx & 0x3u;
+    volatile uint32_t *i2c_mem_words = (volatile uint32_t *)(I2C_MASTER_BASE + I2C_MASTER_MEM_BASE + (idx & ~0x3u));
+    const uint32_t word = *i2c_mem_words;
+    return (uint8_t)((word >> (lane * 8u)) & 0xFFu);
 }
 
 static inline void i2c_mem_write_byte(uint32_t idx, uint8_t value) {
-    volatile uint8_t *i2c_mem = (volatile uint8_t*)(I2C_MASTER_BASE + I2C_MASTER_MEM_BASE);
-    i2c_mem[idx] = value;
+    const uint32_t lane = idx & 0x3u;
+    volatile uint32_t *i2c_mem_words = (volatile uint32_t *)(I2C_MASTER_BASE + I2C_MASTER_MEM_BASE + (idx & ~0x3u));
+    uint32_t word = *i2c_mem_words;
+    word &= ~(0xFFu << (lane * 8u));
+    word |= ((uint32_t)value << (lane * 8u));
+    *i2c_mem_words = word;
     compiler_barrier();
 }
 
