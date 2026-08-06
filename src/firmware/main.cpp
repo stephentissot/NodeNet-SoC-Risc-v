@@ -53,35 +53,35 @@ int main(void)
     uint32_t next_toggle_ms = *TIMER_MS + kBlinkPeriodMs;
     *LED_D2 = 1u;
 
-    i2c0_init(15); // 400 kHz @ 25 MHz
+    i2c0_init(62); // 400 kHz @ 25 MHz
     i2c0_set_address(0x3C); // OLED address
     while (1) {
-        if(!s_oled_ok) s_oled_ok = i2c0_probe(0x3C); // Try i2c address 0x3C (OLED)
+        if(!s_oled_ok) s_oled_ok = i2c0_probe(0x78); // Try i2c address 0x3C (OLED)
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             led_on = !led_on;
             *LED_D2 = led_on ? 0u : 1u;
             next_toggle_ms += kBlinkPeriodMs;
             if (!s_oled_ok) led1.blink(600u);
-            
-            if(s_oled_ok && !s_oled_init) {
-                // Diagnostic blinks: 1=before Setup, 2=before InitDisplay, 3=before PowerSave, 4=before Font → done                
-                for(int i=0;i<5;++i){ led0.blink(150u); delay(250u); }
-                u8g2_Setup_ssd1306_i2c_128x64_noname_f(&u8g2, U8G2_R0, u8x8_byte_i2c_hw, u8x8_gpio_delay_hw);
-                for(int i=0;i<4;++i){ led0.blink(150u); delay(250u); }
-                u8g2_SetI2CAddress(&u8g2, 0x3C << 1);
-                for(int i=0;i<3;++i){ led0.blink(150u); delay(250u); }
-                u8g2_InitDisplay(&u8g2);
-                for(int i=0;i<2;++i){ led0.blink(150u); delay(250u); }
-                u8g2_SetPowerSave(&u8g2, 0);
+            else led0.blink(100u);
+            // if(s_oled_ok && !s_oled_init) {
+            //     // Diagnostic blinks: 1=before Setup, 2=before InitDisplay, 3=before PowerSave, 4=before Font → done                
+            //     for(int i=0;i<5;++i){ led0.blink(150u); delay(250u); }
+            //     u8g2_Setup_ssd1306_i2c_128x64_noname_f(&u8g2, U8G2_R0, u8x8_byte_i2c_hw, u8x8_gpio_delay_hw);
+            //     for(int i=0;i<4;++i){ led0.blink(150u); delay(250u); }
+            //     u8g2_SetI2CAddress(&u8g2, 0x3C << 1);
+            //     for(int i=0;i<3;++i){ led0.blink(150u); delay(250u); }
+            //     u8g2_InitDisplay(&u8g2);
+            //     for(int i=0;i<2;++i){ led0.blink(150u); delay(250u); }
+            //     u8g2_SetPowerSave(&u8g2, 0);
 
-                for(int i=0;i<1;++i){ led0.blink(150u); delay(250u); }
-                u8g2_SetFont(&u8g2, u8g2_font_5x7_tf);
-                s_oled_init = true;
-            }
-            if(s_oled_ok && s_oled_init) {
-                oled_show("I2C OK", "OLED found at 0x3C");
-            }
+            //     for(int i=0;i<1;++i){ led0.blink(150u); delay(250u); }
+            //     u8g2_SetFont(&u8g2, u8g2_font_5x7_tf);
+            //     s_oled_init = true;
+            // }
+            // if(s_oled_ok && s_oled_init) {
+            //     oled_show("I2C OK", "OLED found at 0x3C");
+            // }
         }
     }
 }
