@@ -20,7 +20,7 @@ extern "C" inline void __cxa_pure_virtual() { while (1); }
  * Arduino-like millis(): milliseconds since boot from hardware timer.
  * Wraps naturally on uint32_t, like Arduino's unsigned long behavior.
  */
-static inline  uint32_t millis(void) {
+[[maybe_unused]] static inline uint32_t millis(void) {
     return *TIMER_MS;
 }
 
@@ -28,7 +28,7 @@ static inline  uint32_t millis(void) {
 // Use the SoC's hardware timer through millis() to stay aligned with the rest
 // of the bare-metal firmware instead of relying on rdcycle-based spin loops.
 
-static void delay(uint32_t ms) {
+[[maybe_unused]] static void delay(uint32_t ms) {
     uint32_t start = millis();
     while ((int32_t)(millis() - start - ms) < 0) {}
 }

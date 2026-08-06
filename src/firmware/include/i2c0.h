@@ -31,7 +31,7 @@
 
 /* Register offsets (4-byte stride from base). */
 #define I2C0_REG_STATUS      0x00u
-#define I2C0_REG_FIFO        0x04u
+#define I2C0_REG_FIFO_STATUS        0x04u
 #define I2C0_REG_ADDR        0x08u
 #define I2C0_REG_CMD         0x0Cu
 #define I2C0_REG_DATA        0x10u
@@ -109,7 +109,7 @@ static inline bool i2c0_wait_idle(uint32_t timeout_ms)
     uint32_t start = millis();
     while (1) {
         // Lecture explicite : GCC est obligé de générer l'instruction 'lw' ici
-        uint32_t fifo_stat = i2c0_reg_read32(I2C0_REG_FIFO);
+        uint32_t fifo_stat = i2c0_reg_read32(I2C0_REG_FIFO_STATUS);
         
         if ((fifo_stat & I2C0_FIFO_CMD_EMPTY) != 0u) {
             break; // La FIFO est vide, on sort proprement
@@ -149,7 +149,7 @@ static inline bool i2c0_wait_idle(uint32_t timeout_ms)
 static inline bool i2c0_push_data(uint8_t data)
 {
     const uint32_t start = millis();
-    while ((i2c0_reg_read32(I2C0_REG_FIFO) & I2C0_FIFO_WR_FULL) != 0u) {
+    while ((i2c0_reg_read32(I2C0_REG_FIFO_STATUS) & I2C0_FIFO_WR_FULL) != 0u) {
         if ((millis() - start) >= I2C0_TIMEOUT_LOOP) {
             return false;
         }
@@ -161,7 +161,7 @@ static inline bool i2c0_push_data(uint8_t data)
 static inline bool i2c0_push_cmd(uint8_t cmd)
 {
     const uint32_t start = millis();
-    while ((i2c0_reg_read32(I2C0_REG_FIFO) & I2C0_FIFO_CMD_FULL) != 0u) {
+    while ((i2c0_reg_read32(I2C0_REG_FIFO_STATUS) & I2C0_FIFO_CMD_FULL) != 0u) {
         if ((millis() - start) >= I2C0_TIMEOUT_LOOP) {
             return false;
         }
@@ -201,7 +201,7 @@ static inline int i2c0_write(uint8_t addr, const uint8_t *buf, size_t len)
 
         // Attendre que la commande soit consommée avant de toucher à l'adresse pour le STOP
         const uint32_t wait_start = millis();
-        while ((i2c0_reg_read32(I2C0_REG_FIFO) & I2C0_FIFO_CMD_EMPTY) == 0u) {
+        while ((i2c0_reg_read32(I2C0_REG_FIFO_STATUS) & I2C0_FIFO_CMD_EMPTY) == 0u) {
             if ((millis() - wait_start) >= I2C0_TIMEOUT_LOOP) {
                 return I2C0_TIMEOUT;
             }
@@ -223,7 +223,7 @@ static inline int i2c0_write(uint8_t addr, const uint8_t *buf, size_t len)
             // Cela prouve que l'IP a consommé l'adresse du cycle précédent, 
             // on peut maintenant modifier le registre d'adresse sans écraser le passé.
             const uint32_t wait_start = millis();
-            while ((i2c0_reg_read32(I2C0_REG_FIFO) & I2C0_FIFO_CMD_EMPTY) == 0u) {
+            while ((i2c0_reg_read32(I2C0_REG_FIFO_STATUS) & I2C0_FIFO_CMD_EMPTY) == 0u) {
                 if ((millis() - wait_start) >= I2C0_TIMEOUT_LOOP) {
                     return I2C0_TIMEOUT;
                 }
@@ -236,7 +236,7 @@ static inline int i2c0_write(uint8_t addr, const uint8_t *buf, size_t len)
         // --- Dernier octet (WRITE puis STOP séparé) ---
         // Attendre que la FIFO de commande soit vide avant de préparer le dernier WRITE
         const uint32_t wait_start = millis();
-        while ((i2c0_reg_read32(I2C0_REG_FIFO) & I2C0_FIFO_CMD_EMPTY) == 0u) {
+        while ((i2c0_reg_read32(I2C0_REG_FIFO_STATUS) & I2C0_FIFO_CMD_EMPTY) == 0u) {
             if ((millis() - wait_start) >= I2C0_TIMEOUT_LOOP) {
                 return I2C0_TIMEOUT;
             }
@@ -250,7 +250,7 @@ static inline int i2c0_write(uint8_t addr, const uint8_t *buf, size_t len)
 
         // Attendre à nouveau que la FIFO de commande se vide avant de poser le STOP
         const uint32_t stop_wait_start = millis();
-        while ((i2c0_reg_read32(I2C0_REG_FIFO) & I2C0_FIFO_CMD_EMPTY) == 0u) {
+        while ((i2c0_reg_read32(I2C0_REG_FIFO_STATUS) & I2C0_FIFO_CMD_EMPTY) == 0u) {
             if ((millis() - stop_wait_start) >= I2C0_TIMEOUT_LOOP) {
                 return I2C0_TIMEOUT;
             }
@@ -298,7 +298,7 @@ static inline int i2c0_read(uint8_t addr, uint8_t *buf, size_t len)
 
     for (size_t i = 0; i < len; ++i) {
         const uint32_t start = millis();
-        while ((i2c0_reg_read32(I2C0_REG_FIFO) & I2C0_FIFO_RD_EMPTY) != 0u) {
+        while ((i2c0_reg_read32(I2C0_REG_FIFO_STATUS) & I2C0_FIFO_RD_EMPTY) != 0u) {
             if ((millis() - start) >= I2C0_TIMEOUT_LOOP) {
                 return I2C0_TIMEOUT;
             }
