@@ -3,8 +3,8 @@ module top (
     input  wire clk_25mhz,
     // LEDs (physical mapping in LPF)
     output wire led_d2,
-    // output wire led_g18, // E5 (NodeNet RX activity)
-    // output wire led_h18, // F4 (NodeNet TX activity)
+    output wire led_g18, // E5 (NodeNet RX activity)
+    output wire led_h18, // F4 (NodeNet TX activity)
     output wire led_e18, // F5 (wb_led LED0)
     output wire led_e16, // E6 (wb_led LED1)
     // UART0 (NodeNet485): RX=G5, TX=D16
@@ -121,11 +121,11 @@ module top (
     wire nodenet_rx_led_out;
 
     assign led_d2 = led_d2_out;
-    // assign led_g18 = nodenet_rx_led_out;
-    // assign led_h18 = nodenet_tx_led_out;
-
-    assign led_e18 = led0_out; // Green LED0 
-    assign led_e16 = led1_out; // Yellow LED1
+    assign led_g18 = nodenet_rx_led_out;
+    assign led_h18 = nodenet_tx_led_out;
+    
+    assign led_e18 = led0_out;
+    assign led_e16 = led1_out;
 
     wire led_d2_out;
 
@@ -213,26 +213,26 @@ module top (
         .wb_ack_o(timer_ack)
     );
     
-    // wb_nodenet #(
-    //     .CLOCK_RATE(25_000_000)
-    // ) nodenet0
-    // (
-    //     .clk_i(clk_25mhz),
-    //     .rst_i(reset),
+    wb_nodenet #(
+        .CLOCK_RATE(25_000_000)
+    ) nodenet0
+    (
+        .clk_i(clk_25mhz),
+        .rst_i(reset),
         
-    //     .adr_i(wb_adr),
-    //     .dat_i(wb_dat_o),
-    //     .dat_o(nodenet_dat),
-    //     .we_i(wb_we),
-    //     .stb_i(wb_nodenet_sel),
-    //     .cyc_i(wb_nodenet_sel),
-    //     .ack_o(nodenet_ack),
+        .adr_i(wb_adr),
+        .dat_i(wb_dat_o),
+        .dat_o(nodenet_dat),
+        .we_i(wb_we),
+        .stb_i(wb_nodenet_sel),
+        .cyc_i(wb_nodenet_sel),
+        .ack_o(nodenet_ack),
         
-    //     .uart_rx_i(rx0),
-    //     .uart_tx_o(tx0),
-    //     .tx_led_o(nodenet_tx_led_out),
-    //     .rx_led_o(nodenet_rx_led_out)
-    // );
+        .uart_rx_i(rx0),
+        .uart_tx_o(tx0),
+        .tx_led_o(nodenet_tx_led_out),
+        .rx_led_o(nodenet_rx_led_out)
+    );
     
     picorv32_wb #(
         .ENABLE_COUNTERS(1),

@@ -20,7 +20,7 @@ extern "C" inline void __cxa_pure_virtual() { while (1); }
  * Arduino-like millis(): milliseconds since boot from hardware timer.
  * Wraps naturally on uint32_t, like Arduino's unsigned long behavior.
  */
-static inline uint32_t millis(void) {
+static inline  uint32_t millis(void) {
     return *TIMER_MS;
 }
 
