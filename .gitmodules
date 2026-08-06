@@ -1,3 +1,6 @@
 [submodule "src/firmware/lib/u8g2"]
 	path = src/firmware/lib/u8g2
 	url = https://github.com/olikraus/u8g2.git
+[submodule "src/verilog-i2c"]
+	path = src/verilog-i2c
+	url = https://github.com/alexforencich/verilog-i2c.git
