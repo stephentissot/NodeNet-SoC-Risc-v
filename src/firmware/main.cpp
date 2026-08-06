@@ -104,10 +104,10 @@ int main(void)
         for (int i = 0; i < 4; ++i) { ledYellow.blink(100u); delay(400u); }
     }
     // End mirror test
-    run_i2c_diag(ledGreen, ledYellow);
-    s_oled_ok = i2c0.probe(0x3C); // Try i2c address 0x3C (OLED)
+    //run_i2c_diag(ledGreen, ledYellow);
+    
     while (1) {
-        
+        s_oled_ok = i2c0.probe(0x3C); // Try i2c address 0x3C (OLED)
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             led_on = !led_on;
