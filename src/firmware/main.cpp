@@ -19,6 +19,61 @@ static void led_d2_blink()
     *LED_D2 = 1u;delay(200u);*LED_D2 = 0u;delay(200u); // led_d2 on/off
     delay(500u);
 }
+
+static void blink_bit_pattern(WbLed& green, WbLed& yellow, uint32_t value, uint32_t bits_to_show)
+{
+    for (uint32_t bit = 0; bit < bits_to_show; ++bit) {
+        if ((value & (1u << bit)) != 0u) {
+            green.blink(80u);
+        } else {
+            yellow.blink(40u);
+        }
+        delay(320u);
+    }
+    delay(500u);
+}
+
+static void run_i2c_diag(WbLed& green, WbLed& yellow)
+{
+    volatile uint32_t* const status_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x00UL);
+    volatile uint32_t* const fifo_status_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x04UL);
+    volatile uint32_t* const addr_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x08UL);
+    volatile uint32_t* const cmd_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x0CUL);
+    volatile uint32_t* const data_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x10UL);
+
+    const uint32_t initial_status = *status_reg;
+    const uint32_t initial_fifo = *fifo_status_reg;
+    blink_bit_pattern(green, yellow, initial_status, 4u);
+    blink_bit_pattern(yellow, green, initial_fifo, 8u);
+
+    *addr_reg = 0x3Cu;
+    for(int i = 0; i< 100; ++i) { asm volatile("nop" ::: "memory"); } // small delay
+    delay(1u);
+    const uint32_t after_addr_status = *status_reg;
+    const uint32_t after_addr_fifo = *fifo_status_reg;
+    
+    blink_bit_pattern(green, yellow, after_addr_status, 4u);
+    blink_bit_pattern(yellow, green, after_addr_fifo, 8u);
+
+    *data_reg = 0x00u;
+    for(int i = 0; i< 100; ++i) { asm volatile("nop" ::: "memory"); } // small delay
+    *cmd_reg = 0x05u; // START | WRITE
+    for(int i = 0; i< 100; ++i) { asm volatile("nop" ::: "memory"); } // small delay
+    delay(1u);
+    const uint32_t after_cmd_status = *status_reg;
+    const uint32_t after_cmd_fifo = *fifo_status_reg;
+    blink_bit_pattern(green, yellow, after_cmd_status, 4u);
+    blink_bit_pattern(yellow, green, after_cmd_fifo, 8u);
+
+    *cmd_reg = 0x10u; // STOP
+    for(int i = 0; i< 100; ++i) { asm volatile("nop" ::: "memory"); } // small delay
+    delay(1u);
+    const uint32_t after_stop_status = *status_reg;
+    const uint32_t after_stop_fifo = *fifo_status_reg;
+    blink_bit_pattern(green, yellow, after_stop_status, 4u);
+    blink_bit_pattern(yellow, green, after_stop_fifo, 8u);
+}
+
 int main(void)
 {
     led_d2_blink();
@@ -31,10 +86,10 @@ int main(void)
     uint32_t next_toggle_ms = *TIMER_MS + kBlinkPeriodMs;
     *LED_D2 = 1u;
 
-    // Initialize I2C0 with a prescale value for 400 kHz operation at 25 MHz clock
-    i2c0.begin(15); // 400 kHz @ 25 MHz
+    // Initialize I2C0 with a prescale value for 100 kHz operation at 25 MHz clock
+    i2c0.begin(62); // 100 kHz @ 25 MHz
 
-    // Mirror test: read back the prescale registers written by begin(15)
+    // Mirror test: read back the prescale registers written by begin(62)
     volatile uint32_t* const prescale_lo =
         reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x18UL);
     volatile uint32_t* const prescale_hi =
@@ -43,15 +98,16 @@ int main(void)
     const uint8_t lo = static_cast<uint8_t>(*prescale_lo & 0xFFu);
     const uint8_t hi = static_cast<uint8_t>(*prescale_hi & 0xFFu);
     const uint16_t mirror_prescale = (static_cast<uint16_t>(hi) << 8) | lo;
-    if (mirror_prescale == 15u) {
+    if (mirror_prescale == 62u) {
         for (int i = 0; i < 4; ++i) { ledGreen.blink(100u); delay(400u); }
     } else {
         for (int i = 0; i < 4; ++i) { ledYellow.blink(100u); delay(400u); }
     }
     // End mirror test
-
+    run_i2c_diag(ledGreen, ledYellow);
+    s_oled_ok = i2c0.probe(0x3C); // Try i2c address 0x3C (OLED)
     while (1) {
-        //s_oled_ok = i2c0.probe(0x3C); // Try i2c address 0x3C (OLED)
+        
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             led_on = !led_on;

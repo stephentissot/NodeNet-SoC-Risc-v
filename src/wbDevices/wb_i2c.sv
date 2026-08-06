@@ -69,7 +69,12 @@ module wb_i2c #(
 
     // ─── 8-bit data from inner module, zero-extended ─────────────────────────
     wire [7:0] i2c_dat_o_8;
+    wire       wbs_ack_internal;
     assign wb_dat_o = {24'h0, i2c_dat_o_8};
+    // Restore the real Wishbone handshake: the CPU should only proceed when
+    // the inner I2C core has acknowledged the transfer. The unconditional ACK
+    // above was only a temporary debug hack and can hide transaction issues.
+    assign wb_ack_o = wbs_ack_internal;
        
     // ─── Instantiate Alex Forencich's 8-bit Wishbone I2C master ─────────────
     // Address mapping: wb_adr_i[4:2] selects register 0–7 (4-byte word stride)
@@ -92,7 +97,7 @@ module wb_i2c #(
         .wbs_dat_o  (i2c_dat_o_8),
         .wbs_we_i   (wb_we_i),
         .wbs_stb_i  (wb_stb_i),
-        .wbs_ack_o  (wb_ack_o),
+        .wbs_ack_o  (wbs_ack_internal),
         .wbs_cyc_i  (wb_cyc_i),
 
         // I2C physical

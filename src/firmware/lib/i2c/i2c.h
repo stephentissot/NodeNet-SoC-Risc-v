@@ -59,9 +59,14 @@ public:
     explicit I2c(uint32_t base) : base_(base) {}
 
     // Initialize the I2C peripheral with a prescale value for the desired clock speed : 62 for 100 kHz, 15 for 400 kHz at 25 MHz clock
+    void begin(void) {
+        init(15); // 400 kHz @ 25 MHz
+    }
     void begin(uint16_t prescale) {
         init(prescale);
     }
+
+    void beginTransmission(uint8_t address);
 
     bool probe(uint8_t addr);
 
@@ -87,9 +92,8 @@ private:
     // private functions and methods for low-level I2C operations can be added here
 
     bool wait_idle(uint32_t timeout_ms);
-    
+    bool wait_for_cmd_fifo_empty(uint32_t timeout_ms);    
     int write(uint8_t addr, const uint8_t *buf, size_t len);
-
     int read(uint8_t addr, uint8_t *buf, size_t len);
 
     // Inline private methods for low-level I2C operations
@@ -113,30 +117,43 @@ private:
     bool push_data(uint8_t data)
     {
         const uint32_t start = millis();
-        while ((read(I2C_REG_FIFO_STATUS) & I2C_FIFO_WR_FULL) != 0u) {
+
+        while (1) {
+            const uint32_t fifo_stat = read(I2C_REG_FIFO_STATUS);
+
+            if ((fifo_stat & I2C_FIFO_WR_FULL) == 0u) {
+                write(I2C_REG_DATA, static_cast<uint32_t>(data));
+                __asm__ volatile("" ::: "memory");
+                return true;
+            }
+
             if ((millis() - start) >= I2C_TIMEOUT_LOOP) {
                 return false;
             }
-        }
-        write(I2C_REG_DATA, (uint32_t)data);
-        return true;
-    }
 
-    bool fifoIsFull()
-    {
-        return (read(I2C_REG_FIFO_STATUS) & I2C_FIFO_WR_FULL) != 0u;
+            __asm__ volatile("nop" ::: "memory");
+        }
     }
 
     bool push_cmd(uint8_t cmd)
     {
         const uint32_t start = millis();
-        while ((read(I2C_REG_FIFO_STATUS) & I2C_FIFO_CMD_FULL) != 0u) {
+
+        while (1) {
+            const uint32_t fifo_stat = read(I2C_REG_FIFO_STATUS);
+
+            if ((fifo_stat & I2C_FIFO_CMD_FULL) == 0u) {
+                write(I2C_REG_CMD, static_cast<uint32_t>(cmd));
+                __asm__ volatile("" ::: "memory");
+                return true;
+            }
+
             if ((millis() - start) >= I2C_TIMEOUT_LOOP) {
                 return false;
             }
+
+            __asm__ volatile("nop" ::: "memory");
         }
-        write(I2C_REG_CMD, (uint32_t)cmd);
-        return true;
     }
 
     void init(uint16_t prescale)
@@ -144,6 +161,8 @@ private:
         write(I2C_REG_PRESC_LO, (uint32_t)(prescale & 0xFFu));
         write(I2C_REG_PRESC_HI, (uint32_t)((prescale >> 8) & 0xFFu));
         clear_nack();
+        write(I2C_REG_CMD, I2C_CMD_STOP);
+        (void)wait_idle(I2C_TIMEOUT_LOOP);
         set_address(0x00); // Clear address register
     }
 
