@@ -87,22 +87,22 @@ int main(void)
     *LED_D2 = 1u;
 
     // Initialize I2C0 with a prescale value for 100 kHz operation at 25 MHz clock
-    i2c0.begin(62); // 100 kHz @ 25 MHz
+    i2c0.begin(15); // 100 kHz @ 25 MHz
 
     // Mirror test: read back the prescale registers written by begin(62)
-    volatile uint32_t* const prescale_lo =
-        reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x18UL);
-    volatile uint32_t* const prescale_hi =
-        reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x1CUL);
+    // volatile uint32_t* const prescale_lo =
+    //     reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x18UL);
+    // volatile uint32_t* const prescale_hi =
+    //     reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x1CUL);
 
-    const uint8_t lo = static_cast<uint8_t>(*prescale_lo & 0xFFu);
-    const uint8_t hi = static_cast<uint8_t>(*prescale_hi & 0xFFu);
-    const uint16_t mirror_prescale = (static_cast<uint16_t>(hi) << 8) | lo;
-    if (mirror_prescale == 62u) {
-        for (int i = 0; i < 4; ++i) { ledGreen.blink(100u); delay(400u); }
-    } else {
-        for (int i = 0; i < 4; ++i) { ledYellow.blink(100u); delay(400u); }
-    }
+    // const uint8_t lo = static_cast<uint8_t>(*prescale_lo & 0xFFu);
+    // const uint8_t hi = static_cast<uint8_t>(*prescale_hi & 0xFFu);
+    // const uint16_t mirror_prescale = (static_cast<uint16_t>(hi) << 8) | lo;
+    // if (mirror_prescale == 62u) {
+    //     for (int i = 0; i < 4; ++i) { ledGreen.blink(100u); delay(400u); }
+    // } else {
+    //     for (int i = 0; i < 4; ++i) { ledYellow.blink(100u); delay(400u); }
+    // }
     // End mirror test
     //run_i2c_diag(ledGreen, ledYellow);
     

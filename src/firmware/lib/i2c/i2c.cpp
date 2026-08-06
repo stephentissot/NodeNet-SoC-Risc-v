@@ -14,54 +14,69 @@ bool I2c::probe(uint8_t addr)
 }
 
 
-
-
 // Private methods for low-level I2C operations
-bool I2c::wait_idle(uint32_t timeout_ms)
+bool I2c::wait_idle(uint32_t timeout)
 {
-    const uint32_t start = millis(); 
-
-    while (1) {
-        const uint32_t fifo_stat = read(I2C_REG_FIFO_STATUS);
-        const uint32_t status = read(I2C_REG_STATUS);
-
-        const bool cmd_fifo_empty = (fifo_stat & I2C_FIFO_CMD_EMPTY) != 0u;
-        const bool bus_busy = (status & I2C_STATUS_BUSY) != 0u;
-
-        if (cmd_fifo_empty && !bus_busy) {
-            __asm__ volatile("" ::: "memory");
-            return true;
-        }
-
-        if ((millis() - start) >= timeout_ms) {
-            __asm__ volatile("" ::: "memory");
-            return false;
-        }
-
-        __asm__ volatile("nop" ::: "memory");
+    uint32_t t = timeout != 0u ? timeout * 15000u  : I2C_TIMEOUT_LOOP * 15000u; // Convert milliseconds to loop iterations (approximate)
+    while ((read(I2C_REG_FIFO_STATUS) & I2C_FIFO_CMD_EMPTY) == 0u && t > 0u) {
+        --t;
     }
+    if (t == 0u) {
+        return false;
+    }
+
+    t = timeout != 0u ? timeout : I2C_TIMEOUT_LOOP;
+    while ((read(I2C_REG_STATUS) & I2C_STATUS_BUSY) != 0u && t > 0u) {
+        --t;
+    }
+    return t > 0u;
 }
 
-bool I2c::wait_for_cmd_fifo_empty(uint32_t timeout_ms)
-{
-    const uint32_t start = millis();
+// bool I2c::wait_idle(uint32_t timeout_ms)
+// {
+//     const uint32_t start = millis(); 
 
-    while (1) {
-        const uint32_t fifo_stat = read(I2C_REG_FIFO_STATUS);
+//     while (1) {
+//         const uint32_t fifo_stat = read(I2C_REG_FIFO_STATUS);
+//         const uint32_t status = read(I2C_REG_STATUS);
 
-        if ((fifo_stat & I2C_FIFO_CMD_EMPTY) != 0u) {
-            __asm__ volatile("" ::: "memory");
-            return true;
-        }
+//         const bool cmd_fifo_empty = (fifo_stat & I2C_FIFO_CMD_EMPTY) != 0u;
+//         const bool bus_busy = (status & I2C_STATUS_BUSY) != 0u;
 
-        if ((millis() - start) >= timeout_ms) {
-            __asm__ volatile("" ::: "memory");
-            return false;
-        }
+//         if (cmd_fifo_empty && !bus_busy) {
+//             __asm__ volatile("" ::: "memory");
+//             return true;
+//         }
 
-        __asm__ volatile("nop" ::: "memory");
-    }
-}
+//         if ((millis() - start) >= timeout_ms) {
+//             __asm__ volatile("" ::: "memory");
+//             return false;
+//         }
+
+//         __asm__ volatile("nop" ::: "memory");
+//     }
+// }
+
+// bool I2c::wait_for_cmd_fifo_empty(uint32_t timeout_ms)
+// {
+//     const uint32_t start = millis();
+
+//     while (1) {
+//         const uint32_t fifo_stat = read(I2C_REG_FIFO_STATUS);
+
+//         if ((fifo_stat & I2C_FIFO_CMD_EMPTY) != 0u) {
+//             __asm__ volatile("" ::: "memory");
+//             return true;
+//         }
+
+//         if ((millis() - start) >= timeout_ms) {
+//             __asm__ volatile("" ::: "memory");
+//             return false;
+//         }
+
+//         __asm__ volatile("nop" ::: "memory");
+//     }
+// }
 // static inline int i2c_write(uint8_t addr,
 //                              const uint8_t *buf, uint8_t len)
 // {
