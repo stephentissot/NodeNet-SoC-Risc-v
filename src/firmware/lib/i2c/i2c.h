@@ -18,7 +18,7 @@
  */
 
 #ifndef I2C_TIMEOUT_LOOP
-#define I2C_TIMEOUT_LOOP 10u
+#define I2C_TIMEOUT_LOOP 25000u
 #endif
 
 /* Register offsets (4-byte stride from base). */
@@ -78,15 +78,26 @@ public:
     };
 
 private:
-    volatile uint32_t& reg() const {
-        return *reinterpret_cast<volatile uint32_t*>(base_);
+
+    uintptr_t i2c_addr(uint32_t reg)
+    {
+        return static_cast<uintptr_t>(base_ + reg);
     }
-    volatile uint32_t read(uint32_t offset) const {
-        return *reinterpret_cast<volatile uint32_t*>(base_ + offset);
+
+    uint32_t read(uint32_t reg)
+    {
+        volatile uint32_t *addr =
+            reinterpret_cast<volatile uint32_t *>(i2c_addr(reg));
+        return *addr;
     }
-    void write(uint32_t offset, uint32_t value) const {
-        *reinterpret_cast<volatile uint32_t*>(base_ + offset) = value;
+
+    void write(uint32_t reg, uint32_t value)
+    {
+        volatile uint32_t *addr =
+            reinterpret_cast<volatile uint32_t *>(i2c_addr(reg));
+        *addr = value;
     }
+
     uint32_t base_;
 
     // private functions and methods for low-level I2C operations can be added here
@@ -116,44 +127,30 @@ private:
 
     bool push_data(uint8_t data)
     {
-        const uint32_t start = millis();
-
-        while (1) {
-            const uint32_t fifo_stat = read(I2C_REG_FIFO_STATUS);
-
-            if ((fifo_stat & I2C_FIFO_WR_FULL) == 0u) {
-                write(I2C_REG_DATA, static_cast<uint32_t>(data));
-                __asm__ volatile("" ::: "memory");
-                return true;
-            }
-
-            if ((millis() - start) >= I2C_TIMEOUT_LOOP) {
-                return false;
-            }
-
+        uint32_t timeout = I2C_TIMEOUT_LOOP;
+        while ((read(I2C_REG_FIFO_STATUS) & I2C_FIFO_WR_FULL) != 0u && timeout > 0u) {
+            --timeout;
             __asm__ volatile("nop" ::: "memory");
         }
+        if (timeout == 0u) {
+            return false;
+        }
+        write(I2C_REG_DATA, (uint32_t)data);
+        return true;
     }
 
     bool push_cmd(uint8_t cmd)
     {
-        const uint32_t start = millis();
-
-        while (1) {
-            const uint32_t fifo_stat = read(I2C_REG_FIFO_STATUS);
-
-            if ((fifo_stat & I2C_FIFO_CMD_FULL) == 0u) {
-                write(I2C_REG_CMD, static_cast<uint32_t>(cmd));
-                __asm__ volatile("" ::: "memory");
-                return true;
-            }
-
-            if ((millis() - start) >= I2C_TIMEOUT_LOOP) {
-                return false;
-            }
-
+        uint32_t timeout = I2C_TIMEOUT_LOOP;
+        while ((read(I2C_REG_FIFO_STATUS) & I2C_FIFO_CMD_FULL) != 0u && timeout > 0u) {
+            --timeout;
             __asm__ volatile("nop" ::: "memory");
         }
+        if (timeout == 0u) {
+            return false;
+        }
+        write(I2C_REG_CMD, (uint32_t)cmd);
+        return true;
     }
 
     void init(uint16_t prescale)

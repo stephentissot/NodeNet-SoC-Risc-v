@@ -3,13 +3,14 @@
 bool I2c::probe(uint8_t addr)
 {
     uint8_t dummy = 0u;
-
     for (int attempt = 0; attempt < 3; ++attempt) {
+        clear_nack();
+        //write(I2C_REG_CMD, I2C_CMD_STOP);
+        (void)wait_idle(I2C_TIMEOUT_LOOP);
         if (write(addr, &dummy, 1u) == I2C_OK) {
             return true;
         }
     }
-
     return false;
 }
 
@@ -17,9 +18,10 @@ bool I2c::probe(uint8_t addr)
 // Private methods for low-level I2C operations
 bool I2c::wait_idle(uint32_t timeout)
 {
-    uint32_t t = timeout != 0u ? timeout * 15000u  : I2C_TIMEOUT_LOOP * 15000u; // Convert milliseconds to loop iterations (approximate)
+    volatile uint32_t t = timeout != 0u ? timeout : I2C_TIMEOUT_LOOP;
     while ((read(I2C_REG_FIFO_STATUS) & I2C_FIFO_CMD_EMPTY) == 0u && t > 0u) {
         --t;
+        __asm__ volatile("nop" ::: "memory");
     }
     if (t == 0u) {
         return false;
@@ -28,6 +30,7 @@ bool I2c::wait_idle(uint32_t timeout)
     t = timeout != 0u ? timeout : I2C_TIMEOUT_LOOP;
     while ((read(I2C_REG_STATUS) & I2C_STATUS_BUSY) != 0u && t > 0u) {
         --t;
+        __asm__ volatile("nop" ::: "memory");
     }
     return t > 0u;
 }
@@ -112,15 +115,18 @@ int I2c::write(uint8_t addr, const uint8_t *buf, size_t len)
         uint8_t cmd = 0u;
         if(len == 1u){
             cmd = static_cast<uint8_t>(I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP);
+            if (!push_cmd(cmd)) return I2C_FIFO_ERROR;
         }
-        else if (i == 0u) {
-            cmd = static_cast<uint8_t>(I2C_CMD_START | I2C_CMD_WRITE);
-        } else if (i + 1u == len) {
-            cmd = static_cast<uint8_t>(I2C_CMD_WRITE | I2C_CMD_STOP);
-        } else {
-            cmd = static_cast<uint8_t>(I2C_CMD_WRITE);
-        }
-        if (!push_cmd(cmd)) return I2C_FIFO_ERROR;
+        else{
+            if (i == 0u) {
+                cmd = static_cast<uint8_t>(I2C_CMD_START | I2C_CMD_WRITE);
+            } else if (i + 1u == len) {
+                cmd = static_cast<uint8_t>(I2C_CMD_WRITE | I2C_CMD_STOP);
+            } else {
+                cmd = static_cast<uint8_t>(I2C_CMD_WRITE);
+            }
+            if (!push_cmd(cmd)) return I2C_FIFO_ERROR;
+        } 
     }
 
     if (!wait_idle(I2C_TIMEOUT_LOOP)) {

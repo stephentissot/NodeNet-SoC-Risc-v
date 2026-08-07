@@ -33,6 +33,37 @@ static void blink_bit_pattern(WbLed& green, WbLed& yellow, uint32_t value, uint3
     delay(500u);
 }
 
+static uint8_t probe(uint8_t addr)
+{
+    volatile uint32_t* const i2c_addr_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x08UL);
+    volatile uint32_t* const i2c_data_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x10UL);
+    volatile uint32_t* const i2c_cmd_reg  = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x0CUL);
+    volatile uint32_t* const i2c_status  = reinterpret_cast<volatile uint32_t*>(I2C0_BASE);
+
+    *i2c_status = I2C_STATUS_MISS_ACK;   // clear prior miss-ack flag
+    *i2c_addr_reg = static_cast<uint32_t>(addr);
+    *i2c_data_reg = 0x00u;
+    *i2c_cmd_reg  = I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP;
+
+    uint32_t t = I2C_TIMEOUT_LOOP;
+    while ((static_cast<uint32_t>(*i2c_status) & I2C_STATUS_BUSY) != 0u && t > 0u) {
+        --t;
+        __asm__ volatile("nop" ::: "memory");
+    }
+
+    if (t == 0u) {
+        return 2u; // timeout
+    }
+
+    if ((static_cast<uint32_t>(*i2c_status) & I2C_STATUS_MISS_ACK) != 0u) {
+        *i2c_status = I2C_STATUS_MISS_ACK; // clear again
+        return 1u; // nack
+    }
+
+    return 0u; // ok
+}
+
+
 static void run_i2c_diag(WbLed& green, WbLed& yellow)
 {
     volatile uint32_t* const status_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x00UL);
@@ -90,24 +121,24 @@ int main(void)
     i2c0.begin(15); // 100 kHz @ 25 MHz
 
     // Mirror test: read back the prescale registers written by begin(62)
-    // volatile uint32_t* const prescale_lo =
-    //     reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x18UL);
-    // volatile uint32_t* const prescale_hi =
-    //     reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x1CUL);
+    volatile uint32_t* const prescale_lo =
+        reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x18UL);
+    volatile uint32_t* const prescale_hi =
+        reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x1CUL);
 
-    // const uint8_t lo = static_cast<uint8_t>(*prescale_lo & 0xFFu);
-    // const uint8_t hi = static_cast<uint8_t>(*prescale_hi & 0xFFu);
-    // const uint16_t mirror_prescale = (static_cast<uint16_t>(hi) << 8) | lo;
-    // if (mirror_prescale == 62u) {
-    //     for (int i = 0; i < 4; ++i) { ledGreen.blink(100u); delay(400u); }
-    // } else {
-    //     for (int i = 0; i < 4; ++i) { ledYellow.blink(100u); delay(400u); }
-    // }
+    const uint8_t lo = static_cast<uint8_t>(*prescale_lo & 0xFFu);
+    const uint8_t hi = static_cast<uint8_t>(*prescale_hi & 0xFFu);
+    const uint16_t mirror_prescale = (static_cast<uint16_t>(hi) << 8) | lo;
+    if (mirror_prescale == 62u) {
+        for (int i = 0; i < 4; ++i) { ledGreen.blink(100u); delay(400u); }
+    } else {
+        for (int i = 0; i < 4; ++i) { ledYellow.blink(100u); delay(400u); }
+    }
     // End mirror test
     //run_i2c_diag(ledGreen, ledYellow);
     
     while (1) {
-        s_oled_ok = i2c0.probe(0x3C); // Try i2c address 0x3C (OLED)
+        s_oled_ok = probe(0x3C); // Try i2c address 0x3C (OLED)
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             led_on = !led_on;

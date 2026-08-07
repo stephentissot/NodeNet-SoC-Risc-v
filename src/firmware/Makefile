@@ -32,7 +32,7 @@ I2C_OBJ=$(BUILD)/i2c.o
 
 DEPS=$(BUILD)/start.d $(MAIN_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(U8G2_OBJS:.o=.d)
 
-CFLAGS=-march=rv32im_zicsr -mabi=ilp32 \
+CFLAGS=-march=rv32im -mabi=ilp32 \
        -Wall \
        -Os \
        -ffreestanding \
@@ -61,7 +61,7 @@ CXXFLAGS=$(CFLAGS) \
 # --specs=nano.specs: newlib-nano provides memcpy/strlen/memset etc.
 # --specs=nosys.specs: stub syscalls (_sbrk, _write — not needed bare-metal)
 # --gc-sections: discard unused code/data (critical for u8g2 → small binary)
-LDFLAGS=-T link.ld \
+LDFLAGS=-march=rv32im -mabi=ilp32 -T link.ld \
         -nostartfiles \
         -Wl,--gc-sections \
         --specs=nano.specs \
