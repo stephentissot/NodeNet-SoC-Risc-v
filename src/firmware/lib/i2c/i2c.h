@@ -74,7 +74,7 @@ public:
     {
         clear_nack();
         *i2c_addr_reg = static_cast<uint32_t>(addr);
-        *i2c_data_reg = 0x00u;
+        push_data(0x00u); // dummy data to trigger address phase
         //*i2c_cmd_reg  = I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP;
         push_cmd(static_cast<uint8_t>(I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP));
 
@@ -113,6 +113,15 @@ private:
         return false; // timeout
     }
 
+    // push_data pushes a data byte to the I2C data FIFO, returning true if successful, false if timeout occurs (fifo still full after timeout)
+    bool push_data(uint8_t data){
+        if(wait_for_wdata_fifo_empty(I2C_TIMEOUT_LOOP)){
+            *i2c_data_reg = static_cast<uint32_t>(data);
+            return true;
+        }
+        return false; // timeout
+    }
+
     // Wait for the I2C peripheral to become idle (busy is false), with a timeout, returning true if idle, false if timeout
     bool wait_idle(uint32_t timeout = I2C_TIMEOUT_LOOP) {
         uint32_t t = I2C_TIMEOUT_LOOP;
@@ -139,7 +148,18 @@ private:
         return true; // idle
     }
 
-
+    // Wait for the fifo to be available to write, with a timeout, returning true if fifo not full, false if timeout
+    bool wait_for_wdata_fifo_empty(uint32_t timeout_ms) {
+        uint32_t t = I2C_TIMEOUT_LOOP;
+        while ((static_cast<uint32_t>(*i2c_fifo_status_reg) & I2C_FIFO_WR_FULL) != 0u && t > 0u) {
+            --t;
+            __asm__ volatile("nop" ::: "memory");
+        }
+        if (t == 0u) {
+            return false; // timeout
+        }
+        return true; // idle
+    }
     
     // Clear prior miss-ack flag
     void clear_nack(void)
@@ -201,20 +221,6 @@ private:
     bool notReady(void)
     {
         return (read(I2C_REG_STATUS) & I2C_STATUS_BUSY) != 0u;
-    }
-
-    bool push_data(uint8_t data)
-    {
-        uint32_t timeout = I2C_TIMEOUT_LOOP;
-        while ((read(I2C_REG_FIFO_STATUS) & I2C_FIFO_WR_FULL) != 0u && timeout > 0u) {
-            --timeout;
-            __asm__ volatile("nop" ::: "memory");
-        }
-        if (timeout == 0u) {
-            return false;
-        }
-        write(I2C_REG_DATA, (uint32_t)data);
-        return true;
     }
 
     void init(uint16_t prescale)
