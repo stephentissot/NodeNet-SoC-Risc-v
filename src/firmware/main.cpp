@@ -33,36 +33,6 @@ static void blink_bit_pattern(WbLed& green, WbLed& yellow, uint32_t value, uint3
     delay(500u);
 }
 
-static uint8_t probe(uint8_t addr)
-{
-    volatile uint32_t* const i2c_addr_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x08UL);
-    volatile uint32_t* const i2c_data_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x10UL);
-    volatile uint32_t* const i2c_cmd_reg  = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x0CUL);
-    volatile uint32_t* const i2c_status  = reinterpret_cast<volatile uint32_t*>(I2C0_BASE);
-
-    *i2c_status = I2C_STATUS_MISS_ACK;   // clear prior miss-ack flag
-    *i2c_addr_reg = static_cast<uint32_t>(addr);
-    *i2c_data_reg = 0x00u;
-    *i2c_cmd_reg  = I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP;
-
-    uint32_t t = I2C_TIMEOUT_LOOP;
-    while ((static_cast<uint32_t>(*i2c_status) & I2C_STATUS_BUSY) != 0u && t > 0u) {
-        --t;
-        __asm__ volatile("nop" ::: "memory");
-    }
-
-    if (t == 0u) {
-        return 2u; // timeout
-    }
-
-    if ((static_cast<uint32_t>(*i2c_status) & I2C_STATUS_MISS_ACK) != 0u) {
-        *i2c_status = I2C_STATUS_MISS_ACK; // clear again
-        return 1u; // nack
-    }
-
-    return 0u; // ok
-}
-
 
 static void run_i2c_diag(WbLed& green, WbLed& yellow)
 {
@@ -110,7 +80,7 @@ int main(void)
     led_d2_blink();
     WbLed  ledGreen(LED0_BASE);
     WbLed  ledYellow(LED1_BASE);
-    I2c i2c0(I2C0_BASE);
+    I2c Wire;
     bool s_oled_ok = false;
     static constexpr uint32_t kBlinkPeriodMs = 2000u;
     bool led_on = false;
@@ -118,7 +88,7 @@ int main(void)
     *LED_D2 = 1u;
 
     // Initialize I2C0 with a prescale value for 100 kHz operation at 25 MHz clock
-    i2c0.begin(15); // 100 kHz @ 25 MHz
+    Wire.begin(15); // 100 kHz @ 25 MHz
 
     // Mirror test: read back the prescale registers written by begin(62)
     volatile uint32_t* const prescale_lo =
@@ -138,7 +108,7 @@ int main(void)
     //run_i2c_diag(ledGreen, ledYellow);
     
     while (1) {
-        s_oled_ok = probe(0x3C); // Try i2c address 0x3C (OLED)
+        s_oled_ok = Wire.probe(0x3C); // Try i2c address 0x3C (OLED)
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             led_on = !led_on;

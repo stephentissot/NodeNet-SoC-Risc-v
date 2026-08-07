@@ -17,6 +17,8 @@
  *   - polling loops never assume the compiler will re-read the register.
  */
 
+#define I2C0_BASE  0x10005000UL
+
 #ifndef I2C_TIMEOUT_LOOP
 #define I2C_TIMEOUT_LOOP 25000u
 #endif
@@ -56,7 +58,7 @@
 class I2c {    
 public:
     static constexpr uint32_t CLK_KHZ = 25000u;  // 25 MHz
-    explicit I2c(uint32_t base) : base_(base) {}
+    explicit I2c(void) {}
 
     // Initialize the I2C peripheral with a prescale value for the desired clock speed : 62 for 100 kHz, 15 for 400 kHz at 25 MHz clock
     void begin(void) {
@@ -68,7 +70,25 @@ public:
 
     void beginTransmission(uint8_t address);
 
-    bool probe(uint8_t addr);
+    uint8_t probe(uint8_t addr)
+    {
+        clear_nack();
+        *i2c_addr_reg = static_cast<uint32_t>(addr);
+        *i2c_data_reg = 0x00u;
+        //*i2c_cmd_reg  = I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP;
+        push_cmd(static_cast<uint8_t>(I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP));
+
+        if(!wait_idle()) {
+            return 2u; // timeout
+        }
+
+        if ((static_cast<uint32_t>(*i2c_status) & I2C_STATUS_MISS_ACK) != 0u) {
+            *i2c_status = I2C_STATUS_MISS_ACK; // clear again
+            return 1u; // nack
+        }
+
+        return 0u; // ok
+    }
 
     enum result {
         I2C_OK = 0,
@@ -78,6 +98,69 @@ public:
     };
 
 private:
+    volatile uint32_t* const i2c_addr_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + I2C_REG_ADDR);
+    volatile uint32_t* const i2c_data_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + I2C_REG_DATA);
+    volatile uint32_t* const i2c_cmd_reg  = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + I2C_REG_CMD);
+    volatile uint32_t* const i2c_fifo_status_reg  = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + I2C_REG_FIFO_STATUS);
+    volatile uint32_t* const i2c_status  = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + I2C_REG_STATUS);
+
+    // push_command pushes a command byte to the I2C command FIFO, returning true if successful, false if timeout occurs (fifo still full after timeout)
+    bool push_cmd(uint8_t cmd){
+        if(wait_for_cmd_fifo_empty(I2C_TIMEOUT_LOOP)){
+            *i2c_cmd_reg = static_cast<uint32_t>(cmd);
+            return true;
+        }
+        return false; // timeout
+    }
+
+    // Wait for the I2C peripheral to become idle (busy is false), with a timeout, returning true if idle, false if timeout
+    bool wait_idle(uint32_t timeout = I2C_TIMEOUT_LOOP) {
+        uint32_t t = I2C_TIMEOUT_LOOP;
+        while ((static_cast<uint32_t>(*i2c_status) & I2C_STATUS_BUSY) != 0u && t > 0u) {
+            --t;
+            __asm__ volatile("nop" ::: "memory");
+        }
+        if (t == 0u) {
+            return false; // timeout
+        }
+        return true; // idle
+    }
+
+    // Wait for the fifo to be available for a command, with a timeout, returning true if fifo not full, false if timeout
+    bool wait_for_cmd_fifo_empty(uint32_t timeout_ms) {
+        uint32_t t = I2C_TIMEOUT_LOOP;
+        while ((static_cast<uint32_t>(*i2c_fifo_status_reg) & I2C_FIFO_CMD_FULL) != 0u && t > 0u) {
+            --t;
+            __asm__ volatile("nop" ::: "memory");
+        }
+        if (t == 0u) {
+            return false; // timeout
+        }
+        return true; // idle
+    }
+
+
+    
+    // Clear prior miss-ack flag
+    void clear_nack(void)
+    {
+       *i2c_status = I2C_STATUS_MISS_ACK;
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     uintptr_t i2c_addr(uint32_t reg)
     {
@@ -102,8 +185,6 @@ private:
 
     // private functions and methods for low-level I2C operations can be added here
 
-    bool wait_idle(uint32_t timeout_ms);
-    bool wait_for_cmd_fifo_empty(uint32_t timeout_ms);    
     int write(uint8_t addr, const uint8_t *buf, size_t len);
     int read(uint8_t addr, uint8_t *buf, size_t len);
 
@@ -115,10 +196,7 @@ private:
         return (read(I2C_REG_STATUS) & I2C_STATUS_MISS_ACK) != 0u;
     }
 
-    void clear_nack(void)
-    {
-        write(I2C_REG_STATUS, I2C_STATUS_MISS_ACK);
-    }
+
 
     bool notReady(void)
     {
@@ -136,20 +214,6 @@ private:
             return false;
         }
         write(I2C_REG_DATA, (uint32_t)data);
-        return true;
-    }
-
-    bool push_cmd(uint8_t cmd)
-    {
-        uint32_t timeout = I2C_TIMEOUT_LOOP;
-        while ((read(I2C_REG_FIFO_STATUS) & I2C_FIFO_CMD_FULL) != 0u && timeout > 0u) {
-            --timeout;
-            __asm__ volatile("nop" ::: "memory");
-        }
-        if (timeout == 0u) {
-            return false;
-        }
-        write(I2C_REG_CMD, (uint32_t)cmd);
         return true;
     }
 
