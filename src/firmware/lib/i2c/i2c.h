@@ -75,19 +75,15 @@ public:
         clear_nack();
         set_address(addr);
         push_data(0x00u); // dummy data to trigger address phase
-        //*i2c_cmd_reg  = I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP;
         push_cmd(static_cast<uint8_t>(I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP));
 
         if(!wait_idle()) {
-            return 2u; // timeout
+            return I2C_TIMEOUT; // timeout
         }
-
-        if ((static_cast<uint32_t>(*i2c_status) & I2C_STATUS_MISS_ACK) != 0u) {
-            *i2c_status = I2C_STATUS_MISS_ACK; // clear again
-            return 1u; // nack
+        if (nack_detected()) {
+            return I2C_NACK; // nack
         }
-
-        return 0u; // ok
+        return I2C_OK; // ok
     }
 
     enum result {
@@ -173,6 +169,15 @@ private:
        *i2c_status = I2C_STATUS_MISS_ACK;
     }
 
+    // nack detected means no device responded at the last address to data byte sent
+    bool nack_detected(void)
+    {
+        if ((static_cast<uint32_t>(*i2c_status) & I2C_STATUS_MISS_ACK) != 0u) {
+            clear_nack(); // clear again
+            return true; // nack
+        }
+        return false; // ok
+    }
 
 
 
@@ -216,11 +221,7 @@ private:
 
     // Inline private methods for low-level I2C operations
 
-    // nack detected means no device responded at the last address to data byte sent
-    bool nack_detected(void)
-    {
-        return (read(I2C_REG_STATUS) & I2C_STATUS_MISS_ACK) != 0u;
-    }
+
 
 
 
