@@ -73,7 +73,7 @@ public:
     uint8_t probe(uint8_t addr)
     {
         clear_nack();
-        *i2c_addr_reg = static_cast<uint32_t>(addr);
+        set_address(addr);
         push_data(0x00u); // dummy data to trigger address phase
         //*i2c_cmd_reg  = I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP;
         push_cmd(static_cast<uint8_t>(I2C_CMD_START | I2C_CMD_WRITE | I2C_CMD_STOP));
@@ -103,6 +103,12 @@ private:
     volatile uint32_t* const i2c_cmd_reg  = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + I2C_REG_CMD);
     volatile uint32_t* const i2c_fifo_status_reg  = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + I2C_REG_FIFO_STATUS);
     volatile uint32_t* const i2c_status  = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + I2C_REG_STATUS);
+
+    // Set i2c device address for the next transaction
+    void set_address(uint8_t addr)
+    {
+        *i2c_addr_reg = static_cast<uint32_t>(addr);
+    }
 
     // push_command pushes a command byte to the I2C command FIFO, returning true if successful, false if timeout occurs (fifo still full after timeout)
     bool push_cmd(uint8_t cmd){
@@ -231,11 +237,6 @@ private:
         write(I2C_REG_CMD, I2C_CMD_STOP);
         (void)wait_idle(I2C_TIMEOUT_LOOP);
         set_address(0x00); // Clear address register
-    }
-
-    void set_address(uint8_t addr)
-    {
-        write(I2C_REG_ADDR, (uint32_t)addr);
     }
    
 };
