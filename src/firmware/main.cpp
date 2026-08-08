@@ -46,60 +46,92 @@ int main(void)
     *LED_D2 = 1u;
 
     // Initialize I2C0 with a prescale value for 100 kHz operation at 25 MHz clock
-    Wire.begin(15); // 100 kHz @ 25 MHz
+    Wire.begin(62); // 100 kHz @ 25 MHz
 
     // Mirror test: read back the prescale registers written by begin(62)
-    volatile uint32_t* const i2c_prescaler  = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x0Cu);
-    if (*i2c_prescaler == 15u) {
-        for (int i = 0; i < 4; ++i) { ledGreen.blink(100u); delay(400u); }
-    } else {
-        for (int i = 0; i < 4; ++i) { ledYellow.blink(100u); delay(400u); }
-    }
-    // End mirror test
-    
+    // volatile uint32_t* const i2c_prescaler  = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x0Cu);
+    // if (*i2c_prescaler == 15u) {
+    //     for (int i = 0; i < 4; ++i) { ledGreen.blink(100u); delay(400u); }
+    // } else {
+    //     for (int i = 0; i < 4; ++i) { ledYellow.blink(100u); delay(400u); }
+    // }
+    // End mirror test    
+
+
+    //s_oled_ok = Wire.probe(0x3C); // Try i2c address 0x3C (OLED)
+    s_oled_ok = Wire.write2(0x3C, 0x00, 0xAE); // Screen off
+    s_oled_ok = Wire.write2(0x3C, 0x00, 0xAF); // Screen on
+    // if (s_oled_ok == I2c::I2C_OK) {
+    //     for (int i = 0; i < 4; ++i) { ledGreen.blink(100u); delay(400u); }
+    //     // Test write2() to OLED address 0x3C with two bytes of data
+    //     uint8_t test = Wire.write2(0x3C, 0x00, 0xAF); // Screen ON command
+    //     bool isBusy = Wire.isBusy();
+    //     bool isBusActive = Wire.isBusActive();
+    //     bool isBusControlled = Wire.isBusControlled();
+    //     if (test != I2c::I2C_OK)
+    //     {
+    //         for (int i = 0; i < test; ++i) { ledGreen.blink(100u); delay(300u); }  // one green blink per I2C error code
+    //         // Blink the green led to indicate the I2C error code
+    //         for (int i = 0; i < 1; ++i) { ledYellow.blink(100u); delay(300u); }  // Test #1 one yellow
+    //         for (int i = 0; i < test; ++i) { ledGreen.blink(100u); delay(300u); }  // one green blink per I2C error code
+    //         delay(500u);
+    //         for (int i = 0; i < 2; ++i) { ledYellow.blink(100u); delay(300u); }  // Test #2 two yellow
+    //         if(isBusy) {
+    //             for (int i = 0; i < 2; ++i) { ledGreen.blink(100u); delay(300u); } // two green blinks if busy
+    //         }
+    //         delay(500u);
+    //         for (int i = 0; i < 3; ++i) { ledYellow.blink(100u); delay(300u); }  // Test #3 three yellow
+    //         if(isBusActive) {
+    //             for (int i = 0; i < 2; ++i) { ledGreen.blink(100u); delay(300u); } // two green blinks if bus active
+    //         }
+    //         delay(500u);
+    //         for (int i = 0; i < 4; ++i) { ledYellow.blink(100u); delay(300u); } // Test #4 four yellow
+    //         if(isBusControlled) {
+    //             for (int i = 0; i < 2; ++i) { ledGreen.blink(100u); delay(300u); } // two green blinks if bus controlled
+    //         }
+    //         delay(1000u);                
+    //     } 
+    // }
+
     while (1) {
 
-        s_oled_ok = Wire.probe(0x3C); // Try i2c address 0x3C (OLED)
-        bool isBusy = Wire.isBusy();
-        bool isBusActive = Wire.isBusActive();
-        bool isBusControlled = Wire.isBusControlled();
-        if (s_oled_ok != I2c::I2C_OK)
-        {
-            // Blink the green led to indicate the I2C error code
-            for (int i = 0; i < 1; ++i) { ledYellow.blink(100u); delay(300u); }  // Test #1 one yellow
-            for (int i = 0; i < s_oled_ok; ++i) { ledGreen.blink(100u); delay(300u); }  // one green blink per I2C error code
-            delay(500u);
-            for (int i = 0; i < 2; ++i) { ledYellow.blink(100u); delay(300u); }  // Test #2 two yellow
-            if(isBusy) {
-                for (int i = 0; i < 2; ++i) { ledGreen.blink(100u); delay(300u); } // two green blinks if busy
-            }
-            delay(500u);
-            for (int i = 0; i < 3; ++i) { ledYellow.blink(100u); delay(300u); }  // Test #3 three yellow
-            if(isBusActive) {
-                for (int i = 0; i < 2; ++i) { ledGreen.blink(100u); delay(300u); } // two green blinks if bus active
-            }
-            delay(500u);
-            for (int i = 0; i < 4; ++i) { ledYellow.blink(100u); delay(300u); } // Test #4 four yellow
-            if(isBusControlled) {
-                for (int i = 0; i < 2; ++i) { ledGreen.blink(100u); delay(300u); } // two green blinks if bus controlled
-            }
-            delay(2000u);
-        }         
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             led_on = !led_on;
             *LED_D2 = led_on ? 0u : 1u;
             next_toggle_ms += kBlinkPeriodMs;
-            if (s_oled_ok == I2c::I2C_OK) ledGreen.blink(100u);
-            // if(s_oled_ok){
-            //     uint8_t result;
-            //     uint8_t data[] = {0x00, 0xAE};
-            //     result = Wire.write(0x3C, data, 2); // Screen OFF command
-            //     if(result == I2c::I2C_OK) {
-            //         ledGreen.blink(100u);
-            //     } else {
-            //         ledYellow.blink(600u);
-            //     }
+            if (s_oled_ok != I2c::I2C_OK) ledYellow.blink(100u);
+            else ledGreen.blink(100u);
+            // else {                
+                
+            //     uint8_t test = Wire.write2(0x3C, 0x00, 0xAF); // Screen ON command
+            //     bool isBusy = Wire.isBusy();
+            //     bool isBusActive = Wire.isBusActive();
+            //     bool isBusControlled = Wire.isBusControlled();
+            //     if (test != I2c::I2C_OK)
+            //     {
+            //         for (int i = 0; i < test; ++i) { ledGreen.blink(100u); delay(300u); }  // one green blink per I2C error code
+            //         // Blink the green led to indicate the I2C error code
+            //         for (int i = 0; i < 1; ++i) { ledYellow.blink(100u); delay(300u); }  // Test #1 one yellow
+            //         for (int i = 0; i < test; ++i) { ledGreen.blink(100u); delay(300u); }  // one green blink per I2C error code
+            //         delay(500u);
+            //         for (int i = 0; i < 2; ++i) { ledYellow.blink(100u); delay(300u); }  // Test #2 two yellow
+            //         if(isBusy) {
+            //             for (int i = 0; i < 2; ++i) { ledGreen.blink(100u); delay(300u); } // two green blinks if busy
+            //         }
+            //         delay(500u);
+            //         for (int i = 0; i < 3; ++i) { ledYellow.blink(100u); delay(300u); }  // Test #3 three yellow
+            //         if(isBusActive) {
+            //             for (int i = 0; i < 2; ++i) { ledGreen.blink(100u); delay(300u); } // two green blinks if bus active
+            //         }
+            //         delay(500u);
+            //         for (int i = 0; i < 4; ++i) { ledYellow.blink(100u); delay(300u); } // Test #4 four yellow
+            //         if(isBusControlled) {
+            //             for (int i = 0; i < 2; ++i) { ledGreen.blink(100u); delay(300u); } // two green blinks if bus controlled
+            //         }
+            //         delay(1000u);
+            //     }         
+            //     (void)Wire.write2(0x3C, 0x00, 0xA5); // Screen ON command
             // }
             // if(s_oled_ok && !s_oled_init) {
             //     // blink ledGreen to indicate test number

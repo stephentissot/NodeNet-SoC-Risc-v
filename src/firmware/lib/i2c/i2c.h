@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include "bigsister.h"
 /*
  * Bare-metal Wishbone I2C driver for wb_i2c.sv.
@@ -76,17 +77,76 @@ public:
 
     uint8_t probe(const uint8_t addr)
     {
+        return write(addr, 0x00u); // send a dummy data byte to trigger address phase
+    }
+
+    // Write a single byte to the I2C bus at the given address, returning an I2C result code
+    uint8_t write(const uint8_t addr, const uint8_t payload)
+    {
         clear_nack();        
-        if(!push_data(0x00u)) return I2C_FIFO_ERROR; // dummy data to trigger address phase
+        if(!push_data(payload)) return I2C_FIFO_ERROR; // dummy data to trigger address phase
         if(!push_cmd(addr, static_cast<uint16_t>(I2C16_CMD_START | I2C16_CMD_WRITE | I2C16_CMD_STOP))) return I2C_CMD_ERROR;
 
-        if(!wait_idle()) {
+        if(!wait_tx_complete()) {
             return I2C_TIMEOUT; // timeout
         }
         if (nack_detected()) {
             return I2C_NACK; // nack
         }
         return I2C_OK; // ok
+    }
+
+    // Write two byte to the I2C bus at the given address, returning an I2C result code
+    uint8_t write2(const uint8_t addr, const uint8_t payload1, const uint8_t payload2)
+    {
+        clear_nack();
+        if(!push_data(payload1)) return I2C_FIFO_ERROR; // dummy data to trigger address phase
+        __asm__ volatile("" ::: "memory");
+        if(!push_data(payload2)) return I2C_FIFO_ERROR; // dummy data to trigger address phase
+        __asm__ volatile("" ::: "memory");
+        if(!push_cmd(addr, static_cast<uint16_t>(I2C16_CMD_START | I2C16_CMD_WRITE))) return I2C_CMD_ERROR;
+        __asm__ volatile("" ::: "memory");
+        if(!push_cmd(addr, static_cast<uint16_t>(I2C16_CMD_WRITE | I2C16_CMD_STOP))) return I2C_CMD_ERROR;
+        __asm__ volatile("" ::: "memory");
+        if(!wait_tx_complete()) {
+            return I2C_TIMEOUT; // timeout
+        }
+        if (nack_detected()) {
+            return I2C_NACK; // nack
+        }
+        return I2C_OK; // ok
+    }
+
+    // Write multiple bytes to the I2C bus at the given address, returning an I2C result code
+    uint8_t write(const uint8_t addr, const uint8_t* buf, const size_t len)
+    {
+        if (buf == nullptr || len == 0u) return I2C_CMD_ERROR;
+        if(len == 1u) return write(addr, buf[0]); // single byte write
+        clear_nack();
+        if(!push_cmd(addr, static_cast<uint16_t>(I2C16_CMD_START | I2C16_CMD_WRITE_MULT | I2C16_CMD_STOP))) return I2C_CMD_ERROR; // start + write_multi + stop
+        for (size_t i = 0; i < len; ++i) {
+            if(!push_data(buf[i], (i == len - 1u))) return I2C_FIFO_ERROR;
+        }
+        if (!wait_tx_complete()) {
+            return I2C_TIMEOUT; // timeout
+        }
+        if (nack_detected()) {
+            return I2C_NACK; // nack
+        }
+        return I2C_OK; // ok
+    }
+    // Write multiple bytes to the I2C bus at the given address, returning an I2C result code
+    uint8_t write(const uint8_t addr, std::initializer_list<uint8_t> data)
+    {
+        return write(addr, data.begin(), data.size());
+    }
+
+    // Write up to len bytes from an initializer list.
+    // This enables calls like: Wire.write(0x3C, {0x00, 0xAF}, 2)
+    uint8_t write(const uint8_t addr, std::initializer_list<uint8_t> data, const size_t len)
+    {
+        if (len > data.size()) return I2C_CMD_ERROR;
+        return write(addr, data.begin(), len);
     }
 
     bool isBusy() const {        
@@ -118,26 +178,10 @@ private:
     void init(uint16_t prescale)
     {
         *i2c_prescaler = static_cast<uint32_t>(prescale);
-        clear_nack();
-        //push_cmd(0x00, static_cast<uint16_t>(I2C16_CMD_STOP)); // clear any prior state
-        
+        __asm__ volatile("" ::: "memory");
+        clear_nack();   
     }
 
-    // push_command pushes a command byte to the I2C command FIFO, returning true if successful, false if timeout occurs (fifo still full after timeout)
-    // bool push_cmd(uint8_t addr, uint16_t cmd){
-    //     if(!wait_for_cmd_fifo_space(I2C_TIMEOUT_LOOP)) return false; // timeout
-    //     const uint16_t word =
-    //         (static_cast<uint16_t>(addr) & static_cast<uint16_t>(I2C16_CMD_ADDR_MASK)) |
-    //         (cmd & static_cast<uint16_t>(
-    //             I2C16_CMD_START |
-    //             I2C16_CMD_READ |
-    //             I2C16_CMD_WRITE |
-    //             I2C16_CMD_WRITE_MULT |
-    //             I2C16_CMD_STOP));
-
-    //     *i2c_cmd_reg = static_cast<uint32_t>(word);
-    //     return true;
-    // }
     bool push_cmd(uint8_t addr, uint16_t cmd){
         if(!wait_for_cmd_fifo_space()) return false; // timeout
 
@@ -145,11 +189,12 @@ private:
         const uint16_t c = cmd & (I2C16_CMD_START | I2C16_CMD_READ | I2C16_CMD_WRITE | I2C16_CMD_WRITE_MULT | I2C16_CMD_STOP);
         const uint16_t word = a | c;
         *i2c_cmd_reg = static_cast<uint32_t>(word);
+        __asm__ volatile("" ::: "memory");
         return true;
     }
 
     // push_data pushes a data byte to the I2C data FIFO, returning true if successful, false if timeout occurs (fifo still full after timeout)
-    bool push_data(uint16_t data, bool last = false, bool valid = true){
+    bool push_data(uint8_t data, bool last = false, bool valid = true){
         if(!wait_for_data_fifo_space()) return false; // timeout
         uint16_t word = static_cast<uint16_t>(data & I2C16_DATA_BYTE_MASK);
         if(last) {
@@ -159,7 +204,25 @@ private:
             word |= I2C16_DATA_VALID;
         }
         *i2c_data_reg = static_cast<uint32_t>(word);
+        __asm__ volatile("" ::: "memory");
         return true;
+    }
+
+    // Wait for the I2C peripheral to complete the current transaction, with a timeout, returning true if idle, false if timeout
+    bool wait_tx_complete() {
+        uint32_t t = I2C_TIMEOUT_LOOP;
+        while (t > 0u) {
+            const uint32_t s = *i2c_status_reg;
+            const bool busy = (s & I2C16_STATUS_BUSY) != 0u;
+            const bool bus_ctrl = (s & I2C16_STATUS_BUS_CTRL) != 0u;
+            const bool cmd_empty = (s & I2C16_FIFO_CMD_EMPTY) != 0u;
+            const bool wr_empty = (s & I2C16_FIFO_WR_EMPTY) != 0u;
+
+            if (!busy && !bus_ctrl && cmd_empty && wr_empty) return true;
+            --t;
+            __asm__ volatile("nop" ::: "memory");
+        }
+        return false;
     }
 
     // Wait for the I2C peripheral to become idle (busy is false), with a timeout, returning true if idle, false if timeout
@@ -172,6 +235,13 @@ private:
         }
         if (t == 0u) {
             return false; // timeout
+        }
+
+        t = I2C_TIMEOUT_LOOP;
+        while (t > 0u) {
+            if(!isBusControlled()) break; // wait for bus to be released
+            --t;
+            __asm__ volatile("nop" ::: "memory");
         }
         return true; // idle
     }
@@ -206,6 +276,7 @@ private:
     void clear_nack(void)
     {
        *i2c_status_reg = I2C16_STATUS_MISS_ACK;
+       __asm__ volatile("" ::: "memory");
     }
 
     // nack detected means no device responded at the last address to data byte sent
