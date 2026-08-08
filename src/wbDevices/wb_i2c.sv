@@ -1,23 +1,18 @@
 // wb_i2c.sv
-// Wishbone B.4 (32-bit) wrapper around Alex Forencich's i2c_master_wbs_8
+// Wishbone B.4 (32-bit) wrapper around Alex Forencich's i2c_master_wbs_16
 //
-// i2c_master_wbs_8 has an 8-bit Wishbone slave interface with 3-bit address
-// (8 registers).  This wrapper adapts it to our 32-bit CPU bus:
-//   - Data:    wb_dat_i/o[7:0] forwarded; upper bits zero-padded on read
-//   - Address: wb_adr_i[4:2] selects the register (4-byte word stride)
+// i2c_master_wbs_16 has a 16-bit Wishbone slave interface with 3-bit address
+// using byte offsets (0x00, 0x02, 0x04, 0x06).  This wrapper adapts it to our
+// 32-bit CPU bus with 4-byte word stride:
+//   - Data:    wb_dat_i/o[15:0] forwarded; upper bits zero-padded on read
+//   - Address: wb_adr_i[3:1] maps +0x00/+0x04/+0x08/+0x0C to 0/2/4/6
+//   - Select:  wb_sel_i[1:0] forwarded to preserve 16-bit atomic accesses
 //
 // Register map (from base ADDR, 4-byte stride):
-//   +0x00  Status      R:  [0]=busy  [1]=bus_cont  [2]=bus_act  [3]=miss_ack
-//                      W:  write 1 to [3] to clear miss_ack
-//   +0x04  FIFO Stat   R:  [0]=cmd_empty [1]=cmd_full [2]=cmd_ovf
-//                          [3]=wr_empty  [4]=wr_full  [5]=wr_ovf
-//                          [6]=rd_empty  [7]=rd_full
-//   +0x08  Cmd Addr    W:  [6:0] = 7-bit I2C address for next command
-//   +0x0C  Command     W:  [0]=start [1]=read [2]=write [4]=stop
-//   +0x10  Data        W:  push to TX FIFO  /  R: pop from RX FIFO
-//   +0x14  (reserved)
-//   +0x18  Prescale Lo W:  prescale[7:0]   (prescale = Fclk / (FI2C * 4))
-//   +0x1C  Prescale Hi W:  prescale[15:8]
+//   +0x00  Status   (inner +0x00)
+//   +0x04  Command  (inner +0x02)
+//   +0x08  Data     (inner +0x04)
+//   +0x0C  Prescale (inner +0x06)
 //
 // Prescale examples (25 MHz clock):
 //   100 kHz →  62   (25_000_000 / (100_000 * 4))
@@ -43,8 +38,8 @@ module wb_i2c #(
     // Wishbone B.4 slave (32-bit bus)
     input  wire [31:0] wb_adr_i,
     input  wire [31:0] wb_dat_i,
-    output wire [31:0] wb_dat_o,    // 8-bit result zero-extended to 32 bits
-    input  wire [3:0]  wb_sel_i,    // Not used (byte-granularity not needed)
+    output wire [31:0] wb_dat_o,    // 16-bit result zero-extended to 32 bits
+    input  wire [3:0]  wb_sel_i,
     input  wire        wb_we_i,
     input  wire        wb_cyc_i,
     input  wire        wb_stb_i,
@@ -67,18 +62,17 @@ module wb_i2c #(
     assign i2c_scl_i = i2c_scl;
     assign i2c_sda_i = i2c_sda;
 
-    // ─── 8-bit data from inner module, zero-extended ─────────────────────────
-    wire [7:0] i2c_dat_o_8;
-    assign wb_dat_o = {24'h0, i2c_dat_o_8};
-    // Restore the real Wishbone handshake: the CPU should only proceed when
-    // the inner I2C core has acknowledged the transfer. The unconditional ACK
-    // above was only a temporary debug hack and can hide transaction issues.
-//    wire       wbs_ack_internal;
-//    assign wb_ack_o = wbs_ack_internal;
-       
-    // ─── Instantiate Alex Forencich's 8-bit Wishbone I2C master ─────────────
-    // Address mapping: wb_adr_i[4:2] selects register 0–7 (4-byte word stride)
-    i2c_master_wbs_8 #(
+    // ─── 16-bit data from inner module, zero-extended ────────────────────────
+    wire [15:0] i2c_dat_o_16;
+    assign wb_dat_o = {16'h0, i2c_dat_o_16};
+
+    // ─── Instantiate Alex Forencich's 16-bit Wishbone I2C master ────────────
+    // 32-bit CPU word offsets map as:
+    //   +0x00 -> inner +0x00 (status)
+    //   +0x04 -> inner +0x02 (command)
+    //   +0x08 -> inner +0x04 (data)
+    //   +0x0C -> inner +0x06 (prescale)
+    i2c_master_wbs_16 #(
         .DEFAULT_PRESCALE(DEFAULT_PRESCALE),
         .FIXED_PRESCALE  (0),
         .CMD_FIFO        (1),
@@ -91,11 +85,12 @@ module wb_i2c #(
         .clk        (clk),
         .rst        (rst),
 
-        // Wishbone 8-bit slave
-        .wbs_adr_i  (wb_adr_i[4:2]),   // bits[4:2] = register index 0-7
-        .wbs_dat_i  (wb_dat_i[7:0]),   // lower byte of CPU write
-        .wbs_dat_o  (i2c_dat_o_8),
+        // Wishbone 16-bit slave
+        .wbs_adr_i  (wb_adr_i[3:1]),
+        .wbs_dat_i  (wb_dat_i[15:0]),
+        .wbs_dat_o  (i2c_dat_o_16),
         .wbs_we_i   (wb_we_i),
+        .wbs_sel_i  (wb_sel_i[1:0]),
         .wbs_stb_i  (wb_stb_i),
         .wbs_ack_o  (wb_ack_o),
         .wbs_cyc_i  (wb_cyc_i),

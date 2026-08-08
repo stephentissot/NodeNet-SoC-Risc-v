@@ -33,55 +33,13 @@ static void blink_bit_pattern(WbLed& green, WbLed& yellow, uint32_t value, uint3
     delay(500u);
 }
 
-
-static void run_i2c_diag(WbLed& green, WbLed& yellow)
-{
-    volatile uint32_t* const status_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x00UL);
-    volatile uint32_t* const fifo_status_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x04UL);
-    volatile uint32_t* const addr_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x08UL);
-    volatile uint32_t* const cmd_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x0CUL);
-    volatile uint32_t* const data_reg = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x10UL);
-
-    const uint32_t initial_status = *status_reg;
-    const uint32_t initial_fifo = *fifo_status_reg;
-    blink_bit_pattern(green, yellow, initial_status, 4u);
-    blink_bit_pattern(yellow, green, initial_fifo, 8u);
-
-    *addr_reg = 0x3Cu;
-    for(int i = 0; i< 100; ++i) { asm volatile("nop" ::: "memory"); } // small delay
-    delay(1u);
-    const uint32_t after_addr_status = *status_reg;
-    const uint32_t after_addr_fifo = *fifo_status_reg;
-    
-    blink_bit_pattern(green, yellow, after_addr_status, 4u);
-    blink_bit_pattern(yellow, green, after_addr_fifo, 8u);
-
-    *data_reg = 0x00u;
-    for(int i = 0; i< 100; ++i) { asm volatile("nop" ::: "memory"); } // small delay
-    *cmd_reg = 0x05u; // START | WRITE
-    for(int i = 0; i< 100; ++i) { asm volatile("nop" ::: "memory"); } // small delay
-    delay(1u);
-    const uint32_t after_cmd_status = *status_reg;
-    const uint32_t after_cmd_fifo = *fifo_status_reg;
-    blink_bit_pattern(green, yellow, after_cmd_status, 4u);
-    blink_bit_pattern(yellow, green, after_cmd_fifo, 8u);
-
-    *cmd_reg = 0x10u; // STOP
-    for(int i = 0; i< 100; ++i) { asm volatile("nop" ::: "memory"); } // small delay
-    delay(1u);
-    const uint32_t after_stop_status = *status_reg;
-    const uint32_t after_stop_fifo = *fifo_status_reg;
-    blink_bit_pattern(green, yellow, after_stop_status, 4u);
-    blink_bit_pattern(yellow, green, after_stop_fifo, 8u);
-}
-
 int main(void)
 {
     led_d2_blink();
     WbLed  ledGreen(LED0_BASE);
     WbLed  ledYellow(LED1_BASE);
     I2c Wire;
-    bool s_oled_ok = false;
+    uint8_t s_oled_ok = I2c::I2C_NACK;
     static constexpr uint32_t kBlinkPeriodMs = 2000u;
     bool led_on = false;
     uint32_t next_toggle_ms = *TIMER_MS + kBlinkPeriodMs;
@@ -91,31 +49,58 @@ int main(void)
     Wire.begin(15); // 100 kHz @ 25 MHz
 
     // Mirror test: read back the prescale registers written by begin(62)
-    volatile uint32_t* const prescale_lo =
-        reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x18UL);
-    volatile uint32_t* const prescale_hi =
-        reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x1CUL);
-
-    const uint8_t lo = static_cast<uint8_t>(*prescale_lo & 0xFFu);
-    const uint8_t hi = static_cast<uint8_t>(*prescale_hi & 0xFFu);
-    const uint16_t mirror_prescale = (static_cast<uint16_t>(hi) << 8) | lo;
-    if (mirror_prescale == 62u) {
+    volatile uint32_t* const i2c_prescaler  = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x0Cu);
+    if (*i2c_prescaler == 15u) {
         for (int i = 0; i < 4; ++i) { ledGreen.blink(100u); delay(400u); }
     } else {
         for (int i = 0; i < 4; ++i) { ledYellow.blink(100u); delay(400u); }
     }
     // End mirror test
-    //run_i2c_diag(ledGreen, ledYellow);
     
     while (1) {
+
         s_oled_ok = Wire.probe(0x3C); // Try i2c address 0x3C (OLED)
+        bool isBusy = Wire.isBusy();
+        bool isBusActive = Wire.isBusActive();
+        bool isBusControlled = Wire.isBusControlled();
+        if (s_oled_ok != I2c::I2C_OK)
+        {
+            // Blink the green led to indicate the I2C error code
+            for (int i = 0; i < 1; ++i) { ledYellow.blink(100u); delay(300u); }  // Test #1 one yellow
+            for (int i = 0; i < s_oled_ok; ++i) { ledGreen.blink(100u); delay(300u); }  // one green blink per I2C error code
+            delay(500u);
+            for (int i = 0; i < 2; ++i) { ledYellow.blink(100u); delay(300u); }  // Test #2 two yellow
+            if(isBusy) {
+                for (int i = 0; i < 2; ++i) { ledGreen.blink(100u); delay(300u); } // two green blinks if busy
+            }
+            delay(500u);
+            for (int i = 0; i < 3; ++i) { ledYellow.blink(100u); delay(300u); }  // Test #3 three yellow
+            if(isBusActive) {
+                for (int i = 0; i < 2; ++i) { ledGreen.blink(100u); delay(300u); } // two green blinks if bus active
+            }
+            delay(500u);
+            for (int i = 0; i < 4; ++i) { ledYellow.blink(100u); delay(300u); } // Test #4 four yellow
+            if(isBusControlled) {
+                for (int i = 0; i < 2; ++i) { ledGreen.blink(100u); delay(300u); } // two green blinks if bus controlled
+            }
+            delay(2000u);
+        }         
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             led_on = !led_on;
             *LED_D2 = led_on ? 0u : 1u;
             next_toggle_ms += kBlinkPeriodMs;
-            if (!s_oled_ok) ledYellow.blink(600u);
-            else ledGreen.blink(600u);
+            if (s_oled_ok == I2c::I2C_OK) ledGreen.blink(100u);
+            // if(s_oled_ok){
+            //     uint8_t result;
+            //     uint8_t data[] = {0x00, 0xAE};
+            //     result = Wire.write(0x3C, data, 2); // Screen OFF command
+            //     if(result == I2c::I2C_OK) {
+            //         ledGreen.blink(100u);
+            //     } else {
+            //         ledYellow.blink(600u);
+            //     }
+            // }
             // if(s_oled_ok && !s_oled_init) {
             //     // blink ledGreen to indicate test number
             //     for(int i=0;i<test;++i){ ledGreen.blink(150u); delay(150u); }

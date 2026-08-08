@@ -37,3 +37,7 @@ peek() : int
 octet suivant sans consommer, ou -1 si rien
 flush() : void
 onReceive/onRequest : void
+
+
+
+Start olded sequence
