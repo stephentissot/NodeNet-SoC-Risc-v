@@ -57,46 +57,71 @@ int main(void)
     // }
     // End mirror test    
 
+    // Init screen
+    // s_oled_ok = Wire.write(0x3C, {
+    //     0x00,       // Control byte: following bytes are commands
 
-    //s_oled_ok = Wire.probe(0x3C); // Try i2c address 0x3C (OLED)
-    s_oled_ok = Wire.write2(0x3C, 0x00, 0xAE); // Screen off
-    s_oled_ok = Wire.write2(0x3C, 0x00, 0xAF); // Screen on
-    // if (s_oled_ok == I2c::I2C_OK) {
-    //     for (int i = 0; i < 4; ++i) { ledGreen.blink(100u); delay(400u); }
-    //     // Test write2() to OLED address 0x3C with two bytes of data
-    //     uint8_t test = Wire.write2(0x3C, 0x00, 0xAF); // Screen ON command
-    //     bool isBusy = Wire.isBusy();
-    //     bool isBusActive = Wire.isBusActive();
-    //     bool isBusControlled = Wire.isBusControlled();
-    //     if (test != I2c::I2C_OK)
-    //     {
-    //         for (int i = 0; i < test; ++i) { ledGreen.blink(100u); delay(300u); }  // one green blink per I2C error code
-    //         // Blink the green led to indicate the I2C error code
-    //         for (int i = 0; i < 1; ++i) { ledYellow.blink(100u); delay(300u); }  // Test #1 one yellow
-    //         for (int i = 0; i < test; ++i) { ledGreen.blink(100u); delay(300u); }  // one green blink per I2C error code
-    //         delay(500u);
-    //         for (int i = 0; i < 2; ++i) { ledYellow.blink(100u); delay(300u); }  // Test #2 two yellow
-    //         if(isBusy) {
-    //             for (int i = 0; i < 2; ++i) { ledGreen.blink(100u); delay(300u); } // two green blinks if busy
-    //         }
-    //         delay(500u);
-    //         for (int i = 0; i < 3; ++i) { ledYellow.blink(100u); delay(300u); }  // Test #3 three yellow
-    //         if(isBusActive) {
-    //             for (int i = 0; i < 2; ++i) { ledGreen.blink(100u); delay(300u); } // two green blinks if bus active
-    //         }
-    //         delay(500u);
-    //         for (int i = 0; i < 4; ++i) { ledYellow.blink(100u); delay(300u); } // Test #4 four yellow
-    //         if(isBusControlled) {
-    //             for (int i = 0; i < 2; ++i) { ledGreen.blink(100u); delay(300u); } // two green blinks if bus controlled
-    //         }
-    //         delay(1000u);                
-    //     } 
-    // }
+    //     0xAE,       // Display OFF
 
+    //     0xD5, 0x80, // Set display clock divide ratio / oscillator frequency
+    //                 // 0x80 = default recommended setting
+
+    //     0xA8, 0x3F, // Set multiplex ratio
+    //                 // 0x3F = 63 -> 64 MUX for a 128x64 panel
+
+    //     0xD3, 0x00, // Set display offset
+    //                 // 0x00 = no vertical offset
+
+    //     0x40,       // Set display start line to 0
+
+    //     0x8D, 0x14, // Enable charge pump
+    //                 // 0x14 = internal charge pump ON
+
+    //     0xA1,       // Segment remap
+    //                 // Column address 127 is mapped to SEG0
+    //                 // Common on many OLED modules depending on orientation
+
+    //     0xC8,       // COM output scan direction remapped
+    //                 // Flips vertical scan direction
+
+    //     0xDA, 0x12, // Set COM pins hardware configuration
+    //                 // 0x12 is the usual setting for 128x64 SSD1306
+
+    //     0x81, 0xCF, // Set contrast control
+    //                 // 0xCF = common default contrast value
+
+    //     0xD9, 0xF1, // Set pre-charge period
+    //                 // 0xF1 is typical when using internal charge pump
+
+    //     0xDB, 0x40, // Set VCOMH deselect level
+    //                 // 0x40 is a common default
+
+    //     0xA4,       // Resume display from RAM content
+    //                 // Opposite of "entire display ON" (0xA5)
+
+    //     0xA6,       // Normal display mode
+    //                 // Opposite of inverse display (0xA7)
+
+    //     0xAF        // Display ON
+    // });
+    
+    
+    bool test_all_pixels_on = false;
     while (1) {
-
+        s_oled_ok = Wire.write(0x3C, {0x00, 0xAE, 0xD5, 0x80});
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
+
+            if(s_oled_ok != I2c::I2C_OK) {
+                ledYellow.blink(100u);
+            } else {
+                ledGreen.blink(100u);
+            }
+            // Toggle screen pixels on/off to test I2C write and screen response
+            // const uint8_t cmd = test_all_pixels_on ? 0xA4 : 0xA5;
+            // const uint8_t rc = Wire.write(0x3C, {0x00, cmd});
+            // test_all_pixels_on = !test_all_pixels_on;
+
             led_on = !led_on;
             *LED_D2 = led_on ? 0u : 1u;
             next_toggle_ms += kBlinkPeriodMs;

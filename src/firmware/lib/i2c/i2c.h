@@ -75,65 +75,18 @@ public:
         init(prescale);
     }
 
-    uint8_t probe(const uint8_t addr)
-    {
-        return write(addr, 0x00u); // send a dummy data byte to trigger address phase
-    }
-
-    // Write a single byte to the I2C bus at the given address, returning an I2C result code
-    uint8_t write(const uint8_t addr, const uint8_t payload)
-    {
-        clear_nack();        
-        if(!push_data(payload)) return I2C_FIFO_ERROR; // dummy data to trigger address phase
-        if(!push_cmd(addr, static_cast<uint16_t>(I2C16_CMD_START | I2C16_CMD_WRITE | I2C16_CMD_STOP))) return I2C_CMD_ERROR;
-
-        if(!wait_tx_complete()) {
-            return I2C_TIMEOUT; // timeout
-        }
-        if (nack_detected()) {
-            return I2C_NACK; // nack
-        }
-        return I2C_OK; // ok
-    }
-
-    // Write two byte to the I2C bus at the given address, returning an I2C result code
-    uint8_t write2(const uint8_t addr, const uint8_t payload1, const uint8_t payload2)
-    {
-        clear_nack();
-        if(!push_data(payload1)) return I2C_FIFO_ERROR; // dummy data to trigger address phase
-        __asm__ volatile("" ::: "memory");
-        if(!push_data(payload2)) return I2C_FIFO_ERROR; // dummy data to trigger address phase
-        __asm__ volatile("" ::: "memory");
-        if(!push_cmd(addr, static_cast<uint16_t>(I2C16_CMD_START | I2C16_CMD_WRITE))) return I2C_CMD_ERROR;
-        __asm__ volatile("" ::: "memory");
-        if(!push_cmd(addr, static_cast<uint16_t>(I2C16_CMD_WRITE | I2C16_CMD_STOP))) return I2C_CMD_ERROR;
-        __asm__ volatile("" ::: "memory");
-        if(!wait_tx_complete()) {
-            return I2C_TIMEOUT; // timeout
-        }
-        if (nack_detected()) {
-            return I2C_NACK; // nack
-        }
-        return I2C_OK; // ok
-    }
-
     // Write multiple bytes to the I2C bus at the given address, returning an I2C result code
     uint8_t write(const uint8_t addr, const uint8_t* buf, const size_t len)
     {
         if (buf == nullptr || len == 0u) return I2C_CMD_ERROR;
-        if(len == 1u) return write(addr, buf[0]); // single byte write
+
         clear_nack();
-        if(!push_cmd(addr, static_cast<uint16_t>(I2C16_CMD_START | I2C16_CMD_WRITE_MULT | I2C16_CMD_STOP))) return I2C_CMD_ERROR; // start + write_multi + stop
-        for (size_t i = 0; i < len; ++i) {
-            if(!push_data(buf[i], (i == len - 1u))) return I2C_FIFO_ERROR;
-        }
-        if (!wait_tx_complete()) {
-            return I2C_TIMEOUT; // timeout
-        }
-        if (nack_detected()) {
-            return I2C_NACK; // nack
-        }
-        return I2C_OK; // ok
+
+        if (!queue_write(addr, buf, len, false, true)) return I2C_CMD_ERROR;
+        if (!wait_tx_complete()) return I2C_TIMEOUT;
+        if (nack_detected()) return I2C_NACK;
+
+        return I2C_OK;
     }
     // Write multiple bytes to the I2C bus at the given address, returning an I2C result code
     uint8_t write(const uint8_t addr, std::initializer_list<uint8_t> data)
@@ -182,9 +135,38 @@ private:
         clear_nack();   
     }
 
+
+    // Queue a write transaction the same way the XFCP I2C driver does:
+    // - len == 1: single WRITE command
+    // - len  > 1: WRITE_MULT with DATA_LAST on final byte
+    bool queue_write(const uint8_t addr,
+                    const uint8_t* data,
+                    const size_t len,
+                    const bool start,
+                    const bool stop)
+    {
+        if (data == nullptr || len == 0u) return false;
+
+        if (len == 1u) {
+            if (!push_data(data[0], false, true)) return false;
+            uint16_t cmd = I2C16_CMD_WRITE;
+            if (start) cmd |= I2C16_CMD_START;
+            if (stop) cmd |= I2C16_CMD_STOP;
+            return push_cmd(addr, cmd);
+        }
+
+        for (size_t i = 0; i < len; ++i) {
+            if (!push_data(data[i], i == (len - 1u), true)) return false;
+        }
+
+        uint16_t cmd = I2C16_CMD_WRITE_MULT;
+        if (start) cmd |= I2C16_CMD_START;
+        if (stop) cmd |= I2C16_CMD_STOP;
+        return push_cmd(addr, cmd);
+    }
+
     bool push_cmd(uint8_t addr, uint16_t cmd){
         if(!wait_for_cmd_fifo_space()) return false; // timeout
-
         const uint16_t a = static_cast<uint16_t>(addr) & I2C16_CMD_ADDR_MASK;
         const uint16_t c = cmd & (I2C16_CMD_START | I2C16_CMD_READ | I2C16_CMD_WRITE | I2C16_CMD_WRITE_MULT | I2C16_CMD_STOP);
         const uint16_t word = a | c;
