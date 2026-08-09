@@ -82,7 +82,7 @@ public:
 
         clear_nack();
 
-        if (!queue_write(addr, buf, len, false, true)) return I2C_CMD_ERROR;
+        if (!queue_write(addr, buf, len, true, true)) return I2C_CMD_ERROR;
         if (!wait_tx_complete()) return I2C_TIMEOUT;
         if (nack_detected()) return I2C_NACK;
 
@@ -156,7 +156,7 @@ private:
         }
 
         for (size_t i = 0; i < len; ++i) {
-            if (!push_data(data[i], i == (len - 1u), true)) return false;
+            if (!push_data(data[i], i == (len - 1u), false)) return false;
         }
 
         uint16_t cmd = I2C16_CMD_WRITE_MULT;

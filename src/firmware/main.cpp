@@ -108,7 +108,8 @@ int main(void)
     
     bool test_all_pixels_on = false;
     while (1) {
-        s_oled_ok = Wire.write(0x3C, {0x00, 0xAE, 0xD5, 0x80});
+        const uint8_t seq[] = {0x00, 0xAE, 0xD5, 0x80};
+        s_oled_ok = Wire.write(0x3C, seq, sizeof(seq));
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
 
