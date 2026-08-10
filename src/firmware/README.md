@@ -38,6 +38,7 @@ src/firmware/
 ├── main.cpp         Application entry point
 ├── i2c.h            I2C MMIO driver (wb_i2c peripheral)
 ├── sdram.h          SDRAM helpers (SDRAM_DATA macro, sdram_wait_ready)
+├── sdram.cpp        Single-TU SDRAM test probe storage for self-tests
 └── lib/
     ├── u8g2/        u8g2 graphics library (git submodule)
     │   └── csrc/    132 C source files compiled with --gc-sections
@@ -297,6 +298,11 @@ Detailed register-level documentation is available in [../wbDevices/README_FLASH
 
 **Important**: the SDRAM controller performs a ~200 µs initialization at power-on. Do not access SDRAM before `sdram_wait_ready()` returns.
 
+**Current validation status**:
+- `sdramTest()` runs at boot and checks base/middle/tail regions plus a byte-pattern test.
+- A dedicated `SDRAM_DATA` probe object is linked from a single translation unit and verified at runtime.
+- Sub-word CPU stores now work through the Wishbone SDRAM wrapper via read-modify-write.
+
 ```cpp
 #include "sdram.h"
 
@@ -319,6 +325,16 @@ int main() {
     // Memory test (application region)
     uint32_t errors = sdram_test(1024);  // Test first 4 KB
     if (errors == 0) uart_puts("SDRAM OK\n");
+}
+```
+
+For the integrated boot self-test path used by `main.cpp`:
+
+```cpp
+if (sdramTest(oled_boot_status)) {
+    oled_write("[BOOT] System ready");
+} else {
+    oled_write("[BOOT] Degraded mode");
 }
 ```
 

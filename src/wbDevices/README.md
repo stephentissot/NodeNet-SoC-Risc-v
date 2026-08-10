@@ -315,7 +315,7 @@ parameter BLINK_CYCLES = 32'd2500000; // 100 ms @ 25 MHz
 > - `CKE` → VCC (clock always enabled)
 > - `DQM[3:0]` → GND (byte masking permanently disabled)
 >
-> **Consequence**: all SDRAM reads/writes are always full 32-bit. Individual byte masking via `wb_sel_i` is not supported at the SDRAM level.
+> **Consequence**: the SDRAM chip itself always sees full 32-bit accesses. The Wishbone wrapper now compensates for sub-word CPU writes with an internal read-modify-write sequence when `wb_sel_i != 4'b1111`.
 
 **SDRAM Organization**:
 | Parameter | Value |
@@ -334,7 +334,7 @@ parameter BLINK_CYCLES = 32'd2500000; // 100 ms @ 25 MHz
 | `[22:21]` | Bank `BA[1:0]` | 4 banks |
 | `[20:10]` | Row `A[10:0]` | 2048 rows |
 | `[9:2]` | Column `A[7:0]` | 256 words |
-| `[1:0]` | Byte offset (ignored) | — |
+| `[1:0]` | Byte offset inside 32-bit word | handled in Wishbone wrapper |
 
 **Parameters**:
 
@@ -396,7 +396,7 @@ void sdram_test(void) {
 ```
 
 **Limitations**:
-- **No byte masking**: `DQM=GND` on PCB → `wb_sel_i` is ignored; always reads/writes full 32 bits
+- **No native SDRAM byte masking**: `DQM=GND` on PCB, so sub-word writes are emulated in `wb_sdram` with read-modify-write cycles instead of true masked writes
 - **Single-word bursts**: BL=1; no burst transfers (can be extended by changing MODE_REG)
 - **Auto-precharge**: row closes after every access; no open-row optimization
 

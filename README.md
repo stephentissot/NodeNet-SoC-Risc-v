@@ -11,6 +11,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 - **Peripherals**: D2 LED GPIO, RJ45 LED pulse controllers (`wb_led`), RS485 NodeNet485, I2C master, SDRAM controller
 - **Communication**: NodeNet485 @ 1 Mb/s over RS-485 (multi-node capable)
 - **Firmware**: C++17, bare-metal, newlib-nano
+- **Validated SDRAM path**: boot-time init, 32-bit accesses, partial Wishbone writes, and linker-placed `SDRAM_DATA` variables
 
 ## Features
 
@@ -326,11 +327,11 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
 
 ## Planned Enhancements
 
-- [ ] 8 MB SDRAM controller (`wb_sdram.sv`) with auto-refresh and auto-precharge (validation pending)
+- [x] 8 MB SDRAM controller (`wb_sdram.sv`) with auto-refresh and auto-precharge
 - [x] I2C master (`wb_i2c.sv`) — Wishbone wrapper around verilog-i2c
 - [x] u8g2 OLED display support (SSD1306 128×64 over I2C)
 - [x] C++17 firmware with newlib-nano and dead-code elimination
-- [ ] SDRAM section in linker script (`sdram.h`, `SDRAM_DATA` macro) (validation pending)
+- [x] SDRAM section in linker script (`sdram.h`, `SDRAM_DATA` macro)
 - [ ] NodeNet485 mailbox transport with TX/RX framing and heartbeat (validation pending)
 - [ ] UART1–4 implementation and testing
 - [ ] RS485 direct connector mapping and labeling verification (A/B/GND)
