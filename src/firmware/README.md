@@ -356,55 +356,58 @@ Hardware: 8 MB total (M12L64322A SDRAM on Colorlight i9)
 
 ### I2C0 (`0x10005000`) — via `i2c.h`
 
-`i2c.h` provides an `I2C` object API bound to a base address.
+`i2c.h` provides an `I2c` API for the `wb_i2c` wrapper around
+`i2c_master_wbs_16`.
 
 ```cpp
 #include "i2c.h"
 
 void i2c_example(void) {
-    constexpr uint32_t I2C0_BASE = 0x10005000u;
-    I2C i2c(I2C0_BASE);
+    I2c i2c;
 
     // Set clock: 400 kHz @ 25 MHz (prescale = 25e6 / (400e3 * 4) = 15)
-    i2c.Init(15);
+    i2c.begin(15);
 
     // Write: send a 2-byte command to device at address 0x3C
     uint8_t cmd[] = { 0x00, 0xAF };     // SSD1306: Co=0, D/C=0, DISPLAY_ON
-    int ret = i2c.Write(0x3C, cmd, 2);  // returns 0=OK, 1=NACK
-    if (ret) uart_puts("I2C NACK!\n");
-
-    // Read: receive 2 bytes from device at 0x48
-    uint8_t data[2];
-    i2c.Read(0x48, data, 2);
-
-    // Combined write-then-read (register read pattern)
-    uint8_t reg = 0x00;
-    i2c.Write(0x48, &reg, 1);    // Write register address
-    i2c.Read(0x48, data, 2);     // Read register value
+    uint8_t rc = i2c.write(0x3C, cmd, 2);  // I2c::I2C_OK on success
+    if (rc != I2c::I2C_OK) uart_puts("I2C write failed\n");
 }
 ```
 
-**Raw MMIO access** (for custom protocols):
+**Raw MMIO access** (for custom protocols, 16-bit register words in 32-bit stride):
 ```cpp
 constexpr uint32_t I2C0_BASE = 0x10005000u;
 auto i2c_reg = [](uint32_t base, uint32_t ofs) -> volatile uint32_t& {
     return *reinterpret_cast<volatile uint32_t*>(base + ofs);
 };
 
-// Wait until cmd FIFO not full, then push a START+WRITE command
-while (i2c_reg(I2C0_BASE, I2C_REG_FIFO) & I2C_FIFO_CMD_FULL);
-i2c_reg(I2C0_BASE, I2C_REG_ADDR) = 0x3C;
-i2c_reg(I2C0_BASE, I2C_REG_CMD)  = I2C_CMD_START | I2C_CMD_WRITE;
+constexpr uint32_t I2C16_REG_STATUS = 0x00u;
+constexpr uint32_t I2C16_REG_CMD    = 0x04u;
+constexpr uint32_t I2C16_REG_DATA   = 0x08u;
+constexpr uint32_t I2C16_REG_PRESC  = 0x0Cu;
 
-// Push data
-while (i2c_reg(I2C0_BASE, I2C_REG_FIFO) & I2C_FIFO_WR_FULL);
-i2c_reg(I2C0_BASE, I2C_REG_DATA) = 0xAF;
+constexpr uint16_t I2C16_CMD_START      = (1u << 8);
+constexpr uint16_t I2C16_CMD_WRITE_MULT = (1u << 11);
+constexpr uint16_t I2C16_CMD_STOP       = (1u << 12);
+constexpr uint16_t I2C16_DATA_VALID     = (1u << 8);
+constexpr uint16_t I2C16_DATA_LAST      = (1u << 9);
+constexpr uint16_t I2C16_FIFO_WR_FULL   = (1u << 12); // STATUS bit
+constexpr uint16_t I2C16_FIFO_CMD_FULL  = (1u << 9);  // STATUS bit
 
-// Push STOP
-i2c_reg(I2C0_BASE, I2C_REG_CMD) = I2C_CMD_STOP;
+// Set prescaler for 100 kHz @ 25 MHz
+i2c_reg(I2C0_BASE, I2C16_REG_PRESC) = 62u;
 
-// Wait for completion
-I2C(I2C0_BASE).WaitBusy();
+// Push one data byte with DATA_VALID and DATA_LAST
+while (i2c_reg(I2C0_BASE, I2C16_REG_STATUS) & I2C16_FIFO_WR_FULL);
+i2c_reg(I2C0_BASE, I2C16_REG_DATA) = (0xAFu | I2C16_DATA_VALID | I2C16_DATA_LAST);
+
+// Push START + WRITE_MULT + STOP to slave 0x3C
+while (i2c_reg(I2C0_BASE, I2C16_REG_STATUS) & I2C16_FIFO_CMD_FULL);
+i2c_reg(I2C0_BASE, I2C16_REG_CMD) = (0x3Cu | I2C16_CMD_START | I2C16_CMD_WRITE_MULT | I2C16_CMD_STOP);
+
+// Poll status busy bit until transfer complete
+while (i2c_reg(I2C0_BASE, I2C16_REG_STATUS) & 0x1u) {}
 ```
 
 ---

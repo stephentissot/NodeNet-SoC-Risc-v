@@ -43,10 +43,11 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - Wishbone register interface (0x10006000)
 
 - **I2C Module** (`wb_i2c.sv`):
-  - Wraps Alex Forencich's `i2c_master_wbs_8` core
+  - Wraps Alex Forencich's `i2c_master_wbs_16` core
   - Hardware command + write + read FIFOs (32 entries each)
   - Configurable speed (default 100 kHz, up to 400 kHz @ 25 MHz)
-  - Drives SCL/SDA open-drain (external 4.7 kΩ pullup required)  - Wishbone address: 0x10005000
+  - Drives SCL/SDA open-drain (external 4.7 kΩ pullup required)
+  - Wishbone address: 0x10005000
 
 - **SPI Flash Module** (`wb_flash.sv`, `spi_master.sv`):
   - Wishbone interface to on-board SPI flash (W25Q64, 8 MB)
@@ -188,7 +189,7 @@ NodeNet RJ45 pinout (both connectors):
 | 7 | GND |
 | 8 | GND |
 
-### I2C (pmodg connector)
+### I2C (D18/D17 pins)
 - **SCL**: D18
 - **SDA**: D17
 - Requires external 4.7 kΩ pullup resistors to 3.3 V on both lines
@@ -319,18 +320,18 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
   - `wb_led`: RJ45 LED pulse controllers (0x10000004 / 0x10000008)
    - `wb_i2c`: I2C master with FIFOs (0x10005000)
 4. **NodeNet Transport**: Mailbox-driven TX/RX framing, decode, and heartbeat scheduling
-5. **I2C Core**: Wraps Alex Forencich's `i2c_master_wbs_8` with Wishbone interface
+5. **I2C Core**: Wraps Alex Forencich's `i2c_master_wbs_16` with Wishbone interface
 6. **RS485 Physical**: Transceiver converts CMOS ↔ RS485 differential signaling
 7. **Field Wiring**: Each RS485 channel is exposed as direct A/B/GND connections
 
 ## Planned Enhancements
 
-- [x] 8 MB SDRAM controller (`wb_sdram.sv`) with auto-refresh and auto-precharge
+- [ ] 8 MB SDRAM controller (`wb_sdram.sv`) with auto-refresh and auto-precharge (validation pending)
 - [x] I2C master (`wb_i2c.sv`) — Wishbone wrapper around verilog-i2c
 - [x] u8g2 OLED display support (SSD1306 128×64 over I2C)
 - [x] C++17 firmware with newlib-nano and dead-code elimination
-- [x] SDRAM section in linker script (`sdram.h`, `SDRAM_DATA` macro)
-- [x] NodeNet485 mailbox transport with TX/RX framing and heartbeat
+- [ ] SDRAM section in linker script (`sdram.h`, `SDRAM_DATA` macro) (validation pending)
+- [ ] NodeNet485 mailbox transport with TX/RX framing and heartbeat (validation pending)
 - [ ] UART1–4 implementation and testing
 - [ ] RS485 direct connector mapping and labeling verification (A/B/GND)
 - [ ] `wb_gpio` control bit for RS485 120R termination switch (74LVC1G66GW,125)

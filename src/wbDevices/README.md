@@ -410,7 +410,7 @@ void sdram_test(void) {
 
 ### 6. `wb_i2c.sv` – I2C Master Controller
 
-**Purpose**: Wishbone B.4 (32-bit) wrapper around Alex Forencich's `i2c_master_wbs_8` core, providing a memory-mapped I2C master with hardware FIFOs.
+**Purpose**: Wishbone B.4 (32-bit) wrapper around Alex Forencich's `i2c_master_wbs_16` core, providing a memory-mapped I2C master with hardware FIFOs.
 
 **Based On**: [Verilog I2C IP by Alex Forencich](https://github.com/alexforencich/verilog-i2c) (MIT licence).
 
@@ -420,13 +420,10 @@ void sdram_test(void) {
 
 | Offset | Name | R/W | Bits |
 |--------|------|-----|------|
-| 0x00 | STATUS | R/W | `[0]`=busy `[1]`=bus_ctrl `[2]`=bus_act `[3]`=miss_ack (W1C) |
-| 0x04 | FIFO_STATUS | R | `[0]`=cmd_empty `[1]`=cmd_full `[3]`=wr_empty `[4]`=wr_full `[6]`=rd_empty `[7]`=rd_full |
-| 0x08 | CMD_ADDR | W | 7-bit device address for next command |
-| 0x0C | COMMAND | W | `[0]`=start `[1]`=read `[2]`=write `[4]`=stop |
-| 0x10 | DATA | R/W | Pop RX FIFO / Push TX FIFO |
-| 0x18 | PRESC_LO | W | `prescale[7:0]`  — `prescale = Fclk / (FI2C × 4)` |
-| 0x1C | PRESC_HI | W | `prescale[15:8]` — 100 kHz @ 25 MHz → 62, 400 kHz → 15 |
+| 0x00 | STATUS | R/W | `[0]`=busy `[1]`=bus_ctrl `[2]`=bus_act `[3]`=miss_ack (W1C), `[15:8]` FIFO summary |
+| 0x04 | COMMAND | R/W | `[6:0]`=addr `[8]`=start `[9]`=read `[10]`=write `[11]`=write_mult `[12]`=stop |
+| 0x08 | DATA | R/W | `[7:0]`=data `[8]`=data_valid `[9]`=data_last |
+| 0x0C | PRESCALE | R/W | `prescale[15:0]`, with `prescale = Fclk / (FI2C × 4)` |
 
 **Parameters**:
 
@@ -449,24 +446,19 @@ parameter        READ_FIFO_DEPTH  = 32;
 ```cpp
 #include "i2c.h"
 
-constexpr uint32_t I2C0_BASE = 0x10005000u;
-I2C i2c(I2C0_BASE);
+I2c wire;
 
 // Initialize at 400 kHz
-i2c.Init(25000000 / (400000 * 4));  // prescale = 15
+wire.begin(25000000 / (400000 * 4));  // prescale = 15
 
 // Write 2 bytes to 0x3C (SSD1306 command: DISPLAY_ON)
 uint8_t buf[] = { 0x00, 0xAF };
-i2c.Write(0x3C, buf, 2);
-
-// Read 1 byte from 0x48 (ADS1015)
-uint8_t result;
-i2c.Read(0x48, &result, 1);
+wire.write(0x3C, buf, 2);
 ```
 
-**Hardware Pins** (Colorlight i9 pmodg connector, external 4.7 kΩ pullup to 3.3 V required):
-- `i2c0_scl` → H4 (pmodg[0])
-- `i2c0_sda` → G3 (pmodg[1])
+**Hardware Pins** (Colorlight i9, external 4.7 kΩ pullup to 3.3 V required):
+- `i2c0_scl` → D18
+- `i2c0_sda` → D17
 
 ---
 
