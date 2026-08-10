@@ -43,7 +43,7 @@ module wb_sdram #(
     input  wire [31:0] wb_adr_i,
     input  wire [31:0] wb_dat_i,
     output reg  [31:0] wb_dat_o,
-    input  wire [3:0]  wb_sel_i,     // Ignored: DQM=GND on hardware
+    input  wire [3:0]  wb_sel_i,
     input  wire        wb_we_i,
     input  wire        wb_cyc_i,
     input  wire        wb_stb_i,
@@ -109,8 +109,23 @@ module wb_sdram #(
 
     // Latched Wishbone request (sampled in S_IDLE to avoid metastability)
     reg         saved_we;
+    reg         saved_partial_we;
+    reg  [3:0]  saved_sel;
     reg  [31:0] saved_adr;
     reg  [31:0] saved_dat;
+
+    function automatic [31:0] merge_wb_bytes;
+        input [31:0] old_data;
+        input [31:0] new_data;
+        input [3:0]  sel;
+        begin
+            merge_wb_bytes = old_data;
+            if (sel[0]) merge_wb_bytes[7:0]   = new_data[7:0];
+            if (sel[1]) merge_wb_bytes[15:8]  = new_data[15:8];
+            if (sel[2]) merge_wb_bytes[23:16] = new_data[23:16];
+            if (sel[3]) merge_wb_bytes[31:24] = new_data[31:24];
+        end
+    endfunction
 
     // ─── Address decomposition ───────────────────────────────────────────────────
     // Byte address layout within 8MB SDRAM space:
@@ -256,9 +271,11 @@ module wb_sdram #(
                         state       <= S_REFRESH;
                     end else if (wb_cyc_i && wb_stb_i && sdram_sel) begin
                         // Latch request to protect against CPU changing address mid-transaction
-                        saved_we  <= wb_we_i;
-                        saved_adr <= wb_adr_i;
-                        saved_dat <= wb_dat_i;
+                        saved_we         <= wb_we_i;
+                        saved_partial_we <= wb_we_i && (wb_sel_i != 4'b1111);
+                        saved_sel        <= wb_sel_i;
+                        saved_adr        <= wb_adr_i;
+                        saved_dat        <= wb_dat_i;
                         state     <= S_ACTIVATE;
                     end
                 end
@@ -309,7 +326,7 @@ module wb_sdram #(
                     sdram_ba <= req_bank;
                     // A10=1 enables auto-precharge; A[9:8]=0; A[7:0]=column
                     sdram_a  <= {1'b1, 2'b00, req_col};
-                    if (saved_we) begin
+                    if (saved_we && !saved_partial_we) begin
                         {sdram_ras_n, sdram_cas_n, sdram_we_n} <= CMD_WRITE;
                         dq_oe  <= 1'b1;
                         dq_out <= saved_dat;
@@ -320,7 +337,7 @@ module wb_sdram #(
                 end
 
                 S_WAIT1: begin
-                    if (saved_we) begin
+                    if (saved_we && !saved_partial_we) begin
                         // Maintain data on DQ for tWR (SDRAM captured WRITE at ~T2 negedge)
                         dq_oe    <= 1'b1;
                         dq_out   <= saved_dat;
@@ -342,9 +359,15 @@ module wb_sdram #(
                         // SDRAM data valid at ~187 ns, we sample at T5=200 ns (13 ns margin)
                         wb_dat_o <= sdram_dq;
                         wb_ack_o <= 1'b1;
+                        state <= S_IDLE;
+                    end else if (saved_partial_we) begin
+                        saved_dat        <= merge_wb_bytes(sdram_dq, saved_dat, saved_sel);
+                        saved_partial_we <= 1'b0;
+                        state            <= S_ACTIVATE;
+                    end else begin
+                        state <= S_IDLE;
                     end
                     // Auto-precharge complete; row closed; ready for next ACTIVATE
-                    state <= S_IDLE;
                 end
 
                 default: state <= S_IDLE;
