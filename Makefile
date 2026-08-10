@@ -7,6 +7,9 @@ TOP=top
 BUILD=build
 
 LPF=constraints/colorlight_i9.lpf
+OPENOCD_SCRIPTS ?= D:/oss-cad-suite/share/openocd/scripts
+# CMSIS-DAP v1 probes are often unstable above 100 kHz on ECP5 JTAG chains.
+ECPDAP_FREQ ?= 100k
 
 FIRMWARE_HEX=src/firmware/build/nodenet_riscv.hex
 FIRMWARE_PREV_HEX=$(BUILD)/nodenet_riscv.prev.hex
@@ -14,6 +17,7 @@ FIRMWARE_PADDED_HEX=$(BUILD)/nodenet_riscv.padded.hex
 FIRMWARE_PREV_PADDED_HEX=$(BUILD)/nodenet_riscv.prev_padded.hex
 FW_PATCH_CONFIG=$(BUILD)/$(TOP)_fw.config
 FW_PATCH_BIT=$(BUILD)/$(TOP)_fw.bit
+FLASH_BOOT_IMAGE=$(BUILD)/$(TOP)_flash.bit
 ROM_BYTES=16384
 
 # Synthesis sources.
@@ -180,29 +184,48 @@ ram-fw:
 	fi
 
 
-# Generate SPI Flash image
-flash_image: $(BUILD)/$(TOP).bit
+# Generate SPI Flash image for cold boot (bootaddr=0)
+flash_image: $(BUILD)/$(TOP).config
 	ecppack \
 		--compress \
 		--bootaddr 0 \
 		$< \
-		$(BUILD)/$(TOP).config
+		$(FLASH_BOOT_IMAGE)
+	@echo "Using $(FLASH_BOOT_IMAGE) as SPI flash image"
 
 
 # Program W25Q64 SPI Flash
 #
-# ecpdap fallback (if OpenOCD/jtagspi flow does not work on a given setup):
-#   ecpdap flash unprotect
-#   ecpdap flash write $(BUILD)/$(TOP).config
+# Primary flow uses ecpdap as requested:
+#   ecpdap program <bit>
+#   ecpdap flash erase
+#   ecpdap flash write <bit>
+#
+# Falls back to OpenOCD jtagspi, then openFPGALoader.
 flash: flash_image
-	openocd \
+	@if ecpdap -f $(ECPDAP_FREQ) program $(BUILD)/$(TOP).bit && \
+		ecpdap -f $(ECPDAP_FREQ) flash unprotect && \
+		ecpdap -f $(ECPDAP_FREQ) flash erase && \
+		ecpdap -f $(ECPDAP_FREQ) flash write $(FLASH_BOOT_IMAGE) && \
+		ecpdap -f $(ECPDAP_FREQ) flash jump write 0x0 --spimode read && \
+		ecpdap -f $(ECPDAP_FREQ) flash jump read; then \
+		echo "ecpdap flash succeeded."; \
+	elif openocd \
+		-s $(OPENOCD_SCRIPTS) \
 		-f interface/cmsis-dap.cfg \
-		-f target/lattice-ecp5.cfg \
-		-c "init; \
-		    jtagspi_init 0 0x20000000; \
-		    flash probe 0; \
-		    flash write_image erase unlock $(BUILD)/$(TOP).config 0x0; \
-		    exit"
+		-c "transport select jtag" \
+		-f fpga/lattice_ecp5.cfg \
+		-c "set JTAGSPI_CHAIN_ID ecp5.pld; \
+		    source [find cpld/jtagspi.cfg]; \
+		    init; \
+		    jtagspi_init ecp5.pld \"\" -1; \
+		    flash write_image erase unlock $(FLASH_BOOT_IMAGE) 0x0; \
+		    exit"; then \
+		echo "OpenOCD flash succeeded (fallback)."; \
+	else \
+		echo "ecpdap/OpenOCD failed, retrying with openFPGALoader..."; \
+		openFPGALoader -b colorlight-i9 -f --verify $(FLASH_BOOT_IMAGE); \
+	fi
 
 
 # Disable flash protection before manual flash operations.
@@ -211,11 +234,14 @@ flash: flash_image
 #   ecpdap flash unprotect
 unlock-flash:
 	openocd \
+		-s $(OPENOCD_SCRIPTS) \
 		-f interface/cmsis-dap.cfg \
-		-f target/lattice-ecp5.cfg \
-		-c "init; \
-		    jtagspi_init 0 0x20000000; \
-		    flash probe 0; \
+		-c "transport select jtag" \
+		-f fpga/lattice_ecp5.cfg \
+		-c "set JTAGSPI_CHAIN_ID ecp5.pld; \
+		    source [find cpld/jtagspi.cfg]; \
+		    init; \
+		    jtagspi_init ecp5.pld \"\" -1; \
 		    flash protect 0 0 last off; \
 		    flash info 0; \
 		    exit"
@@ -226,11 +252,14 @@ unlock-flash:
 #   ecpdap flash protect
 lock-flash:
 	openocd \
+		-s $(OPENOCD_SCRIPTS) \
 		-f interface/cmsis-dap.cfg \
-		-f target/lattice-ecp5.cfg \
-		-c "init; \
-		    jtagspi_init 0 0x20000000; \
-		    flash probe 0; \
+		-c "transport select jtag" \
+		-f fpga/lattice_ecp5.cfg \
+		-c "set JTAGSPI_CHAIN_ID ecp5.pld; \
+		    source [find cpld/jtagspi.cfg]; \
+		    init; \
+		    jtagspi_init ecp5.pld \"\" -1; \
 		    flash protect 0 0 last on; \
 		    flash info 0; \
 		    exit"

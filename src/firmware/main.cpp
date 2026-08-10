@@ -27,17 +27,16 @@ static bool oled_init(uint8_t addr7 = 0x3C)
     g_oled_ready = true;
     return true;
 }
-
-static void oled_write(const char* text)
+// Draw text on OLED display at line n (0 is top)
+static void oled_write(const uint8_t line,const char* text)
 {
     if (!g_oled_ready || text == nullptr) {
         return;
     }
 
-    u8g2_ClearBuffer(&g_oled);
     u8g2_SetFont(&g_oled, u8g2_font_6x12_tf);
-    u8g2_DrawStr(&g_oled, 1, 20, text);
-    u8g2_SendBuffer(&g_oled);
+    u8g2_DrawStr(&g_oled, 1, 10 + line * 14, text);
+
 }
 
 static void led_d2_blink()
@@ -113,17 +112,16 @@ int main(void)
     bool led_on = false;
     uint32_t next_toggle_ms = *TIMER_MS + kBlinkPeriodMs;
     *LED_D2 = 1u;
-
-    
-    
     oled_init(0x3C);
-
+    u8g2_ClearBuffer(&g_oled);
+    oled_write(0,"  NodeNet SoC RISC-V");
+    oled_write(1,"     V 0.0.1 Beta");
+    oled_write(3," (c) BigSister 2026");
+    
+    u8g2_SendBuffer(&g_oled);
     while (1) {
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
-            ledGreen.blink(100u);
-            oled_write(" NodeNet SoC RISC-V");
-
             led_on = !led_on;
             *LED_D2 = led_on ? 0u : 1u;
             next_toggle_ms += kBlinkPeriodMs;
