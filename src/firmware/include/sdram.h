@@ -153,8 +153,8 @@ static inline uint32_t sdram_test_byte_pattern(uint32_t byte_offset)
     return errors;
 }
 
-/* Real section-placement probe: this variable must be linked in .sdram. */
-static SDRAM_DATA volatile uint32_t g_sdram_data_probe_words[16];
+/* Real section-placement probe: defined in a single translation unit. */
+extern SDRAM_DATA volatile uint32_t g_sdram_data_probe_words[16];
 
 static inline uint32_t sdram_test_data_section_variable(void)
 {
@@ -257,7 +257,7 @@ static inline bool sdramTest(sdram_status_cb_t status_cb)
     return false;
 }
 
-static inline bool test_sdram(void) {
+static inline bool sdram_basic_test(void) {
     sdram_wait_ready();
     return sdram_test(256) == 0;
 }
