@@ -33,6 +33,61 @@ static void blink_bit_pattern(WbLed& green, WbLed& yellow, uint32_t value, uint3
     delay(500u);
 }
 
+// Tests
+static const uint8_t seq_on[] = {0x00, 0xA4};
+static const uint8_t seq_off[] = {0x00, 0xA5};
+static const uint8_t seq_screen_off[] = {0x00, 0xAE};
+static const uint8_t seq_screen_on[] = {0x00, 0xAF};
+// Init screen
+static const uint8_t seq_init_screen[] = {
+        0x00,       // Control byte: following bytes are commands
+
+        0xAE,       // Display OFF
+
+        0xD5, 0x80, // Set display clock divide ratio / oscillator frequency
+                    // 0x80 = default recommended setting
+
+        0xA8, 0x3F, // Set multiplex ratio
+                    // 0x3F = 63 -> 64 MUX for a 128x64 panel
+
+        0xD3, 0x00, // Set display offset
+                    // 0x00 = no vertical offset
+
+        0x40,       // Set display start line to 0
+
+        0x8D, 0x14, // Enable charge pump
+                    // 0x14 = internal charge pump ON
+
+        0xA1,       // Segment remap
+                    // Column address 127 is mapped to SEG0
+                    // Common on many OLED modules depending on orientation
+
+        0xC8,       // COM output scan direction remapped
+                    // Flips vertical scan direction
+
+        0xDA, 0x12, // Set COM pins hardware configuration
+                    // 0x12 is the usual setting for 128x64 SSD1306
+
+        0x81, 0xCF, // Set contrast control
+                    // 0xCF = common default contrast value
+
+        0xD9, 0xF1, // Set pre-charge period
+                    // 0xF1 is typical when using internal charge pump
+
+        0xDB, 0x40, // Set VCOMH deselect level
+                    // 0x40 is a common default
+
+        0xA4,       // Resume display from RAM content
+                    // Opposite of "entire display ON" (0xA5)
+
+        0xA6,       // Normal display mode
+                    // Opposite of inverse display (0xA7)
+
+        0xAF        // Display ON
+    };
+
+
+
 int main(void)
 {
     led_d2_blink();
@@ -46,7 +101,7 @@ int main(void)
     *LED_D2 = 1u;
 
     // Initialize I2C0 with a prescale value for 100 kHz operation at 25 MHz clock
-    Wire.begin(62); // 100 kHz @ 25 MHz
+    Wire.begin(62); // 100 kHz @ 25 MHz (debug: slower edges for scope decoding)
 
     // Mirror test: read back the prescale registers written by begin(62)
     // volatile uint32_t* const i2c_prescaler  = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + 0x0Cu);
@@ -57,59 +112,17 @@ int main(void)
     // }
     // End mirror test    
 
-    // Init screen
-    // s_oled_ok = Wire.write(0x3C, {
-    //     0x00,       // Control byte: following bytes are commands
-
-    //     0xAE,       // Display OFF
-
-    //     0xD5, 0x80, // Set display clock divide ratio / oscillator frequency
-    //                 // 0x80 = default recommended setting
-
-    //     0xA8, 0x3F, // Set multiplex ratio
-    //                 // 0x3F = 63 -> 64 MUX for a 128x64 panel
-
-    //     0xD3, 0x00, // Set display offset
-    //                 // 0x00 = no vertical offset
-
-    //     0x40,       // Set display start line to 0
-
-    //     0x8D, 0x14, // Enable charge pump
-    //                 // 0x14 = internal charge pump ON
-
-    //     0xA1,       // Segment remap
-    //                 // Column address 127 is mapped to SEG0
-    //                 // Common on many OLED modules depending on orientation
-
-    //     0xC8,       // COM output scan direction remapped
-    //                 // Flips vertical scan direction
-
-    //     0xDA, 0x12, // Set COM pins hardware configuration
-    //                 // 0x12 is the usual setting for 128x64 SSD1306
-
-    //     0x81, 0xCF, // Set contrast control
-    //                 // 0xCF = common default contrast value
-
-    //     0xD9, 0xF1, // Set pre-charge period
-    //                 // 0xF1 is typical when using internal charge pump
-
-    //     0xDB, 0x40, // Set VCOMH deselect level
-    //                 // 0x40 is a common default
-
-    //     0xA4,       // Resume display from RAM content
-    //                 // Opposite of "entire display ON" (0xA5)
-
-    //     0xA6,       // Normal display mode
-    //                 // Opposite of inverse display (0xA7)
-
-    //     0xAF        // Display ON
-    // });
+    
     
     
     bool test_all_pixels_on = false;
     while (1) {
-        const uint8_t seq[] = {0x00, 0xAE, 0xD5, 0x80};
-        s_oled_ok = Wire.write(0x3C, seq, sizeof(seq));
+        if(s_oled_ok != I2c::I2C_OK) {
+            s_oled_ok = Wire.write(0x3C, seq_init_screen, sizeof(seq_init_screen));
+        }
+        
+        //(void)Wire.write(0x3C, seq_screen_on, sizeof(seq_screen_on));
+        //(void)Wire.write(0x3C, seq_screen_off, sizeof(seq_screen_off));
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
 
@@ -117,11 +130,14 @@ int main(void)
                 ledYellow.blink(100u);
             } else {
                 ledGreen.blink(100u);
+                // Toggle screen pixels on/off to test I2C write and screen response
+                if(test_all_pixels_on){
+                    (void)Wire.write(0x3C, seq_on, sizeof(seq_on));
+                } else {
+                    (void)Wire.write(0x3C, seq_off, sizeof(seq_off));
+                }                
+                test_all_pixels_on = !test_all_pixels_on;
             }
-            // Toggle screen pixels on/off to test I2C write and screen response
-            // const uint8_t cmd = test_all_pixels_on ? 0xA4 : 0xA5;
-            // const uint8_t rc = Wire.write(0x3C, {0x00, cmd});
-            // test_all_pixels_on = !test_all_pixels_on;
 
             led_on = !led_on;
             *LED_D2 = led_on ? 0u : 1u;

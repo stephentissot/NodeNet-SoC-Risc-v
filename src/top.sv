@@ -124,18 +124,27 @@ module top (
     //                 (wb_timer_sel   && timer_ack)   ||
     //                 (wb_sdram_sel   && sdram_ack);
     
-    assign wb_dat_i = rom_ack     ? rom_dat     :
-                      ram_ack     ? ram_dat     :
-                      nodenet_ack ? nodenet_dat :
-                      i2c0_ack    ? i2c0_dat    :
-                      flash_ack   ? flash_dat   :
-                      led_d2_ack  ? led_d2_dat  :
-                      led0_ack    ? led0_dat    :
-                      led1_ack    ? led1_dat    :
-                      timer_ack   ? timer_dat   :
-                      sdram_ack   ? sdram_dat   :
+    assign wb_dat_i = wb_rom_sel     ? rom_dat     :
+                      wb_ram_sel     ? ram_dat     :
+                      wb_nodenet_sel ? nodenet_dat :
+                      wb_i2c0_sel    ? i2c0_dat    :
+                      wb_flash_sel   ? flash_dat   :
+                      wb_led_d2_sel  ? led_d2_dat  :
+                      wb_led0_sel    ? led0_dat    :
+                      wb_led1_sel    ? led1_dat    :
+                      wb_timer_sel   ? timer_dat   :
+                      wb_sdram_sel   ? sdram_dat   :
                       32'h0000_0000;
-    assign wb_ack = rom_ack | ram_ack | nodenet_ack | i2c0_ack | flash_ack | led_d2_ack | led0_ack | led1_ack | timer_ack | sdram_ack;
+    assign wb_ack = (wb_rom_sel     && rom_ack)     ||
+                    (wb_ram_sel     && ram_ack)     ||
+                    (wb_nodenet_sel && nodenet_ack) ||
+                    (wb_i2c0_sel    && i2c0_ack)    ||
+                    (wb_flash_sel   && flash_ack)   ||
+                    (wb_led_d2_sel  && led_d2_ack)  ||
+                    (wb_led0_sel    && led0_ack)    ||
+                    (wb_led1_sel    && led1_ack)    ||
+                    (wb_timer_sel   && timer_ack)   ||
+                    (wb_sdram_sel   && sdram_ack);
 
 
     wire led0_out;

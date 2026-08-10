@@ -33,13 +33,13 @@ module wb_ram #(
                 write_data = ram[word_addr];
 
                 if (wbs_sel_i[0])
-                    write_data[7:0] <= wbs_dat_i[7:0];
+                    write_data[7:0] = wbs_dat_i[7:0];
                 if (wbs_sel_i[1])
-                    write_data[15:8] <= wbs_dat_i[15:8];
+                    write_data[15:8] = wbs_dat_i[15:8];
                 if (wbs_sel_i[2])
-                    write_data[23:16] <= wbs_dat_i[23:16];
+                    write_data[23:16] = wbs_dat_i[23:16];
                 if (wbs_sel_i[3])
-                    write_data[31:24] <= wbs_dat_i[31:24];
+                    write_data[31:24] = wbs_dat_i[31:24];
 
                 ram[word_addr] <= write_data;
             end

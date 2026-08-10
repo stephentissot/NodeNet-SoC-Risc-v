@@ -62,6 +62,10 @@
 /* PRESC (0x0C) */
 #define I2C16_PRESC_MASK (0xFFFFu)
 
+/* Use write multi */
+#define USE_WRITE_MULT
+
+
 class I2c {    
 public:
     static constexpr uint32_t CLK_KHZ = 25000u;  // 25 MHz
@@ -120,6 +124,20 @@ public:
         I2C_CMD_ERROR = 4
     };
 
+
+    uint8_t runTest(const uint8_t addr){
+        clear_nack();
+        
+        push_data(0x00, false, true);
+        push_data(0xAE, false, true);
+        push_data(0xD5, false, true);
+        push_data(0x80, true, true);
+        push_cmd(addr, I2C16_CMD_WRITE_MULT);
+        if(!wait_tx_complete()) return I2C_TIMEOUT;
+        if (nack_detected()) return I2C_NACK;
+        return I2C_OK;
+    }
+
 private:
 
     volatile uint32_t* const i2c_status_reg  = reinterpret_cast<volatile uint32_t*>(I2C0_BASE + I2C16_REG_STATUS);
@@ -148,21 +166,37 @@ private:
         if (data == nullptr || len == 0u) return false;
 
         if (len == 1u) {
-            if (!push_data(data[0], false, true)) return false;
             uint16_t cmd = I2C16_CMD_WRITE;
             if (start) cmd |= I2C16_CMD_START;
             if (stop) cmd |= I2C16_CMD_STOP;
-            return push_cmd(addr, cmd);
+            if (!push_data(data[0], false, true)) return false;
+            if (!push_cmd(addr, cmd)) return false;
+            return true;
         }
-
-        for (size_t i = 0; i < len; ++i) {
-            if (!push_data(data[i], i == (len - 1u), false)) return false;
-        }
-
+#ifdef USE_WRITE_MULT        
         uint16_t cmd = I2C16_CMD_WRITE_MULT;
         if (start) cmd |= I2C16_CMD_START;
         if (stop) cmd |= I2C16_CMD_STOP;
-        return push_cmd(addr, cmd);
+        for (size_t i = 0; i < len; ++i) {
+            bool last = (i == (len - 1u));
+            if (!push_data(data[i], last, true)) return false;
+        }
+        __asm__ volatile("nop" ::: "memory");        
+        if(!push_cmd(addr, cmd)) return false;        
+
+        return true;
+
+#else
+        for (size_t i = 0; i < len; ++i) {
+            uint16_t cmd = I2C16_CMD_WRITE;
+            if (start && i == 0u) cmd |= I2C16_CMD_START;
+            if (stop && i == (len - 1u)) cmd |= I2C16_CMD_STOP;
+            if (!push_cmd(addr, cmd)) return false;
+            if (!push_data(data[i], false, true)) return false;
+        }
+        return true;
+
+#endif
     }
 
     bool push_cmd(uint8_t addr, uint16_t cmd){
@@ -176,9 +210,10 @@ private:
     }
 
     // push_data pushes a data byte to the I2C data FIFO, returning true if successful, false if timeout occurs (fifo still full after timeout)
-    bool push_data(uint8_t data, bool last = false, bool valid = true){
+    bool push_data(const uint8_t data, bool last = false, bool valid = true){        
         if(!wait_for_data_fifo_space()) return false; // timeout
         uint16_t word = static_cast<uint16_t>(data & I2C16_DATA_BYTE_MASK);
+        //uint16_t word = 0x47 & I2C16_DATA_BYTE_MASK;
         if(last) {
             word |= I2C16_DATA_LAST;
         }
