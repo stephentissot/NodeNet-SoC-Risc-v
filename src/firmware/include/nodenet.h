@@ -62,6 +62,7 @@
 #define NODENET_CONTROL_OFS  0x14u
 #define NODENET_STATUS_OFS   0x18u
 #define NODENET_LED_CFG_OFS  0x1Cu
+#define NODENET_UART_BAUD_OFS 0x20u
 
 #define NODENET_MAX_PAYLOAD_SIZE 2048u
 
@@ -98,15 +99,22 @@ enum NodeNetPriority {
 
 class NodeNet {
 public:
+  using StatusCallback = void (*)(uint8_t line, const char* text);
+
   explicit NodeNet(uint32_t base,
                    uint8_t addr,
+                   uint32_t uart_baud,
                    NodeNetPriority priority,
                    uint32_t led_blink_ms = 100u)
       : base_(base) {
-    Init(addr, priority, led_blink_ms);
+    Init(addr, uart_baud, priority, led_blink_ms);
   }
 
-  void Init(uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u) {
+  void Init(uint8_t addr, uint32_t uart_baud, NodeNetPriority priority, uint32_t led_blink_ms = 100u) {
+    node_addr_ = addr;
+    uart_baud_ = uart_baud;
+    priority_ = priority;
+    Write(NODENET_UART_BAUD_OFS, ComputeUartDivisor(uart_baud));
     Write(NODENET_CONFIG_OFS, ((uint32_t)priority << 8) | (uint32_t)addr);
     Write(NODENET_LED_CFG_OFS, led_blink_ms);
     Write(NODENET_CONTROL_OFS, 0x2u);
@@ -185,41 +193,94 @@ public:
     msg.len = 0;
   }
 
-  bool test(void) {
-      //NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
-      
-      // Delay to allow initialization
-      delay(100);
-      
-      // Validate that the transport can queue and drain a real broadcast frame.
-      // Any valid incoming frame during the observation window is treated as a bonus.
-      const char* test_msg = "TEST";
-      Broadcast((const uint8_t*)test_msg, 4);
-      //led0.Blink(0);
+    bool test(StatusCallback callback = nullptr) {
+      const uint32_t tx_busy_mask =
+        (NODENET_STATUS_TX_DELAY_ACTIVE | NODENET_STATUS_TX_PENDING | NODENET_STATUS_TX_ACTIVE);
 
-      for (int i = 0; i < 100; i++) {  // ~1 s timeout
-          uint32_t status = Status();
-
-          if (HasMessage()) {
-              NodeNetMessage msg = ReadMessage();
-              //led1.Blink(0);
-              FreeMessage(msg);
-              return true;
-          }
-
-          if ((status & (NODENET_STATUS_TX_PENDING | NODENET_STATUS_TX_ACTIVE)) == 0) {
-              return (status & (NODENET_STATUS_RX_ERROR | NODENET_STATUS_RX_OVERFLOW)) == 0;
-          }
-
-          delay(10);
+      const uint32_t div_read = Read(NODENET_UART_BAUD_OFS) & 0x000F'FFFFu;
+      const uint32_t div_expected = ComputeUartDivisor(uart_baud_);
+      const bool baud_ok = (div_read == div_expected);
+      if (callback) {
+        callback(0, baud_ok ? "[NN] Baud cfg OK" : "[NN] Baud cfg FAIL");
       }
 
-      return false;
+      // bit1: clear RX/error state, bit2: heartbeat trigger
+      Write(NODENET_CONTROL_OFS, 0x6u);
+
+      bool saw_tx_activity = false;
+      bool tx_returned_idle = false;
+      uint32_t status_snapshot = Read(NODENET_STATUS_OFS);
+
+      // Wait up to ~4.5s for first activity (addr=0x41 has ~3.25s backoff).
+      uint32_t wait_activity_until = millis() + 4500u;
+      while ((int32_t)(millis() - wait_activity_until) < 0) {
+        status_snapshot = Read(NODENET_STATUS_OFS);
+        if ((status_snapshot & tx_busy_mask) != 0u) {
+          saw_tx_activity = true;
+          break;
+        }
+      }
+
+      if (saw_tx_activity) {
+        // Wait for full cycle completion.
+        uint32_t wait_idle_until = millis() + 7000u;
+        while ((int32_t)(millis() - wait_idle_until) < 0) {
+          status_snapshot = Read(NODENET_STATUS_OFS);
+          if ((status_snapshot & tx_busy_mask) == 0u) {
+            tx_returned_idle = true;
+            break;
+          }
+        }
+      }
+
+      if (callback) {
+        callback(1, saw_tx_activity ? "[NN] TX activity OK" : "[NN] TX activity FAIL");
+        callback(2, tx_returned_idle ? "[NN] TX idle OK" : "[NN] TX idle FAIL");
+      }
+
+      if (callback && (!saw_tx_activity || !tx_returned_idle)) {
+        char status_hex[11] = {};
+        FormatHex32(status_snapshot, status_hex);
+        callback(3, "[NN] status:");
+        callback(4, status_hex);
+      }
+
+      const bool rx_ok = (status_snapshot & (NODENET_STATUS_RX_ERROR | NODENET_STATUS_RX_OVERFLOW)) == 0u;
+      return baud_ok && saw_tx_activity && tx_returned_idle && rx_ok;
   }
 
 
 private:
   uint32_t base_;
+  uint8_t node_addr_ = 0;
+  uint32_t uart_baud_ = 0;
+  NodeNetPriority priority_ = NODENET_PRIORITY_NORMAL;
+
+  static uint32_t ComputeUartDivisor(uint32_t baudrate) {
+    if (baudrate == 0u) {
+      return 1u;
+    }
+
+    uint32_t divisor = (25000000u + (baudrate / 2u)) / baudrate;
+    if (divisor == 0u) {
+      divisor = 1u;
+    }
+    if (divisor > 0xFFFFFu) {
+      divisor = 0xFFFFFu;
+    }
+    return divisor;
+  }
+
+  static void FormatHex32(uint32_t value, char* out) {
+    static const char kHex[] = "0123456789ABCDEF";
+    out[0] = '0';
+    out[1] = 'x';
+    for (uint32_t i = 0; i < 8; ++i) {
+      uint32_t nib = (value >> ((7u - i) * 4u)) & 0xFu;
+      out[2u + i] = kHex[nib];
+    }
+    out[10] = '\0';
+  }
 
   uint32_t Read(uint32_t offset) const {
     return *(volatile uint32_t*)(base_ + offset);

@@ -77,6 +77,7 @@ module wb_uart #(
         .clk(clk),
         .rst_n(~rst),
         .prescale_i(prescale_reg),
+        .divisor_i(20'd0),
         .rx_i(rxd),
         .rx_data_o(uart_rx_data),
         .rx_valid_o(uart_rx_valid),

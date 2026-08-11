@@ -104,13 +104,19 @@ int main(void)
     oled_write("  NodeNet SoC RISC-V");
     oled_write("v" FIRMWARE_VERSION);
     oled_write("[BOOT] Running tests");
-    //NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
+    // NodeNet definition and initialization
+    NodeNet myNodeNet(NODENET0_BASE, 0x41, 115200u, NODENET_PRIORITY_NORMAL, 200);
+    const bool nodenet_ok = myNodeNet.test(oled_boot_status);
+    oled_write(nodenet_ok ? "[NN] Self-test PASS" : "[NN] Self-test FAIL");
+
+    // Serial definition and initialization
     Serial Serial1(SERIAL1_BASE);
     Serial1.begin(115200u);
     char serial1rxBuffer[SERIAL1_BUFFER_LENGTH] = {};
     uint8_t serial1rxCount = 0;
-    const bool sdram_ok = sdramTest(oled_boot_status);
-    oled_write(sdram_ok ? "[BOOT] System ready" : "[BOOT] Degraded mode");
+
+    // const bool sdram_ok = sdramTest(oled_boot_status);
+    // oled_write(sdram_ok ? "[BOOT] System ready" : "[BOOT] Degraded mode");
     
     while (1) {
 

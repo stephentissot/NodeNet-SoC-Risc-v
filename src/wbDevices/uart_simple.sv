@@ -10,7 +10,8 @@
 module uart_simple #(
   parameter CLOCK_RATE = 25_000_000,
   parameter BAUD_RATE = 1_000_000,  // NodeNet485: 1 Mb/s
-  parameter USE_PRESCALE_INPUT = 1'b0
+  parameter USE_PRESCALE_INPUT = 1'b0,
+  parameter USE_DIVISOR_INPUT = 1'b0
 ) (
   input wire clk,
   input wire rst_n,
@@ -18,6 +19,10 @@ module uart_simple #(
   // Optional runtime baud control. When USE_PRESCALE_INPUT=1,
   // bit period is (prescale_i << 3) clocks to match legacy uart.v behavior.
   input wire [15:0] prescale_i,
+
+  // Optional runtime direct divisor. When USE_DIVISOR_INPUT=1,
+  // bit period is divisor_i clocks.
+  input wire [19:0] divisor_i,
   
   // RX Interface
   input wire rx_i,
@@ -38,7 +43,8 @@ module uart_simple #(
 );
 
   localparam [19:0] DIVISOR_FIXED = CLOCK_RATE / BAUD_RATE;
-  wire [19:0] bit_divisor_raw = USE_PRESCALE_INPUT ? {1'b0, prescale_i, 3'b000} : DIVISOR_FIXED;
+  wire [19:0] bit_divisor_raw = USE_DIVISOR_INPUT ? divisor_i :
+                                (USE_PRESCALE_INPUT ? {1'b0, prescale_i, 3'b000} : DIVISOR_FIXED);
   wire [19:0] bit_divisor = (bit_divisor_raw != 20'd0) ? bit_divisor_raw : 20'd1;
   
   // TX side
