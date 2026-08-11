@@ -1,4 +1,6 @@
 #include <cstdint>
+#include <cstdarg>
+#include <cstdio>
 #include "bigsister.h"
 #include "led.h"
 #include "i2c.h"
@@ -76,10 +78,81 @@ static void oled_write(const char* text)
 
 }
 
+// printf-style OLED write helper.
+static void oled_print(const char* fmt, ...)
+{
+    if (fmt == nullptr) {
+        return;
+    }
+
+    char line[64] = {};
+    va_list args;
+    va_start(args, fmt);
+    (void)vsnprintf(line, sizeof(line), fmt, args);
+    va_end(args);
+
+    oled_write(line);
+}
+
 static void oled_boot_status(uint8_t line, const char* text)
 {
     (void)line;
     oled_write(text);
+}
+
+static void hex32_to_str(uint32_t value, char* out)
+{
+    static const char kHex[] = "0123456789ABCDEF";
+    out[0] = '0';
+    out[1] = 'x';
+    for (uint8_t i = 0; i < 8; ++i) {
+        const uint8_t nib = (uint8_t)((value >> ((7u - i) * 4u)) & 0xFu);
+        out[2u + i] = kHex[nib];
+    }
+    out[10] = '\0';
+}
+
+static void oled_print_rx_header(uint8_t src, uint16_t len)
+{
+    static const char kHex[] = "0123456789ABCDEF";
+    char line[22] = "[NN] RX 00 L00000";
+
+    line[8] = kHex[(src >> 4) & 0x0F];
+    line[9] = kHex[src & 0x0F];
+
+    // Decimal len, right-aligned on 5 chars.
+    uint16_t v = len;
+    for (int i = 0; i < 5; ++i) {
+        line[16 - i] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+
+    oled_write(line);
+}
+
+static void oled_write_payload_safe(const uint8_t* data, uint16_t len)
+{
+    if (data == nullptr) {
+        oled_write("[NN] <null>");
+        return;
+    }
+
+    uint16_t text_len = len;
+    if (text_len > 0 && data[text_len - 1] == 0u) {
+        text_len -= 1u;
+    }
+
+    if (text_len > kOledConsoleCols) {
+        text_len = kOledConsoleCols;
+    }
+
+    char line[kOledConsoleCols + 1] = {};
+    for (uint16_t i = 0; i < text_len; ++i) {
+        const uint8_t c = data[i];
+        line[i] = (c >= 32u && c <= 126u) ? (char)c : '.';
+    }
+    line[text_len] = '\0';
+    oled_write(line);
 }
 
 static void led_d2_blink()
@@ -105,7 +178,7 @@ int main(void)
     oled_write("v" FIRMWARE_VERSION);
     oled_write("[BOOT] Running tests");
     // NodeNet definition and initialization
-    NodeNet myNodeNet(NODENET0_BASE, 0x41, 115200u, NODENET_PRIORITY_NORMAL, 200);
+    NodeNet myNodeNet(NODENET0_BASE, 0x41, 1000000, NODENET_PRIORITY_NORMAL, 200);
     const bool nodenet_ok = myNodeNet.test(oled_boot_status);
     oled_write(nodenet_ok ? "[NN] Self-test PASS" : "[NN] Self-test FAIL");
 
@@ -115,8 +188,9 @@ int main(void)
     char serial1rxBuffer[SERIAL1_BUFFER_LENGTH] = {};
     uint8_t serial1rxCount = 0;
 
-    // const bool sdram_ok = sdramTest(oled_boot_status);
-    // oled_write(sdram_ok ? "[BOOT] System ready" : "[BOOT] Degraded mode");
+    const bool sdram_ok = sdramTest(oled_boot_status);
+    oled_write(sdram_ok ? "[BOOT] System ready" : "[BOOT] Degraded mode");
+    uint32_t next_nn_dbg_ms = millis() + 1000u;
     
     while (1) {
 
@@ -135,6 +209,15 @@ int main(void)
             }
         }
 
+        if (myNodeNet.HasMessage()) {
+            NodeNetMessage msg = myNodeNet.ReadMessage();
+            oled_print_rx_header(msg.src_addr, msg.len);
+            oled_write_payload_safe(msg.data, msg.len);
+            ledYellow.blink(300u);
+            // Send a reply to the sender, then release RX buffer.
+            myNodeNet.Send(msg.src_addr, "Hello from NodeNet!");
+            NodeNet::FreeMessage(msg);
+        }
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             Serial1.println("Hello");

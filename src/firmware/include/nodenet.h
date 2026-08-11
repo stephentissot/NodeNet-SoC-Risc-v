@@ -76,6 +76,8 @@
 #define NODENET_STATUS_RX_VALID          (1u << 24)
 #define NODENET_STATUS_TX_STAGE_VALID    (1u << 23)
 #define NODENET_STATUS_TX_BUFFER_FULL    (1u << 22)
+#define NODENET_STATUS_RX_UART_SEEN      (1u << 18)
+#define NODENET_STATUS_RX_UART_FRAME_ERR (1u << 17)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Protocol Constants
@@ -134,7 +136,7 @@ public:
   }
 
   bool HasMessage() const {
-    return (Read(NODENET_RX_HDR_OFS) & (1u << 16)) != 0;
+    return (Status() & NODENET_STATUS_RX_VALID) != 0u;
   }
 
   uint8_t MessageCount() const {
@@ -172,17 +174,31 @@ public:
     uint32_t header = Read(NODENET_RX_HDR_OFS);
     NodeNetMessage msg;
 
+    const bool valid = ((header >> 16) & 0x1u) != 0u;
+    uint16_t hw_len = (uint16_t)(header & 0xFFFFu);
+
+    if (!valid) {
+      msg.src_addr = 0u;
+      msg.len = 0u;
+      msg.data = new uint8_t[1];
+      msg.data[0] = 0u;
+      return msg;
+    }
+
+    if (hw_len > NODENET_MAX_PAYLOAD_SIZE) {
+      hw_len = NODENET_MAX_PAYLOAD_SIZE;
+    }
+
     msg.src_addr = (uint8_t)(header >> 24);
-    msg.len = (uint16_t)(header & 0xFFFFu);
-    msg.data = new uint8_t[msg.len ? msg.len : 1];
+    msg.len = hw_len;
+    msg.data = new uint8_t[(uint32_t)msg.len + 1u];
 
     for (uint16_t index = 0; index < msg.len; ++index) {
       msg.data[index] = (uint8_t)Read(NODENET_RX_DATA_OFS);
     }
 
-    if (msg.len == 0) {
-      msg.data[0] = 0;
-    }
+    // Defensive: ensure C-string termination regardless of payload content.
+    msg.data[msg.len] = 0u;
 
     return msg;
   }

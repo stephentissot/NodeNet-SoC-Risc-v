@@ -153,8 +153,11 @@ module uart_simple #(
             if (rx_sync2) begin
               rx_data_o <= rx_shift;
               rx_valid_o <= 1'b1;
+              // Re-arm falling-edge detector for tightly packed bytes.
+              rx_prev <= 1'b1;
             end else begin
               rx_frame_error_o <= 1'b1;
+              rx_prev <= 1'b1;
             end
           end
         end

@@ -15,6 +15,15 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 
 ## Features
 
+### NodeNet Validation Snapshot (2026-08-11)
+- Automatic heartbeat in HDL validated on hardware at ~10 s period.
+- RX to local address validated (message accepted and decoded).
+- TX path validated end-to-end.
+- Runtime baud operation validated at both 115200 and 1 Mb/s.
+- Remaining checks planned:
+  - Broadcast RX acceptance path.
+  - Non-matching destination address ignore path.
+
 ### Hardware
 - **Wishbone B.4 Bus** interconnect with 32-bit data, 32-bit address
 - **PicoRV32 Core**: Open-source RISC-V ISA, ~6K LUT footprint
@@ -32,7 +41,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 ### Peripherals
 - **NodeNet485 Module** (`wb_nodenet.sv`):
   - Multi-node RS-485 communication protocol
-  - Baud rate: 1 Mb/s
+  - Baud rate: runtime divisor (validated at 115200 and 1 Mb/s)
   - HDLC-style framing with parity bits and CRC
   - Mailbox-based Wishbone interface for TX/RX messages
   - Internal message buffering (no external SDRAM FIFO usage)

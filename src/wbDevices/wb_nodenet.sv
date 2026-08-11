@@ -59,7 +59,8 @@ module wb_nodenet #(
     TX_ETX        = 4'd10,
     TX_CRC        = 4'd11,
     TX_EOT        = 4'd12,
-    TX_SUFFIX_LF  = 4'd13;
+    TX_SUFFIX_LF  = 4'd13,
+    TX_TRAILER_ZERO = 4'd14;
 
   function [7:0] encode_nibble_high;
     input [7:0] byte_in;
@@ -102,8 +103,7 @@ module wb_nodenet #(
 
   wire rst_n = ~rst_i;
   wire wb_valid = cyc_i && stb_i;
-  reg wb_valid_d;
-  wire wb_fire = wb_valid && !wb_valid_d;
+  wire wb_fire = wb_valid && !ack_o;
   wire [3:0] reg_index = adr_i[5:2];
 
   reg [7:0] node_addr;
@@ -138,6 +138,8 @@ module wb_nodenet #(
   reg rx_valid;
   reg rx_overflow;
   reg rx_error_sticky;
+  reg rx_uart_seen_sticky;
+  reg rx_uart_frame_error_sticky;
 
   reg [7:0] tx_buffer [0:MAX_PAYLOAD-1];
   reg [7:0] rx_buffer [0:MAX_PAYLOAD-1];
@@ -154,6 +156,8 @@ module wb_nodenet #(
   wire uart_de;
   wire uart_rx_frame_error;
   reg uart_tx_ready_d;
+  reg [23:0] rx_ignore_counter;
+  wire rx_decode_enable;
 
   wire decoder_msg_valid;
   wire [7:0] decoder_msg_src;
@@ -167,8 +171,12 @@ module wb_nodenet #(
   wire heartbeat_trigger;
   wire [31:0] unused_next_transmit_allowed;
   wire [31:0] activity_blink_cycles;
+  wire [23:0] rx_ignore_reload;
 
   assign activity_blink_cycles = ((activity_blink_ms != 32'd0) ? activity_blink_ms : DEFAULT_ACTIVITY_BLINK_MS) * CYCLES_PER_MS;
+  // Ignore RX for ~16 bit-times after local TX to avoid RS485 self-echo tails.
+  assign rx_ignore_reload = {4'b0000, uart_divisor} << 4;
+  assign rx_decode_enable = !uart_de && (rx_ignore_counter == 24'd0);
 
   uart_simple #(
     .CLOCK_RATE(CLOCK_RATE),
@@ -194,7 +202,8 @@ module wb_nodenet #(
     .clk(clk_i),
     .rst_n(rst_n),
     .my_addr_i(node_addr),
-    .rx_byte_valid_i(uart_rx_valid),
+    // Ignore local echo while TX is active and briefly after TX release.
+    .rx_byte_valid_i(uart_rx_valid && rx_decode_enable),
     .rx_byte_i(uart_rx_data),
     .msg_valid_o(decoder_msg_valid),
     .msg_src_addr_o(decoder_msg_src),
@@ -288,15 +297,22 @@ module wb_nodenet #(
       rx_valid <= 1'b0;
       rx_overflow <= 1'b0;
       rx_error_sticky <= 1'b0;
+      rx_uart_seen_sticky <= 1'b0;
+      rx_uart_frame_error_sticky <= 1'b0;
       dat_o <= 32'h0000_0000;
       uart_tx_data <= 8'hFF;
       ack_o <= 1'b0;
-      wb_valid_d <= 1'b0;
       uart_tx_ready_d <= 1'b0;
+      rx_ignore_counter <= 24'd0;
     end else begin
-      wb_valid_d <= wb_valid;
-      ack_o <= wb_fire;
+      ack_o <= wb_valid && !ack_o;
       uart_tx_ready_d <= uart_tx_ready;
+
+      if (uart_de) begin
+        rx_ignore_counter <= rx_ignore_reload;
+      end else if (rx_ignore_counter != 24'd0) begin
+        rx_ignore_counter <= rx_ignore_counter - 24'd1;
+      end
 
       if (tx_cooldown_counter != 32'h0000_0000)
         tx_cooldown_counter <= tx_cooldown_counter - 32'h0000_0001;
@@ -310,13 +326,27 @@ module wb_nodenet #(
         end
       end
 
+      if (uart_rx_valid)
+        rx_uart_seen_sticky <= 1'b1;
+
+      if (uart_rx_frame_error) begin
+        rx_uart_frame_error_sticky <= 1'b1;
+      end
+
       if (decoder_msg_complete) begin
         if (decoder_msg_valid && !rx_valid && (decoder_msg_len <= MAX_PAYLOAD)) begin
           rx_src <= decoder_msg_src;
-          rx_len <= decoder_msg_len;
           rx_read_idx <= 16'h0000;
           rx_valid <= 1'b1;
           rx_led_trigger_pulse <= 1'b1;
+
+          // Report an extra byte for C-string terminator when there is room.
+          // The terminator is synthesized on read path, not stored in rx_buffer.
+          if (decoder_msg_len < MAX_PAYLOAD) begin
+            rx_len <= decoder_msg_len + 16'h0001;
+          end else begin
+            rx_len <= decoder_msg_len;
+          end
         end else if (decoder_msg_valid) begin
           rx_overflow <= 1'b1;
         end
@@ -325,7 +355,10 @@ module wb_nodenet #(
 
       if (decoder_timeout || decoder_error) begin
         rx_build_count <= 16'h0000;
-        rx_error_sticky <= 1'b1;
+        // Timeout can happen on line noise/partial framing and is exposed
+        // as a pulse in STATUS. Keep sticky error for real decode faults only.
+        if (decoder_error && rx_decode_enable)
+          rx_error_sticky <= 1'b1;
       end
 
       if (hb_enabled && heartbeat_trigger && !tx_stage_valid && !tx_pending && !tx_active) begin
@@ -380,6 +413,8 @@ module wb_nodenet #(
                 rx_read_idx <= 16'h0000;
                 rx_overflow <= 1'b0;
                 rx_error_sticky <= 1'b0;
+                rx_uart_seen_sticky <= 1'b0;
+                rx_uart_frame_error_sticky <= 1'b0;
                 rx_build_count <= 16'h0000;
               end
 
@@ -415,7 +450,14 @@ module wb_nodenet #(
             end
 
             REG_RX_DATA: begin
-              dat_o <= rx_valid ? {24'h000000, rx_buffer[rx_read_idx]} : 32'h0000_0000;
+              if (rx_valid) begin
+                if ((rx_len != 16'h0000) && (rx_read_idx == (rx_len - 16'h0001)))
+                  dat_o <= 32'h0000_0000; // synthetic '\0' terminator byte
+                else
+                  dat_o <= {24'h000000, rx_buffer[rx_read_idx]};
+              end else begin
+                dat_o <= 32'h0000_0000;
+              end
 
               if (rx_valid) begin
                 if (rx_read_idx + 16'h0001 >= rx_len) begin
@@ -450,8 +492,9 @@ module wb_nodenet #(
                 uart_de,
                 decoder_timeout,
                 decoder_error,
-                3'b000,
-                prio,
+                rx_uart_seen_sticky,
+                rx_uart_frame_error_sticky,
+                1'b0,
                 tx_load_count[15:0]
               };
             end
@@ -603,7 +646,14 @@ module wb_nodenet #(
             if (tx_frame_is_heartbeat)
               tx_state <= TX_CRC;
             else
-              tx_state <= TX_SUFFIX_LF;
+              tx_state <= TX_TRAILER_ZERO;
+          end
+
+          TX_TRAILER_ZERO: begin
+            // Keep wire behavior aligned with heartbeat trailer convention.
+            uart_tx_data <= 8'h00;
+            uart_tx_valid <= 1'b1;
+            tx_state <= TX_SUFFIX_LF;
           end
 
           TX_SUFFIX_LF: begin

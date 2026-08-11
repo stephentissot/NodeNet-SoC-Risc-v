@@ -147,6 +147,13 @@ Useful methods:
 
 The NodeNet485 protocol enables reliable multi-node communication over RS-485 at 1 Mb/s.
 
+Validation snapshot (2026-08-11):
+- Automatic heartbeat from HDL validated on hardware at ~10 s period.
+- RX path validated for frames addressed to the local node.
+- TX path validated end-to-end.
+- Runtime baud validated at 115200 and 1 Mb/s.
+- Pending targeted checks: broadcast acceptance and non-matching destination ignore behavior.
+
 **Mailbox Register Model**:
 - **TX staging**: firmware writes one message into TX command/data registers
 - **RX mailbox**: hardware exposes one decoded message header and a byte stream reader
