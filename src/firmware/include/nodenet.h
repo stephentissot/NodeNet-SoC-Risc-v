@@ -185,6 +185,39 @@ public:
     msg.len = 0;
   }
 
+  bool test(void) {
+      //NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
+      
+      // Delay to allow initialization
+      delay(100);
+      
+      // Validate that the transport can queue and drain a real broadcast frame.
+      // Any valid incoming frame during the observation window is treated as a bonus.
+      const char* test_msg = "TEST";
+      Broadcast((const uint8_t*)test_msg, 4);
+      //led0.Blink(0);
+
+      for (int i = 0; i < 100; i++) {  // ~1 s timeout
+          uint32_t status = Status();
+
+          if (HasMessage()) {
+              NodeNetMessage msg = ReadMessage();
+              //led1.Blink(0);
+              FreeMessage(msg);
+              return true;
+          }
+
+          if ((status & (NODENET_STATUS_TX_PENDING | NODENET_STATUS_TX_ACTIVE)) == 0) {
+              return (status & (NODENET_STATUS_RX_ERROR | NODENET_STATUS_RX_OVERFLOW)) == 0;
+          }
+
+          delay(10);
+      }
+
+      return false;
+  }
+
+
 private:
   uint32_t base_;
 

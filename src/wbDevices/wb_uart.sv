@@ -26,6 +26,10 @@ module wb_uart #(
     localparam [3:0] REG_BAUD = 4'h8;
     localparam FIFO_DEPTH = (1 << FIFO_ADDR_WIDTH);
 
+    wire wb_valid = wb_cyc_i && wb_stb_i;
+    reg wb_valid_d = 1'b0;
+    wire wb_fire = wb_valid && !wb_valid_d;
+
     // RX FIFO
     reg [7:0] rx_fifo [0:FIFO_DEPTH-1];
     reg [FIFO_ADDR_WIDTH-1:0] rx_wr_ptr = 0;
@@ -91,7 +95,7 @@ module wb_uart #(
 
     always @(posedge clk)
     begin
-        wb_ack_o <= wb_cyc_i && wb_stb_i;
+        wb_ack_o <= wb_fire;
         tx_valid_reg <= 1'b0;
 
         if (rst)
@@ -105,9 +109,12 @@ module wb_uart #(
             rx_frame_sticky_reg <= 1'b0;
             prescale_reg <= DEFAULT_PRESCALE;
             tx_data_reg <= 8'd0;
+            wb_valid_d <= 1'b0;
         end
         else
         begin
+            wb_valid_d <= wb_valid;
+
             // RX: UART -> FIFO
             if (uart_rx_valid && uart_rx_ready)
             begin
@@ -130,7 +137,7 @@ module wb_uart #(
             end
 
             // Wishbone accesses
-            if (wb_cyc_i && wb_stb_i)
+            if (wb_fire)
             begin
                 case (wb_adr_i[3:0])
                     REG_DATA:

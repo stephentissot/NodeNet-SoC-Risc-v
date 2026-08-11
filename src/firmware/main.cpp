@@ -6,12 +6,16 @@
 #include "u8g2_hal.h"
 #include "version.h"
 #include "sdram.h"
+#include "nodenet.h"
+#include "serial.h"
 
 // Hardware — compile-time constants so GCC emits direct MMIO addresses
 static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x10000000UL);
 #define LED0_BASE  0x10000004UL
 #define LED1_BASE  0x10000008UL
 #define I2C0_BASE  0x10005000UL
+#define SERIAL1_BASE 0x10004000u
+static constexpr uint32_t NODENET0_BASE = 0x10006000u;
 // ════════════════════════════════════════════════════════════════════════════
 // OLED Display (U8G2)
 // ════════════════════════════════════════════════════════════════════════════
@@ -97,13 +101,16 @@ int main(void)
     oled_write("  NodeNet SoC RISC-V");
     oled_write("v" FIRMWARE_VERSION);
     oled_write("[BOOT] Running tests");
-
+    //NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
+    Serial Serial1(SERIAL1_BASE);
+    Serial1.begin(115200u);
     const bool sdram_ok = sdramTest(oled_boot_status);
     oled_write(sdram_ok ? "[BOOT] System ready" : "[BOOT] Degraded mode");
-
+    
     while (1) {
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
+            Serial1.println("Hello");
             led_on = !led_on;
             *LED_D2 = led_on ? 0u : 1u;
             next_toggle_ms += kBlinkPeriodMs;
