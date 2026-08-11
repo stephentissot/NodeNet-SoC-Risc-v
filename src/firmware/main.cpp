@@ -16,6 +16,9 @@ static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x
 #define I2C0_BASE  0x10005000UL
 #define SERIAL1_BASE 0x10004000u
 static constexpr uint32_t NODENET0_BASE = 0x10006000u;
+
+#define SERIAL1_BUFFER_LENGTH 32
+
 // ════════════════════════════════════════════════════════════════════════════
 // OLED Display (U8G2)
 // ════════════════════════════════════════════════════════════════════════════
@@ -104,10 +107,28 @@ int main(void)
     //NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
     Serial Serial1(SERIAL1_BASE);
     Serial1.begin(115200u);
+    char serial1rxBuffer[SERIAL1_BUFFER_LENGTH] = {};
+    uint8_t serial1rxCount = 0;
     const bool sdram_ok = sdramTest(oled_boot_status);
     oled_write(sdram_ok ? "[BOOT] System ready" : "[BOOT] Degraded mode");
     
     while (1) {
+
+        // Check serial1 input and echo back any received characters
+        while (Serial1.available()) {
+            uint8_t c = Serial1.read();
+            if (static_cast<char>(c) == '\n') {
+                oled_write("[RX1] Received:");
+                oled_write(serial1rxBuffer);
+                serial1rxCount = 0;
+                serial1rxBuffer[0] = '\0';
+            }
+            else if (serial1rxCount < SERIAL1_BUFFER_LENGTH - 1) {
+                serial1rxBuffer[serial1rxCount++] = static_cast<char>(c);
+                serial1rxBuffer[serial1rxCount] = '\0';
+            }
+        }
+
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             Serial1.println("Hello");

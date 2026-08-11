@@ -146,6 +146,7 @@ module wb_nodenet #(
   wire uart_rx_valid;
   wire uart_tx_ready;
   wire uart_de;
+  wire uart_rx_frame_error;
 
   wire decoder_msg_valid;
   wire [7:0] decoder_msg_src;
@@ -168,6 +169,7 @@ module wb_nodenet #(
   ) nodenet_uart (
     .clk(clk_i),
     .rst_n(rst_n),
+    .prescale_i(16'd0),
     .rx_i(uart_rx_i),
     .rx_data_o(uart_rx_data),
     .rx_valid_o(uart_rx_valid),
@@ -175,6 +177,7 @@ module wb_nodenet #(
     .tx_data_i(uart_tx_data),
     .tx_valid_i(uart_tx_valid),
     .tx_ready_o(uart_tx_ready),
+    .rx_frame_error_o(uart_rx_frame_error),
     .de_o(uart_de)
   );
 

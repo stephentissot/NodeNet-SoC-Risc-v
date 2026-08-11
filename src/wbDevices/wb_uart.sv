@@ -60,37 +60,32 @@ module wb_uart #(
     reg rx_frame_sticky_reg = 1'b0;
     reg [15:0] prescale_reg = DEFAULT_PRESCALE;
 
-    // UART interface
+    // UART core interface
     wire [7:0] uart_rx_data;
     wire       uart_rx_valid;
     wire       uart_tx_ready;
-    wire       uart_tx_busy;
-    wire       uart_rx_busy;
-    wire       uart_rx_overrun;
     wire       uart_rx_frame;
 
     reg  [7:0] tx_data_reg = 8'd0;
     reg        tx_valid_reg = 1'b0;
 
-    // UART RX is ready if FIFO not full
-    wire uart_rx_ready = !rx_fifo_full;
-
-    uart uart_inst (
+    uart_simple #(
+        .CLOCK_RATE(25_000_000),
+        .BAUD_RATE(115200),
+        .USE_PRESCALE_INPUT(1'b1)
+    ) uart_inst (
         .clk(clk),
-        .rst(rst),
-        .s_axis_tdata(tx_data_reg),
-        .s_axis_tvalid(tx_valid_reg),
-        .s_axis_tready(uart_tx_ready),
-        .m_axis_tdata(uart_rx_data),
-        .m_axis_tvalid(uart_rx_valid),
-        .m_axis_tready(uart_rx_ready),
-        .rxd(rxd),
-        .txd(txd),
-        .tx_busy(uart_tx_busy),
-        .rx_busy(uart_rx_busy),
-        .rx_overrun_error(uart_rx_overrun),
-        .rx_frame_error(uart_rx_frame),
-        .prescale(prescale_reg)
+        .rst_n(~rst),
+        .prescale_i(prescale_reg),
+        .rx_i(rxd),
+        .rx_data_o(uart_rx_data),
+        .rx_valid_o(uart_rx_valid),
+        .tx_o(txd),
+        .tx_data_i(tx_data_reg),
+        .tx_valid_i(tx_valid_reg),
+        .tx_ready_o(uart_tx_ready),
+        .rx_frame_error_o(uart_rx_frame),
+        .de_o()
     );
 
     always @(posedge clk)
@@ -116,14 +111,18 @@ module wb_uart #(
             wb_valid_d <= wb_valid;
 
             // RX: UART -> FIFO
-            if (uart_rx_valid && uart_rx_ready)
+            if (uart_rx_valid)
             begin
-                rx_fifo[rx_wr_ptr] <= uart_rx_data;
-                rx_wr_ptr <= rx_wr_ptr + 1;
+                if (!rx_fifo_full)
+                begin
+                    rx_fifo[rx_wr_ptr] <= uart_rx_data;
+                    rx_wr_ptr <= rx_wr_ptr + 1;
+                end
+                else
+                begin
+                    rx_overrun_sticky_reg <= 1'b1;
+                end
             end
-
-            if (uart_rx_overrun)
-                rx_overrun_sticky_reg <= 1'b1;
 
             if (uart_rx_frame)
                 rx_frame_sticky_reg <= 1'b1;
