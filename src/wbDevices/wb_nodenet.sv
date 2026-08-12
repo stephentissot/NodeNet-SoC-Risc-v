@@ -172,6 +172,7 @@ module wb_nodenet #(
   wire [31:0] unused_next_transmit_allowed;
   wire [31:0] activity_blink_cycles;
   wire [23:0] rx_ignore_reload;
+  reg heartbeat_pending;
 
   assign activity_blink_cycles = ((activity_blink_ms != 32'd0) ? activity_blink_ms : DEFAULT_ACTIVITY_BLINK_MS) * CYCLES_PER_MS;
   // Ignore RX for ~16 bit-times after local TX to avoid RS485 self-echo tails.
@@ -304,8 +305,9 @@ module wb_nodenet #(
       ack_o <= 1'b0;
       uart_tx_ready_d <= 1'b0;
       rx_ignore_counter <= 24'd0;
+      heartbeat_pending <= 1'b0;
     end else begin
-      ack_o <= wb_valid && !ack_o;
+      ack_o <= wb_valid;
       uart_tx_ready_d <= uart_tx_ready;
 
       if (uart_de) begin
@@ -340,13 +342,9 @@ module wb_nodenet #(
           rx_valid <= 1'b1;
           rx_led_trigger_pulse <= 1'b1;
 
-          // Report an extra byte for C-string terminator when there is room.
-          // The terminator is synthesized on read path, not stored in rx_buffer.
-          if (decoder_msg_len < MAX_PAYLOAD) begin
-            rx_len <= decoder_msg_len + 16'h0001;
-          end else begin
-            rx_len <= decoder_msg_len;
-          end
+          // Keep rx_len equal to the decoded payload length.
+          // Firmware can append a '\0' locally when it needs C-string display.
+          rx_len <= decoder_msg_len;
         end else if (decoder_msg_valid) begin
           rx_overflow <= 1'b1;
         end
@@ -361,11 +359,20 @@ module wb_nodenet #(
           rx_error_sticky <= 1'b1;
       end
 
-      if (hb_enabled && heartbeat_trigger && !tx_stage_valid && !tx_pending && !tx_active) begin
-        tx_pending <= 1'b1;
-        tx_pending_is_heartbeat <= 1'b1;
-        tx_cooldown_counter <= compute_tx_delay(8'h00, prio, node_addr);
-        tx_led_trigger_pulse <= 1'b1;
+      // heartbeat_trigger is a one-cycle pulse: latch it until TX path is idle.
+      if (!hb_enabled) begin
+        heartbeat_pending <= 1'b0;
+      end else begin
+        if (heartbeat_trigger)
+          heartbeat_pending <= 1'b1;
+
+        if ((heartbeat_pending || heartbeat_trigger) && !tx_stage_valid && !tx_pending && !tx_active) begin
+          tx_pending <= 1'b1;
+          tx_pending_is_heartbeat <= 1'b1;
+          tx_cooldown_counter <= compute_tx_delay(8'h00, prio, node_addr);
+          tx_led_trigger_pulse <= 1'b1;
+          heartbeat_pending <= 1'b0;
+        end
       end
 
       if (wb_fire) begin
@@ -451,10 +458,7 @@ module wb_nodenet #(
 
             REG_RX_DATA: begin
               if (rx_valid) begin
-                if ((rx_len != 16'h0000) && (rx_read_idx == (rx_len - 16'h0001)))
-                  dat_o <= 32'h0000_0000; // synthetic '\0' terminator byte
-                else
-                  dat_o <= {24'h000000, rx_buffer[rx_read_idx]};
+                dat_o <= {24'h000000, rx_buffer[rx_read_idx]};
               end else begin
                 dat_o <= 32'h0000_0000;
               end

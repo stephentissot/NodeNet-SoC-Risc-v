@@ -48,7 +48,7 @@
 
 #include <cstdint>
 #include <cstring>
-
+#include "bigsister.h"
 // ═══════════════════════════════════════════════════════════════════════════
 // Hardware Registers (Wishbone B.4 Slave at 0x10006000)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -193,8 +193,14 @@ public:
     msg.len = hw_len;
     msg.data = new uint8_t[(uint32_t)msg.len + 1u];
 
-    for (uint16_t index = 0; index < msg.len; ++index) {
-      msg.data[index] = (uint8_t)Read(NODENET_RX_DATA_OFS);
+    if (msg.len == 0u) {
+      // Hardware clears RX valid on RX_DATA pop. Zero-length payloads still
+      // require one pop to release the mailbox entry.
+      (void)Read(NODENET_RX_DATA_OFS);
+    } else {
+      for (uint16_t index = 0; index < msg.len; ++index) {
+        msg.data[index] = (uint8_t)Read(NODENET_RX_DATA_OFS);
+      }
     }
 
     // Defensive: ensure C-string termination regardless of payload content.
