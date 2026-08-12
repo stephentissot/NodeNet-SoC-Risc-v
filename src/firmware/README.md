@@ -40,6 +40,9 @@ src/firmware/
 ├── sdram.h          SDRAM helpers (SDRAM_DATA macro, sdram_wait_ready)
 ├── sdram.cpp        Single-TU SDRAM test probe storage for self-tests
 └── lib/
+    ├── serial/      UART1 MMIO helper (Arduino-style API)
+    │   ├── Serial.h
+    │   └── Serial.cpp
     ├── u8g2/        u8g2 graphics library (git submodule)
     │   └── csrc/    132 C source files compiled with --gc-sections
     └── u8g2_hal/    u8g2 hardware abstraction layer (our code)
@@ -58,6 +61,7 @@ src/firmware/
 | `0x10000000` | 4 B | **D2 LED GPIO** (`wb_gpio`) |
 | `0x10000004` | 4 B | **RJ45 LED0** (`wb_led`) |
 | `0x10000008` | 4 B | **RJ45 LED1** (`wb_led`) |
+| `0x10004000` | 32 B | **UART1** (`wb_uart`) |
 | `0x10005000` | 32 B | **I2C0** |
 | `0x10006000` | 32 B | **NodeNet485** (RS-485 @ 1 Mb/s, includes LED pulse config) |
 | `0x10007000` | 32 B | **SPI Flash** (`wb_flash`, W25Q64 via USRMCLK) |
@@ -102,9 +106,53 @@ led1.Off();        // set default state OFF
 
 ---
 
+### UART1 (`wb_uart`: `0x10004000`) — Serial Text I/O
+
+The firmware includes an Arduino-style serial helper in `lib/serial/Serial.h` and `lib/serial/Serial.cpp`.
+
+`wb_uart` is a Wishbone wrapper with RX/TX FIFOs. It now uses the shared `uart_simple` serial core internally, so NodeNet and UART1 rely on the same UART engine while keeping separate wrappers and registers.
+
+Minimal usage example:
+
+```cpp
+#include "lib/serial/Serial.h"
+
+constexpr uint32_t UART1_BASE = 0x10004000u;
+Serial Serial1(UART1_BASE);
+
+int main() {
+    Serial1.begin(115200);
+    Serial1.println("Hello from UART1");
+
+    for (;;) {
+        if (Serial1.available() > 0) {
+            int c = Serial1.read();
+            if (c >= 0) {
+                Serial1.write(static_cast<uint8_t>(c));  // echo
+            }
+        }
+    }
+}
+```
+
+Useful methods:
+- `begin(baud)`
+- `available()`, `read()`, `peek()`
+- `write()`, `print()`, `println()`, `flush()`
+- `hasOverrunError()`, `hasFrameError()`, `clearErrors()`
+
+---
+
 ### NodeNet485 (`0x10006000`) — Multi-Node RS-485 Mailbox Transport
 
 The NodeNet485 protocol enables reliable multi-node communication over RS-485 at 1 Mb/s.
+
+Validation snapshot (2026-08-11):
+- Automatic heartbeat from HDL validated on hardware at ~10 s period.
+- RX path validated for frames addressed to the local node.
+- TX path validated end-to-end.
+- Runtime baud validated at 115200 and 1 Mb/s.
+- Pending targeted checks: broadcast acceptance and non-matching destination ignore behavior.
 
 **Mailbox Register Model**:
 - **TX staging**: firmware writes one message into TX command/data registers

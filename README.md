@@ -8,12 +8,21 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 - **Processor**: PicoRV32 (32-bit RISC-V, bare-metal)
 - **Clock**: 25 MHz
 - **Memory**: 64 KiB ROM (boot code) + 64 KiB RAM (stack/variables) + 8 MB SDRAM (application/external data)
-- **Peripherals**: D2 LED GPIO, RJ45 LED pulse controllers (`wb_led`), RS485 NodeNet485, I2C master, SDRAM controller
+- **Peripherals**: D2 LED GPIO, RJ45 LED pulse controllers (`wb_led`), UART1 (`wb_uart`), RS485 NodeNet485, I2C master, SDRAM controller
 - **Communication**: NodeNet485 @ 1 Mb/s over RS-485 (multi-node capable)
 - **Firmware**: C++17, bare-metal, newlib-nano
 - **Validated SDRAM path**: boot-time init, 32-bit accesses, partial Wishbone writes, and linker-placed `SDRAM_DATA` variables
 
 ## Features
+
+### NodeNet Validation Snapshot (2026-08-11)
+- Automatic heartbeat in HDL validated on hardware at ~10 s period.
+- RX to local address validated (message accepted and decoded).
+- TX path validated end-to-end.
+- Runtime baud operation validated at both 115200 and 1 Mb/s.
+- Remaining checks planned:
+  - Broadcast RX acceptance path.
+  - Non-matching destination address ignore path.
 
 ### Hardware
 - **Wishbone B.4 Bus** interconnect with 32-bit data, 32-bit address
@@ -24,6 +33,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - `0x10000000`: D2 LED GPIO (1-bit output)
   - `0x10000004`: RJ45 LED0 (`wb_led` one-shot pulse)
   - `0x10000008`: RJ45 LED1 (`wb_led` one-shot pulse)
+  - `0x10004000`: UART1 (`wb_uart`, RX/TX FIFO MMIO)
   - `0x10005000`: I2C0 master (8 registers @ 4-byte stride)
   - `0x10006000`: NodeNet485 RS-485 mailbox (8 registers, 1 Mb/s)
   - `0x20000000–0x207FFFFF`: 8 MB SDRAM (application / framebuffer / logs)
@@ -31,7 +41,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 ### Peripherals
 - **NodeNet485 Module** (`wb_nodenet.sv`):
   - Multi-node RS-485 communication protocol
-  - Baud rate: 1 Mb/s
+  - Baud rate: runtime divisor (validated at 115200 and 1 Mb/s)
   - HDLC-style framing with parity bits and CRC
   - Mailbox-based Wishbone interface for TX/RX messages
   - Internal message buffering (no external SDRAM FIFO usage)
@@ -49,6 +59,12 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - Configurable speed (default 100 kHz, up to 400 kHz @ 25 MHz)
   - Drives SCL/SDA open-drain (external 4.7 kΩ pullup required)
   - Wishbone address: 0x10005000
+
+- **UART1 Module** (`wb_uart.sv`):
+  - Wishbone UART wrapper with RX/TX FIFOs (`DATA`, `STATUS`, `BAUD`)
+  - Uses shared `uart_simple.sv` UART core
+  - Intended for firmware serial console / general UART text I/O
+  - Wishbone address: 0x10004000
 
 - **SPI Flash Module** (`wb_flash.sv`, `spi_master.sv`):
   - Wishbone interface to on-board SPI flash (W25Q64, 8 MB)
@@ -155,6 +171,7 @@ Address Range               Size      Purpose
 0x10000000                4 B      D2 LED GPIO (bit [0] = LED output)
 0x10000004                4 B      RJ45 LED0 (`wb_led` control/status)
 0x10000008                4 B      RJ45 LED1 (`wb_led` control/status)
+0x10004000                32 B     UART1 (`wb_uart` serial MMIO)
 0x10005000                32 B     I2C0 master (8 regs @ 4-byte stride)
 0x10006000–0x1000601F     32 B     NodeNet485 mailbox + LED config (RS485, 1 Mb/s)
 0x10007000                32 B     SPI Flash controller (W25Q64)
@@ -223,6 +240,28 @@ NodeNet RJ45 pinout (both connectors):
 ## Firmware Examples
 
 See **[src/firmware/README.md](src/firmware/README.md)** for a full guide with code examples for every peripheral.
+
+### Quick-start: UART1 with Serial
+```cpp
+#include "lib/serial/Serial.h"
+
+constexpr uint32_t UART1_BASE = 0x10004000u;
+Serial Serial1(UART1_BASE);
+
+int main() {
+  Serial1.begin(115200);
+  Serial1.println("UART1 ready");
+
+  for (;;) {
+    if (Serial1.available() > 0) {
+      int c = Serial1.read();
+      if (c >= 0) {
+        Serial1.write(static_cast<uint8_t>(c));
+      }
+    }
+  }
+}
+```
 
 ### Quick-start: NodeNet echo
 ```cpp
@@ -298,9 +337,12 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
                            |
       +--------+-----------+---------+--------+----------+-------+
       |        |           |         |        |          |       |
-         wb_rom   wb_ram   wb_nodenet wb_gpio   wb_led    wb_sdram wb_i2c
-              |            |          |        |
-           uart_simple   LED D2   RJ45 LEDs  M12L64322A  SSD1306
+      wb_rom  wb_ram  wb_uart  wb_nodenet wb_gpio wb_led wb_sdram wb_i2c
+            |         |
+            uart_simple  uart_simple
+                 |
+               NodeNet framing
+        LED D2   RJ45 LEDs   M12L64322A  SSD1306
               |                    (8MB SDRAM) OLED
             RS485 Transceiver
                            |

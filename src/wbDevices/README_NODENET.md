@@ -11,6 +11,18 @@
 - **Heartbeat**: Periodic keep-alive messages
 - **Flow Control**: Priority-based transmission (LOW/NORMAL/HIGH)
 
+## Validation Status (2026-08-11)
+
+Validated on hardware:
+- Automatic HDL heartbeat every ~10 s.
+- RX decode for frames addressed to local node.
+- TX framing and emission path.
+- Runtime baud operation at 115200 and 1 Mb/s.
+
+Still to verify:
+- Broadcast receive acceptance behavior.
+- Receive ignore behavior for non-matching destination address.
+
 ## Architecture
 
 ```

@@ -12,6 +12,7 @@ src/firmware/.cache/
 *.bit
 *.json
 *.config
+*.vvp
 
 # IDE
 .vscode/settings.json

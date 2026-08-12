@@ -37,7 +37,7 @@ extern "C" uint8_t u8x8_byte_i2c_hw(u8x8_t *u8x8, uint8_t msg,
     switch (msg) {
 
     case U8X8_MSG_BYTE_INIT:
-        Wire.begin(62);  // Initialize I2C peripheral
+        Wire.begin(15);  // Initialize I2C peripheral
         s_buf_len = 0;
         break;
 

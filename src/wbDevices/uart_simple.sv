@@ -9,10 +9,20 @@
 
 module uart_simple #(
   parameter CLOCK_RATE = 25_000_000,
-  parameter BAUD_RATE = 1_000_000  // NodeNet485: 1 Mb/s
+  parameter BAUD_RATE = 1_000_000,  // NodeNet485: 1 Mb/s
+  parameter USE_PRESCALE_INPUT = 1'b0,
+  parameter USE_DIVISOR_INPUT = 1'b0
 ) (
   input wire clk,
   input wire rst_n,
+
+  // Optional runtime baud control. When USE_PRESCALE_INPUT=1,
+  // bit period is (prescale_i << 3) clocks to match legacy uart.v behavior.
+  input wire [15:0] prescale_i,
+
+  // Optional runtime direct divisor. When USE_DIVISOR_INPUT=1,
+  // bit period is divisor_i clocks.
+  input wire [19:0] divisor_i,
   
   // RX Interface
   input wire rx_i,
@@ -24,12 +34,18 @@ module uart_simple #(
   input wire [7:0] tx_data_i,
   input wire tx_valid_i,
   output wire tx_ready_o,
+
+  // RX status pulses
+  output reg rx_frame_error_o,
   
   // RS485 Driver Enable
   output wire de_o  // Driver enable (high when transmitting)
 );
 
-  localparam DIVISOR = CLOCK_RATE / BAUD_RATE;
+  localparam [19:0] DIVISOR_FIXED = CLOCK_RATE / BAUD_RATE;
+  wire [19:0] bit_divisor_raw = USE_DIVISOR_INPUT ? divisor_i :
+                                (USE_PRESCALE_INPUT ? {1'b0, prescale_i, 3'b000} : DIVISOR_FIXED);
+  wire [19:0] bit_divisor = (bit_divisor_raw != 20'd0) ? bit_divisor_raw : 20'd1;
   
   // TX side
   reg [9:0] tx_shift;
@@ -67,7 +83,7 @@ module uart_simple #(
         tx_busy <= 1'b1;
       end
       else if (tx_busy) begin
-        if (tx_counter >= DIVISOR - 1) begin
+        if (tx_counter >= bit_divisor - 1'b1) begin
           tx_counter <= 20'b0;
           tx_shift <= {1'b1, tx_shift[9:1]};
           tx_bit_count <= tx_bit_count - 4'b1;
@@ -110,15 +126,17 @@ module uart_simple #(
       rx_bit_count <= 4'b0;
       rx_busy <= 1'b0;
       rx_data_o <= 8'b0;
+      rx_frame_error_o <= 1'b0;
     end
     else begin
       rx_valid_o <= 1'b0;
+      rx_frame_error_o <= 1'b0;
       rx_prev <= rx_sync2;
       
       if (!rx_busy && !rx_sync2 && rx_prev) begin
         // Start bit detected
         // First data sample at 1.5 bit times from edge.
-        rx_counter <= DIVISOR + (DIVISOR / 2) - 1;
+        rx_counter <= bit_divisor + (bit_divisor >> 1) - 1'b1;
         rx_bit_count <= 4'd0;
         rx_busy <= 1'b1;
       end
@@ -128,13 +146,18 @@ module uart_simple #(
             // LSB-first data bits
             rx_shift[rx_bit_count] <= rx_sync2;
             rx_bit_count <= rx_bit_count + 4'd1;
-            rx_counter <= DIVISOR - 1;
+            rx_counter <= bit_divisor - 1'b1;
           end else begin
             // Stop bit must be high
             rx_busy <= 1'b0;
             if (rx_sync2) begin
               rx_data_o <= rx_shift;
               rx_valid_o <= 1'b1;
+              // Re-arm falling-edge detector for tightly packed bytes.
+              rx_prev <= 1'b1;
+            end else begin
+              rx_frame_error_o <= 1'b1;
+              rx_prev <= 1'b1;
             end
           end
         end

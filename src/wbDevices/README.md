@@ -12,11 +12,16 @@ All modules follow the Wishbone B.4 standard with:
 
 ## Modules
 
-### 1. `wb_uart.sv` – UART with Integrated FIFOs
+### 1. `wb_uart.sv` – Wishbone UART Wrapper + FIFOs
 
-**Purpose**: Serial communication with RS485 driver support, buffered I/O.
+**Purpose**: Memory-mapped UART peripheral for CPU firmware (`DATA`, `STATUS`, `BAUD`) with integrated RX/TX FIFOs.
 
-**Based On**: [Verilog UART IP by Alex Forencich](https://github.com/alexforencich/verilog-uart) – wraps the high-quality `uart.v` core with Wishbone B.4 interface and circular FIFOs for buffering.
+**Architecture**:
+- `uart_simple.sv` = reusable UART 8N1 serial core
+- `wb_uart.sv` = Wishbone B.4 wrapper + register map + RX/TX FIFOs around `uart_simple`
+
+This matches the same layered approach used by NodeNet:
+- `wb_nodenet.sv` keeps its own NodeNet framing/mailbox logic and also uses `uart_simple` for wire-level UART.
 
 **Address**: Configurable (default: `0x10001000`)
 
@@ -47,14 +52,13 @@ parameter DEFAULT_PRESCALE = 16'd27;   // Baud rate divisor
 parameter FIFO_ADDR_WIDTH = 4;         // FIFO depth: 2^4 = 16 bytes
 ```
 
-**Baud Rate Calculation**:
+**Baud Rate Calculation** (`REG_BAUD`):
 ```
-baud = clock_frequency / (16 * prescale)
-prescale = clock_frequency / (16 * baud)
+baud = clock_frequency / (8 * prescale)
+prescale = clock_frequency / (8 * baud)
 
 Example: 115200 baud @ 25 MHz
-prescale = 25_000_000 / (16 * 115200) ≈ 13.5 → use 14 (actual: 111328 baud)
-prescale = 27 gives ~115200 baud (actually 91551 baud with 27)
+prescale = 25_000_000 / (8 * 115200) ≈ 27.1 → use 27
 ```
 
 **Features**:
@@ -66,13 +70,13 @@ prescale = 27 gives ~115200 baud (actually 91551 baud with 27)
 **Usage Example**:
 
 ```c
-#define UART0_DATA     0x10001000
-#define UART0_STATUS   0x10001004
-#define UART0_BAUD     0x10001008
+#define UART1_DATA     0x10004000
+#define UART1_STATUS   0x10004004
+#define UART1_BAUD     0x10004008
 
-volatile uint32_t *uart_data   = (volatile uint32_t *)UART0_DATA;
-volatile uint32_t *uart_status = (volatile uint32_t *)UART0_STATUS;
-volatile uint32_t *uart_baud   = (volatile uint32_t *)UART0_BAUD;
+volatile uint32_t *uart_data   = (volatile uint32_t *)UART1_DATA;
+volatile uint32_t *uart_status = (volatile uint32_t *)UART1_STATUS;
+volatile uint32_t *uart_baud   = (volatile uint32_t *)UART1_BAUD;
 
 // Initialize
 void uart_init(uint16_t prescale) {
@@ -100,9 +104,9 @@ int uart_getc_nb(char *c) {
 ```
 
 **Hardware Integration**:
-- **TX** line drives RS485 TX_EN when FIFO not empty
-- **RX** line connected directly to receiver input
-- FIFO prevents overrun on moderate interrupt latency
+- Direct UART RX/TX pins (`rxd`, `txd`) for the `UART1` peripheral instance
+- Wishbone access is edge-fired (`wb_fire`) to avoid duplicated reads/writes when `cyc/stb` are held
+- FIFOs absorb software latency and burst writes
 
 ---
 
@@ -470,6 +474,10 @@ wire.write(0x3C, buf, 2);
 
 **Important**: The current `wb_nodenet.sv` implementation does **not** access external SDRAM. TX/RX buffering is internal to the module and exposed via MMIO registers.
 
+**UART Layer**:
+- `wb_nodenet` uses `uart_simple` directly for byte-level UART RX/TX.
+- `wb_nodenet` does not depend on `wb_uart`.
+
 **Register Map**:
 
 | Offset | Name | R/W | Purpose |
@@ -508,6 +516,7 @@ always_comb begin
     wb_led_d2_sel = wb_cyc && wb_stb && (wb_adr == 32'h1000_0000);
     wb_led0_sel   = wb_cyc && wb_stb && (wb_adr == 32'h1000_0004);
     wb_led1_sel   = wb_cyc && wb_stb && (wb_adr == 32'h1000_0008);
+    wb_uart1_sel  = wb_cyc && wb_stb && (wb_adr[31:12] == 20'h10004);
     wb_i2c0_sel   = wb_cyc && wb_stb && (wb_adr[31:12] == 20'h10005);
     wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == 20'h10006);
     wb_flash_sel  = wb_cyc && wb_stb && (wb_adr[31:12] == 20'h10007);
@@ -523,12 +532,13 @@ assign wb_dat_i = rom_ack     ? rom_dat     :
                   led_d2_ack  ? led_d2_dat  :
                   led0_ack    ? led0_dat    :
                   led1_ack    ? led1_dat    :
+                                    uart1_ack   ? uart1_dat   :
                   sdram_ack   ? sdram_dat   :
                   32'h0;
 
 // Ack multiplexer
 assign wb_ack = rom_ack | ram_ack | led_d2_ack | led0_ack | led1_ack |
-                nodenet_ack | i2c0_ack | flash_ack | sdram_ack;
+                                uart1_ack | nodenet_ack | i2c0_ack | flash_ack | sdram_ack;
 ```
 
 ---

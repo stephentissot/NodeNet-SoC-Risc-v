@@ -35,7 +35,8 @@ module nodenet_heartbeat #(
     : ({24'b0, node_addr} * `NODENET_UNICAST_DELAY_PER_ADDR);
   
   assign next_transmit_allowed_o = transmit_allowed_timer;
-  assign heartbeat_trigger_o = (heartbeat_timer >= heartbeat_interval_cycles);
+  // One-cycle trigger when interval is reached; avoids level-sensitive re-trigger.
+  assign heartbeat_trigger_o = (heartbeat_timer == heartbeat_interval_cycles);
   
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -46,13 +47,12 @@ module nodenet_heartbeat #(
     else begin
       cycle_counter <= cycle_counter + 32'b1;
       
-      // Heartbeat timer
-      if (message_sent_i) begin
-        heartbeat_timer <= 32'b0;  // Reset on any transmission
-      end
-      else begin
+      // Heartbeat cadence is anchored on trigger time so bus period stays stable.
+      // This prevents adding broadcast backoff on top of every interval.
+      if (heartbeat_trigger_o)
+        heartbeat_timer <= 32'b0;
+      else
         heartbeat_timer <= heartbeat_timer + 32'b1;
-      end
       
       // Transmit allowed timer
       if (message_sent_i) begin

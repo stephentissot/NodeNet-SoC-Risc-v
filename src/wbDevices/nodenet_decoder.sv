@@ -161,6 +161,16 @@ module nodenet_decoder (
               state <= IDLE;
             end
           end
+
+          RX_ETX: begin
+            if (rx_byte_i == `NODENET_ETX) begin
+              state <= RX_CRC;
+            end
+            else begin
+              error_o <= 1'b1;
+              state <= IDLE;
+            end
+          end
           
           RX_CRC: begin
             crc_received <= rx_byte_i;
@@ -169,7 +179,16 @@ module nodenet_decoder (
           
           RX_EOT: begin
             if (rx_byte_i == `NODENET_EOT) begin
-              state <= VALIDATE;
+              if (crc == crc_received && (dst == my_addr_i || dst == 8'b0)) begin
+                msg_src_addr_o <= src;
+                msg_len_o <= payload_len;
+                msg_complete_o <= 1'b1;
+                msg_valid_o <= 1'b1;
+              end
+              else begin
+                error_o <= 1'b1;
+              end
+              state <= IDLE;
             end
             else begin
               error_o <= 1'b1;
@@ -178,15 +197,6 @@ module nodenet_decoder (
           end
           
           VALIDATE: begin
-            if (crc == crc_received && (dst == my_addr_i || dst == 8'b0)) begin
-              msg_src_addr_o <= src;
-              msg_len_o <= payload_len;
-              msg_complete_o <= 1'b1;
-              msg_valid_o <= 1'b1;
-            end
-            else begin
-              error_o <= 1'b1;
-            end
             state <= IDLE;
           end
           
@@ -196,7 +206,8 @@ module nodenet_decoder (
       else begin
         timeout_counter <= timeout_counter + 32'b1;
         if (timeout && (state != IDLE)) begin
-          error_o <= 1'b1;
+          // Timeout indicates an incomplete frame/noise window, not a hard
+          // protocol violation. Expose it via rx_timeout_o only.
           state <= IDLE;
           first_nibble <= 1'b1;
         end

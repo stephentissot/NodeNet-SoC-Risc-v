@@ -10,6 +10,9 @@ module top (
     // UART0 (NodeNet485): RX=G5, TX=D16
     input  wire rx0,
     output wire tx0,
+    // UART1: RX=E16, TX=E17
+    input  wire rx1,
+    output wire tx1,
     // SPI Flash (W25Q64) — Configuration Flash Access
     // SCK is generated internally (USRMCLK), not a GPIO pin
     output wire flash_cs_n,
@@ -34,6 +37,7 @@ module top (
     localparam [31:0] LED0_ADDR   = 32'h1000_0004;
     localparam [31:0] LED1_ADDR   = 32'h1000_0008;
     localparam [31:0] TIMER_ADDR  = 32'h1000_0010;
+    localparam [31:0] UART1_BASE  = 32'h1000_4000;
     localparam [31:0] I2C0_BASE   = 32'h1000_5000;  // 4 KB page, 8 regs @ +0x00..+0x1C
     localparam [31:0] NODENET_BASE = 32'h1000_6000;  // NodeNet485 Wishbone slave (1 Mb/s RS-485)
     localparam [31:0] FLASH_BASE  = 32'h1000_7000;  // W25Q64 SPI flash (8 MB)
@@ -72,6 +76,8 @@ module top (
     wire        i2c0_ack;
     wire [31:0] timer_dat;
     wire        timer_ack;
+    wire [31:0] uart1_dat;
+    wire        uart1_ack;
     wire [31:0] nodenet_dat;
     wire        nodenet_ack;
     wire [31:0] flash_dat;
@@ -86,6 +92,7 @@ module top (
     wire wb_led0_sel;
     wire wb_led1_sel;
     wire wb_timer_sel;
+    wire wb_uart1_sel;
     wire wb_i2c0_sel;
     wire wb_nodenet_sel;
     wire wb_flash_sel;
@@ -97,6 +104,7 @@ module top (
     assign wb_led0_sel   = wb_cyc && wb_stb && (wb_adr == LED0_ADDR);
     assign wb_led1_sel   = wb_cyc && wb_stb && (wb_adr == LED1_ADDR);
     assign wb_timer_sel  = wb_cyc && wb_stb && (wb_adr == TIMER_ADDR);
+    assign wb_uart1_sel  = wb_cyc && wb_stb && (wb_adr[31:12] == UART1_BASE[31:12]);
     assign wb_i2c0_sel   = wb_cyc && wb_stb && (wb_adr[31:12] == I2C0_BASE[31:12]);
     assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12]);
     assign wb_flash_sel  = wb_cyc && wb_stb && (wb_adr[31:12] == FLASH_BASE[31:12]);
@@ -133,6 +141,7 @@ module top (
                       wb_led0_sel    ? led0_dat    :
                       wb_led1_sel    ? led1_dat    :
                       wb_timer_sel   ? timer_dat   :
+                      wb_uart1_sel   ? uart1_dat   :
                       wb_sdram_sel   ? sdram_dat   :
                       32'h0000_0000;
     assign wb_ack = (wb_rom_sel     && rom_ack)     ||
@@ -144,6 +153,7 @@ module top (
                     (wb_led0_sel    && led0_ack)    ||
                     (wb_led1_sel    && led1_ack)    ||
                     (wb_timer_sel   && timer_ack)   ||
+                    (wb_uart1_sel   && uart1_ack)   ||
                     (wb_sdram_sel   && sdram_ack);
 
 
@@ -243,6 +253,27 @@ module top (
 
         .wb_dat_o(timer_dat),
         .wb_ack_o(timer_ack)
+    );
+
+    wb_uart #(
+        .ADDR(UART1_BASE),
+        .DEFAULT_PRESCALE(16'd27)
+    ) uart1 (
+        .clk(clk_25mhz),
+        .rst(reset),
+
+        .wb_adr_i(wb_adr),
+        .wb_dat_i(wb_dat_o),
+        .wb_sel_i(wb_sel),
+        .wb_we_i(wb_we),
+        .wb_cyc_i(wb_uart1_sel),
+        .wb_stb_i(wb_uart1_sel),
+
+        .wb_dat_o(uart1_dat),
+        .wb_ack_o(uart1_ack),
+
+        .rxd(rx1),
+        .txd(tx1)
     );
     
     wb_nodenet #(

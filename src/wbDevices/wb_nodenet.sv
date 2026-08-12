@@ -31,15 +31,16 @@ module wb_nodenet #(
 
   localparam integer MAX_PAYLOAD = `NODENET_MAX_PAYLOAD_SIZE;
 
-  localparam [2:0]
-    REG_TX_CMD  = 3'd0,
-    REG_TX_DATA = 3'd1,
-    REG_RX_HDR  = 3'd2,
-    REG_RX_DATA = 3'd3,
-    REG_CONFIG  = 3'd4,
-    REG_CONTROL = 3'd5,
-    REG_STATUS  = 3'd6,
-    REG_LED_CFG = 3'd7;
+  localparam [3:0]
+    REG_TX_CMD  = 4'd0,
+    REG_TX_DATA = 4'd1,
+    REG_RX_HDR  = 4'd2,
+    REG_RX_DATA = 4'd3,
+    REG_CONFIG  = 4'd4,
+    REG_CONTROL = 4'd5,
+    REG_STATUS  = 4'd6,
+    REG_LED_CFG = 4'd7,
+    REG_UART_BAUD = 4'd8;
 
   localparam [31:0] DEFAULT_ACTIVITY_BLINK_MS = 32'd100;
   localparam [31:0] CYCLES_PER_MS = CLOCK_RATE / 32'd1000;
@@ -58,7 +59,8 @@ module wb_nodenet #(
     TX_ETX        = 4'd10,
     TX_CRC        = 4'd11,
     TX_EOT        = 4'd12,
-    TX_SUFFIX_LF  = 4'd13;
+    TX_SUFFIX_LF  = 4'd13,
+    TX_TRAILER_ZERO = 4'd14;
 
   function [7:0] encode_nibble_high;
     input [7:0] byte_in;
@@ -81,12 +83,13 @@ module wb_nodenet #(
   function [31:0] compute_tx_delay;
     input [7:0] dst_addr;
     input [1:0] prio_sel;
+    input [7:0] src_addr;
     reg [31:0] delay_cycles;
     begin
       if (dst_addr == 8'h00)
-        delay_cycles = {24'h0, node_addr} * `NODENET_BROADCAST_DELAY_PER_ADDR;
+        delay_cycles = {24'h0, src_addr} * `NODENET_BROADCAST_DELAY_PER_ADDR;
       else
-        delay_cycles = `NODENET_LINE_READY_CYCLES + ({24'h0, node_addr} * `NODENET_UNICAST_DELAY_PER_ADDR);
+        delay_cycles = `NODENET_LINE_READY_CYCLES + ({24'h0, src_addr} * `NODENET_UNICAST_DELAY_PER_ADDR);
 
       case (prio_sel)
         2'b10: delay_cycles = delay_cycles >> 1;
@@ -100,14 +103,15 @@ module wb_nodenet #(
 
   wire rst_n = ~rst_i;
   wire wb_valid = cyc_i && stb_i;
-  reg wb_valid_d;
-  wire wb_fire = wb_valid && !wb_valid_d;
-  wire [2:0] reg_index = adr_i[4:2];
+  wire wb_fire = wb_valid && !ack_o;
+  wire [3:0] reg_index = adr_i[5:2];
 
   reg [7:0] node_addr;
+  reg hb_enabled;
   reg [31:0] heartbeat_interval;
   reg [1:0] prio;
   reg [31:0] activity_blink_ms;
+  reg [19:0] uart_divisor;
 
   reg [7:0] tx_stage_dst;
   reg [15:0] tx_stage_len;
@@ -115,10 +119,12 @@ module wb_nodenet #(
   reg tx_stage_valid;
   reg tx_pending;
   reg tx_pending_is_heartbeat;
+  reg tx_frame_is_heartbeat;
   reg tx_active;
   reg [7:0] tx_frame_dst;
   reg [15:0] tx_frame_len;
   reg [15:0] tx_stream_idx;
+  reg [1:0] tx_prefix_lf_count;
   reg [7:0] tx_crc;
   reg [7:0] tx_current_byte;
   reg [3:0] tx_state;
@@ -132,6 +138,8 @@ module wb_nodenet #(
   reg rx_valid;
   reg rx_overflow;
   reg rx_error_sticky;
+  reg rx_uart_seen_sticky;
+  reg rx_uart_frame_error_sticky;
 
   reg [7:0] tx_buffer [0:MAX_PAYLOAD-1];
   reg [7:0] rx_buffer [0:MAX_PAYLOAD-1];
@@ -146,6 +154,10 @@ module wb_nodenet #(
   wire uart_rx_valid;
   wire uart_tx_ready;
   wire uart_de;
+  wire uart_rx_frame_error;
+  reg uart_tx_ready_d;
+  reg [23:0] rx_ignore_counter;
+  wire rx_decode_enable;
 
   wire decoder_msg_valid;
   wire [7:0] decoder_msg_src;
@@ -159,15 +171,23 @@ module wb_nodenet #(
   wire heartbeat_trigger;
   wire [31:0] unused_next_transmit_allowed;
   wire [31:0] activity_blink_cycles;
+  wire [23:0] rx_ignore_reload;
+  reg heartbeat_pending;
 
   assign activity_blink_cycles = ((activity_blink_ms != 32'd0) ? activity_blink_ms : DEFAULT_ACTIVITY_BLINK_MS) * CYCLES_PER_MS;
+  // Ignore RX for ~16 bit-times after local TX to avoid RS485 self-echo tails.
+  assign rx_ignore_reload = {4'b0000, uart_divisor} << 4;
+  assign rx_decode_enable = !uart_de && (rx_ignore_counter == 24'd0);
 
   uart_simple #(
     .CLOCK_RATE(CLOCK_RATE),
-    .BAUD_RATE(1_000_000)
+    .BAUD_RATE(1_000_000),
+    .USE_DIVISOR_INPUT(1'b1)
   ) nodenet_uart (
     .clk(clk_i),
     .rst_n(rst_n),
+    .prescale_i(16'd0),
+    .divisor_i(uart_divisor),
     .rx_i(uart_rx_i),
     .rx_data_o(uart_rx_data),
     .rx_valid_o(uart_rx_valid),
@@ -175,6 +195,7 @@ module wb_nodenet #(
     .tx_data_i(uart_tx_data),
     .tx_valid_i(uart_tx_valid),
     .tx_ready_o(uart_tx_ready),
+    .rx_frame_error_o(uart_rx_frame_error),
     .de_o(uart_de)
   );
 
@@ -182,7 +203,8 @@ module wb_nodenet #(
     .clk(clk_i),
     .rst_n(rst_n),
     .my_addr_i(node_addr),
-    .rx_byte_valid_i(uart_rx_valid),
+    // Ignore local echo while TX is active and briefly after TX release.
+    .rx_byte_valid_i(uart_rx_valid && rx_decode_enable),
     .rx_byte_i(uart_rx_data),
     .msg_valid_o(decoder_msg_valid),
     .msg_src_addr_o(decoder_msg_src),
@@ -247,19 +269,23 @@ module wb_nodenet #(
 
     if (rst_i) begin
       node_addr <= 8'h01;
+      hb_enabled <= 1'b0;
       heartbeat_interval <= `NODENET_HEARTBEAT_DEFAULT_CYCLES;
       prio <= 2'b01;
       activity_blink_ms <= DEFAULT_ACTIVITY_BLINK_MS;
+      uart_divisor <= (CLOCK_RATE / 1_000_000);
       tx_stage_dst <= 8'h00;
       tx_stage_len <= 16'h0000;
       tx_load_count <= 16'h0000;
       tx_stage_valid <= 1'b0;
       tx_pending <= 1'b0;
       tx_pending_is_heartbeat <= 1'b0;
+      tx_frame_is_heartbeat <= 1'b0;
       tx_active <= 1'b0;
       tx_frame_dst <= 8'h00;
       tx_frame_len <= 16'h0000;
       tx_stream_idx <= 16'h0000;
+      tx_prefix_lf_count <= 2'b00;
       tx_crc <= 8'h00;
       tx_current_byte <= 8'h00;
       tx_state <= TX_IDLE;
@@ -272,13 +298,23 @@ module wb_nodenet #(
       rx_valid <= 1'b0;
       rx_overflow <= 1'b0;
       rx_error_sticky <= 1'b0;
+      rx_uart_seen_sticky <= 1'b0;
+      rx_uart_frame_error_sticky <= 1'b0;
       dat_o <= 32'h0000_0000;
       uart_tx_data <= 8'hFF;
       ack_o <= 1'b0;
-      wb_valid_d <= 1'b0;
+      uart_tx_ready_d <= 1'b0;
+      rx_ignore_counter <= 24'd0;
+      heartbeat_pending <= 1'b0;
     end else begin
-      wb_valid_d <= wb_valid;
-      ack_o <= wb_fire;
+      ack_o <= wb_valid;
+      uart_tx_ready_d <= uart_tx_ready;
+
+      if (uart_de) begin
+        rx_ignore_counter <= rx_ignore_reload;
+      end else if (rx_ignore_counter != 24'd0) begin
+        rx_ignore_counter <= rx_ignore_counter - 24'd1;
+      end
 
       if (tx_cooldown_counter != 32'h0000_0000)
         tx_cooldown_counter <= tx_cooldown_counter - 32'h0000_0001;
@@ -292,13 +328,23 @@ module wb_nodenet #(
         end
       end
 
+      if (uart_rx_valid)
+        rx_uart_seen_sticky <= 1'b1;
+
+      if (uart_rx_frame_error) begin
+        rx_uart_frame_error_sticky <= 1'b1;
+      end
+
       if (decoder_msg_complete) begin
         if (decoder_msg_valid && !rx_valid && (decoder_msg_len <= MAX_PAYLOAD)) begin
           rx_src <= decoder_msg_src;
-          rx_len <= decoder_msg_len;
           rx_read_idx <= 16'h0000;
           rx_valid <= 1'b1;
           rx_led_trigger_pulse <= 1'b1;
+
+          // Keep rx_len equal to the decoded payload length.
+          // Firmware can append a '\0' locally when it needs C-string display.
+          rx_len <= decoder_msg_len;
         end else if (decoder_msg_valid) begin
           rx_overflow <= 1'b1;
         end
@@ -307,14 +353,26 @@ module wb_nodenet #(
 
       if (decoder_timeout || decoder_error) begin
         rx_build_count <= 16'h0000;
-        rx_error_sticky <= 1'b1;
+        // Timeout can happen on line noise/partial framing and is exposed
+        // as a pulse in STATUS. Keep sticky error for real decode faults only.
+        if (decoder_error && rx_decode_enable)
+          rx_error_sticky <= 1'b1;
       end
 
-      if (heartbeat_trigger && !tx_stage_valid && !tx_pending && !tx_active) begin
-        tx_pending <= 1'b1;
-        tx_pending_is_heartbeat <= 1'b1;
-        tx_cooldown_counter <= compute_tx_delay(8'h00, prio);
-        tx_led_trigger_pulse <= 1'b1;
+      // heartbeat_trigger is a one-cycle pulse: latch it until TX path is idle.
+      if (!hb_enabled) begin
+        heartbeat_pending <= 1'b0;
+      end else begin
+        if (heartbeat_trigger)
+          heartbeat_pending <= 1'b1;
+
+        if ((heartbeat_pending || heartbeat_trigger) && !tx_stage_valid && !tx_pending && !tx_active) begin
+          tx_pending <= 1'b1;
+          tx_pending_is_heartbeat <= 1'b1;
+          tx_cooldown_counter <= compute_tx_delay(8'h00, prio, node_addr);
+          tx_led_trigger_pulse <= 1'b1;
+          heartbeat_pending <= 1'b0;
+        end
       end
 
       if (wb_fire) begin
@@ -339,12 +397,21 @@ module wb_nodenet #(
 
             REG_CONFIG: begin
               node_addr <= dat_i[7:0];
+              hb_enabled <= (dat_i[7:0] != 8'h00);
               prio <= dat_i[9:8];
-              heartbeat_interval <= {dat_i[31:10], 10'b0};
+              // Keep the existing/default heartbeat interval when firmware
+              // only updates addr/prio (dat_i[31:10] == 0).
+              if (dat_i[31:10] != 22'd0)
+                heartbeat_interval <= {dat_i[31:10], 10'b0};
             end
 
             REG_LED_CFG: begin
               activity_blink_ms <= dat_i;
+            end
+
+            REG_UART_BAUD: begin
+              if (dat_i[19:0] != 20'd0)
+                uart_divisor <= dat_i[19:0];
             end
 
             REG_CONTROL: begin
@@ -353,20 +420,22 @@ module wb_nodenet #(
                 rx_read_idx <= 16'h0000;
                 rx_overflow <= 1'b0;
                 rx_error_sticky <= 1'b0;
+                rx_uart_seen_sticky <= 1'b0;
+                rx_uart_frame_error_sticky <= 1'b0;
                 rx_build_count <= 16'h0000;
               end
 
-              if (dat_i[2] && !tx_stage_valid && !tx_pending && !tx_active) begin
+              if (hb_enabled && dat_i[2] && !tx_stage_valid && !tx_pending && !tx_active) begin
                 tx_pending <= 1'b1;
                 tx_pending_is_heartbeat <= 1'b1;
-                tx_cooldown_counter <= compute_tx_delay(8'h00, prio);
+                tx_cooldown_counter <= compute_tx_delay(8'h00, prio, node_addr);
                 tx_led_trigger_pulse <= 1'b1;
               end
 
               if (dat_i[0] && tx_stage_valid && !tx_pending && !tx_active && (tx_load_count == tx_stage_len)) begin
                 tx_pending <= 1'b1;
                 tx_pending_is_heartbeat <= 1'b0;
-                tx_cooldown_counter <= compute_tx_delay(tx_stage_dst, prio);
+                tx_cooldown_counter <= compute_tx_delay(tx_stage_dst, prio, node_addr);
                 tx_led_trigger_pulse <= 1'b1;
               end
             end
@@ -388,7 +457,11 @@ module wb_nodenet #(
             end
 
             REG_RX_DATA: begin
-              dat_o <= rx_valid ? {24'h000000, rx_buffer[rx_read_idx]} : 32'h0000_0000;
+              if (rx_valid) begin
+                dat_o <= {24'h000000, rx_buffer[rx_read_idx]};
+              end else begin
+                dat_o <= 32'h0000_0000;
+              end
 
               if (rx_valid) begin
                 if (rx_read_idx + 16'h0001 >= rx_len) begin
@@ -412,7 +485,7 @@ module wb_nodenet #(
               dat_o <= {
                 rx_overflow,
                 rx_error_sticky,
-                heartbeat_trigger,
+                (hb_enabled && heartbeat_trigger),
                 (tx_cooldown_counter != 32'h0000_0000),
                 tx_pending,
                 tx_active,
@@ -423,14 +496,19 @@ module wb_nodenet #(
                 uart_de,
                 decoder_timeout,
                 decoder_error,
-                3'b000,
-                prio,
+                rx_uart_seen_sticky,
+                rx_uart_frame_error_sticky,
+                1'b0,
                 tx_load_count[15:0]
               };
             end
 
             REG_LED_CFG: begin
               dat_o <= activity_blink_ms;
+            end
+
+            REG_UART_BAUD: begin
+              dat_o <= {12'h000, uart_divisor};
             end
 
             default: begin
@@ -443,7 +521,10 @@ module wb_nodenet #(
       if (!tx_active && tx_pending && (tx_cooldown_counter == 32'h0000_0000)) begin
         tx_pending <= 1'b0;
         tx_active <= 1'b1;
+        uart_tx_ready_d <= 1'b0;
+        tx_frame_is_heartbeat <= tx_pending_is_heartbeat;
         tx_state <= TX_PREFIX_LF;
+        tx_prefix_lf_count <= 2'b00;
         tx_stream_idx <= 16'h0000;
 
         if (tx_pending_is_heartbeat) begin
@@ -459,12 +540,18 @@ module wb_nodenet #(
         end
       end
 
-      if (tx_active && uart_tx_ready) begin
+      // Drive one TX byte per ready rising edge to keep handshake aligned.
+      if (tx_active && uart_tx_ready && !uart_tx_ready_d) begin
         case (tx_state)
           TX_PREFIX_LF: begin
             uart_tx_data <= `NODENET_LF;
             uart_tx_valid <= 1'b1;
-            tx_state <= TX_PREFIX_SOH;
+            if (tx_prefix_lf_count == 2'd2) begin
+              tx_state <= TX_PREFIX_SOH;
+            end else begin
+              tx_prefix_lf_count <= tx_prefix_lf_count + 2'd1;
+              tx_state <= TX_PREFIX_LF;
+            end
           end
 
           TX_PREFIX_SOH: begin
@@ -494,7 +581,10 @@ module wb_nodenet #(
           TX_LEN_LO: begin
             uart_tx_data <= tx_frame_len[7:0];
             uart_tx_valid <= 1'b1;
-            tx_state <= TX_STX;
+            if (tx_frame_is_heartbeat)
+              tx_state <= TX_EOT;
+            else
+              tx_state <= TX_STX;
           end
 
           TX_STX: begin
@@ -535,13 +625,37 @@ module wb_nodenet #(
           end
 
           TX_CRC: begin
-            uart_tx_data <= tx_crc;
-            uart_tx_valid <= 1'b1;
-            tx_state <= TX_EOT;
+            if (tx_frame_is_heartbeat) begin
+              uart_tx_data <= 8'h00;
+              uart_tx_valid <= 1'b1;
+              tx_state <= TX_IDLE;
+              tx_active <= 1'b0;
+              tx_frame_is_heartbeat <= 1'b0;
+              tx_stage_valid <= 1'b0;
+              tx_pending_is_heartbeat <= 1'b0;
+              tx_stage_dst <= 8'h00;
+              tx_stage_len <= 16'h0000;
+              tx_load_count <= 16'h0000;
+              message_sent_pulse <= 1'b1;
+            end else begin
+              uart_tx_data <= tx_crc;
+              uart_tx_valid <= 1'b1;
+              tx_state <= TX_EOT;
+            end
           end
 
           TX_EOT: begin
             uart_tx_data <= `NODENET_EOT;
+            uart_tx_valid <= 1'b1;
+            if (tx_frame_is_heartbeat)
+              tx_state <= TX_CRC;
+            else
+              tx_state <= TX_TRAILER_ZERO;
+          end
+
+          TX_TRAILER_ZERO: begin
+            // Keep wire behavior aligned with heartbeat trailer convention.
+            uart_tx_data <= 8'h00;
             uart_tx_valid <= 1'b1;
             tx_state <= TX_SUFFIX_LF;
           end
@@ -551,6 +665,7 @@ module wb_nodenet #(
             uart_tx_valid <= 1'b1;
             tx_state <= TX_IDLE;
             tx_active <= 1'b0;
+            tx_frame_is_heartbeat <= 1'b0;
             tx_stage_valid <= 1'b0;
             tx_pending_is_heartbeat <= 1'b0;
             tx_stage_dst <= 8'h00;
