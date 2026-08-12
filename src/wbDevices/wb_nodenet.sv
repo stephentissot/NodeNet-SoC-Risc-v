@@ -305,7 +305,7 @@ module wb_nodenet #(
       uart_tx_ready_d <= 1'b0;
       rx_ignore_counter <= 24'd0;
     end else begin
-      ack_o <= wb_valid && !ack_o;
+      ack_o <= wb_valid;
       uart_tx_ready_d <= uart_tx_ready;
 
       if (uart_de) begin
