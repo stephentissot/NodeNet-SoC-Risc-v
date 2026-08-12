@@ -9,7 +9,7 @@
 #include "version.h"
 #include "sdram.h"
 #include "nodenet.h"
-#include "serial.h"
+#include "Serial.h"
 
 // Hardware — compile-time constants so GCC emits direct MMIO addresses
 static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x10000000UL);

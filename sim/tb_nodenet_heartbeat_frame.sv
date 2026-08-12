@@ -52,6 +52,7 @@ module tb_nodenet_heartbeat_frame;
       cyc_i <= 1'b1;
       stb_i <= 1'b1;
 
+      while (!ack_o) @(posedge clk);
       @(posedge clk);
       cyc_i <= 1'b0;
       stb_i <= 1'b0;
