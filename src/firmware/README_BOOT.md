@@ -39,6 +39,7 @@ make firmware-image APP_LOAD_ADDR=0x20000000 APP_ENTRY_ADDR=0x20000000
 ```
 
 `firmware-image` runs `tools/pack_firmware.py` and generates `build/nodenet_riscv.img`.
+`firmware-image` runs `tools/pack_firmware.py` and generates `build/nodenet_riscv_app.img`.
 
 ## Notes
 

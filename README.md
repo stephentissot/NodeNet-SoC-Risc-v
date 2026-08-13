@@ -115,6 +115,12 @@ make all
 # Firmware only
 make firmware-build
 
+# Build stage0 app image (SDRAM payload + header)
+make firmware-image
+
+# Program firmware payload only in SPI flash (no FPGA rebuild)
+make flash-fw
+
 # Firmware-only FPGA RAM update (ecpbram patch, fallback to make ram if needed)
 make ram-fw
 

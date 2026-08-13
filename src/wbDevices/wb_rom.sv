@@ -17,7 +17,7 @@ module wb_rom #(
 
     initial begin
         $display("Loading firmware...");
-        $readmemh("src/firmware/build/nodenet_riscv.hex", rom);
+        $readmemh("src/firmware/build/boot_stage0.hex", rom);
     end
 
 

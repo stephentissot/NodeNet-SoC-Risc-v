@@ -11,7 +11,9 @@ OPENOCD_SCRIPTS ?= D:/oss-cad-suite/share/openocd/scripts
 # CMSIS-DAP v1 probes are often unstable above 100 kHz on ECP5 JTAG chains.
 ECPDAP_FREQ ?= 100k
 
-FIRMWARE_HEX=src/firmware/build/nodenet_riscv.hex
+FIRMWARE_HEX=src/firmware/build/boot_stage0.hex
+FIRMWARE_IMAGE=src/firmware/build/nodenet_riscv_app.img
+FW_IMAGE_FLASH_OFFSET=0x244000
 FIRMWARE_PREV_HEX=$(BUILD)/nodenet_riscv.prev.hex
 FIRMWARE_PADDED_HEX=$(BUILD)/nodenet_riscv.padded.hex
 FIRMWARE_PREV_PADDED_HEX=$(BUILD)/nodenet_riscv.prev_padded.hex
@@ -32,7 +34,7 @@ SOURCES := src/top.sv \
 SOURCES := $(sort $(SOURCES))
 
 
-.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only
+.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only
 
 all: firmware-build $(BUILD)/$(TOP).bit
 
@@ -79,13 +81,30 @@ lab-fw: lab
 
 # Default firmware build uses src/firmware/main.cpp.
 firmware-build:
-	$(MAKE) -C src/firmware ROM_CAPACITY_BYTES=$(ROM_BYTES)
+	$(MAKE) -C src/firmware bootloader-build ROM_CAPACITY_BYTES=$(ROM_BYTES)
 
 firmware-image:
 	$(MAKE) -C src/firmware firmware-image ROM_CAPACITY_BYTES=$(ROM_BYTES)
 
 firmware-bootloader:
 	$(MAKE) -C src/firmware bootloader-build ROM_CAPACITY_BYTES=$(ROM_BYTES)
+
+# Program only the stage0 application image into SPI flash at fixed partition offset.
+# This avoids FPGA synthesis/P&R when firmware changes and stage0 stays unchanged.
+flash-fw: firmware-image
+	openocd \
+		-s $(OPENOCD_SCRIPTS) \
+		-f interface/cmsis-dap.cfg \
+		-c "transport select jtag" \
+		-f fpga/lattice_ecp5.cfg \
+		-c "set JTAGSPI_CHAIN_ID ecp5.pld; \
+		    source [find cpld/jtagspi.cfg]; \
+		    init; \
+		    jtagspi_init ecp5.pld \"\" -1; \
+		    flash protect 0 0 last off; \
+		    flash write_image erase unlock $(FIRMWARE_IMAGE) $(FW_IMAGE_FLASH_OFFSET); \
+		    flash verify_image $(FIRMWARE_IMAGE) $(FW_IMAGE_FLASH_OFFSET); \
+		    exit"
 
 
 # Ensure firmware is rebuilt before any target that consumes the hex.

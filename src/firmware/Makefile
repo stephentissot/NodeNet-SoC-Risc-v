@@ -20,6 +20,8 @@ PYTHON ?= python
 IMG_TOOL = tools/pack_firmware.py
 APP_LOAD_ADDR ?= 0x20000000
 APP_ENTRY_ADDR ?= 0x20000000
+APP_TARGET ?= nodenet_riscv_app
+APP_LINKER ?= link_app_sdram.ld
 
 # Persistent cache root for third-party library objects/archives.
 # Reuse this pattern if more vendored libraries need expensive rebuilds later.
@@ -100,10 +102,13 @@ FW_IMG = $(BUILD)/$(TARGET).img
 BOOT_TARGET = boot_stage0
 BOOT_ELF = $(BUILD)/$(BOOT_TARGET).elf
 BOOT_HEX = $(BUILD)/$(BOOT_TARGET).hex
+APP_ELF = $(BUILD)/$(APP_TARGET).elf
+APP_BIN = $(BUILD)/$(APP_TARGET).bin
+APP_IMG = $(BUILD)/$(APP_TARGET).img
 
 all: $(BUILD)/$(TARGET).hex firmware-stats
 
-.PHONY: bootloader-build firmware-image
+.PHONY: bootloader-build firmware-app-build firmware-image
 
 .PHONY: firmware-stats
 
@@ -166,14 +171,22 @@ $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 $(FW_BIN): $(BUILD)/$(TARGET).elf
 	$(CROSS)objcopy -O binary $< $@
 
-$(FW_IMG): $(FW_BIN) $(IMG_TOOL)
+$(APP_ELF): $(BUILD)/start.o $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_TEST_OBJ) $(U8G2_LIB) | $(BUILD)
+	$(CROSS)g++ -march=rv32im -mabi=ilp32 -T $(APP_LINKER) -nostartfiles -Wl,--gc-sections --specs=nano.specs --specs=nosys.specs $^ -o $@
+
+$(APP_BIN): $(APP_ELF)
+	$(CROSS)objcopy -O binary $< $@
+
+$(APP_IMG): $(APP_BIN) $(IMG_TOOL)
 	$(PYTHON) $(IMG_TOOL) \
-		--input $(FW_BIN) \
-		--output $(FW_IMG) \
+		--input $(APP_BIN) \
+		--output $(APP_IMG) \
 		--load-addr $(APP_LOAD_ADDR) \
 		--entry-addr $(APP_ENTRY_ADDR)
 
-firmware-image: $(FW_IMG)
+firmware-app-build: $(APP_ELF)
+
+firmware-image: $(APP_IMG)
 
 $(BOOT_OBJ): $(BOOT_SRC) | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
