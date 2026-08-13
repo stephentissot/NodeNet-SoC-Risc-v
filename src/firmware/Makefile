@@ -57,6 +57,7 @@ CFLAGS=-march=rv32im -mabi=ilp32 \
         -MP \
        -I$(U8G2_DIR) \
        -I$(I2C_DIR) \
+	-I$(FLASH_DIR) \
         -I$(SERIAL_DIR) \
         -I$(FLASHDB_INC) \
        -Iinclude \
