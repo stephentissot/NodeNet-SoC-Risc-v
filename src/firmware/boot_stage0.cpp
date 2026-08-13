@@ -59,7 +59,10 @@ public:
         if (out == nullptr) {
             return false;
         }
-        if (flash_offset + size > Flash::kFlashSize) {
+        if (flash_offset > Flash::kFlashSize) {
+            return false;
+        }
+        if (size > (Flash::kFlashSize - flash_offset)) {
             return false;
         }
 
@@ -239,6 +242,10 @@ extern "C" int main(void)
     if (crc != hdr.image_crc32) {
         boot_fault_loop(BootFault::PayloadCrc);
     }
+
+    // We just wrote executable bytes into SDRAM; synchronize instruction fetch.
+    // 0x0000100f is the RISC-V FENCE.I encoding.
+    asm volatile(".word 0x0000100f" ::: "memory");
 
     using entry_fn_t = void (*)();
     const entry_fn_t entry = reinterpret_cast<entry_fn_t>(hdr.entry_addr);
