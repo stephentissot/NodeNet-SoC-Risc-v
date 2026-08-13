@@ -2,7 +2,16 @@
 
 ## Overview
 
-The Colorlight i9 SoC includes a comprehensive **test firmware** (`test_main.cpp`) that exercises all peripherals and displays results on an OLED display via I2C.
+The Colorlight i9 SoC now boots in 2 stages:
+
+- Stage0 in ROM BRAM (`boot_stage0.hex`)
+- Application image in SPI flash (`nodenet_riscv_app.img`) copied to SDRAM at boot
+
+This file covers:
+
+1. Boot robustness campaign (stage0 + flash image faults)
+2. Legacy peripheral test firmware notes (`test_main.cppold`)
+2. Boot robustness campaign (missing image / invalid CRC / invalid size)
 
 Test coverage:
 - ✓ LED GPIO (D2 blink)
@@ -13,38 +22,89 @@ Test coverage:
 - ✓ SPI Flash erase/program/readback cycle
 - ✓ SPI Flash key-value parameter storage
 
-## Building the Test Firmware
+## Legacy Peripheral Test Firmware
 
-By default, the project builds with `main.cpp` (NodeNet485 echo loop). To build the test suite:
-
-```bash
-# Using bash (recommended for Unix-like environment):
-cd d:\FPGA\projects\NodeNet-SoC-RiscV
-bash -c "make clean && make -C src/firmware MAIN_SRC=test_main.cpp && make all"
-
-# Or using PowerShell on Windows (with subshell):
-cd d:\FPGA\projects\NodeNet-SoC-RiscV
-powershell -Command {& make clean; make -C src/firmware -e MAIN_SRC=test_main.cpp; make all}
-
-# Or modify src/firmware/Makefile to use test_main.cpp by default (not recommended for CI)
-sed -i 's/^MAIN_SRC \?= main.cpp/MAIN_SRC ?= test_main.cpp/' src/firmware/Makefile
-make clean && make all
-```
-
-**Output**:
-- `src/firmware/build/nodenet_riscv.hex` – Test firmware (42 KB)
-- `build/top.bit` – FPGA bitstream (~391 KB)
+The historical peripheral test program currently exists as `src/firmware/test_main.cppold`.
+It is not wired into the default stage0 app-image flow and currently requires source refresh
+to match the latest firmware APIs.
 
 ## Programming the FPGA
 
-Once bitstream is built:
+Common programming flows:
 
 ```bash
-# Program to RAM (volatile, lost on power cycle):
+# Build stage0 + HDL bitstream from sources
+make all
+
+# Program FPGA SRAM (volatile HDL)
 make ram
 
-# Program to Flash (persistent):
+# Program FPGA configuration flash (persistent HDL cold-boot image)
 make flash
+
+# Program only firmware app image partition, then restart stage0 quickly
+make flash-fw-run
+```
+
+## Build/Program Matrix
+
+Use this matrix depending on what changed:
+
+1. HDL changed (`src/top.sv`, `src/wbDevices/*.sv`, etc.) and you want volatile test in FPGA RAM:
+  - `make all`
+  - `make ram`
+
+2. HDL changed and you want persistent cold-boot from flash:
+  - `make all`
+  - `make flash`
+  - `make flash-fw` (because `make flash` can erase app partition)
+
+3. Firmware app only changed (`main.cpp`, libs, logic) and stage0 unchanged:
+  - `make flash-fw-run`
+
+4. Stage0 changed (`boot_stage0.cpp`, boot header logic):
+  - `make all`
+  - `make ram` for quick validation
+  - optional persistent path: `make flash` then `make flash-fw`
+
+5. Build only stage0 ROM artifact (no programming):
+  - `make firmware-build`
+
+6. Build only app image artifact (no programming):
+  - `make firmware-image`
+
+7. Legacy one-shot test firmware build target:
+  - `make firmware-test` (currently disabled with explicit error)
+
+## Boot Robustness Campaign
+
+Generate fault injection images:
+
+```bash
+make firmware-image-tests
+```
+
+Run each scenario:
+
+1. Missing image
+  - `make flash-fw-test-missing`
+  - `make ram-fast`
+  - Expected D2 code: 2 pulses
+
+2. Invalid payload CRC
+  - `make flash-fw-test-crc`
+  - `make ram-fast`
+  - Expected D2 code: 10 pulses
+
+3. Invalid image size/range
+  - `make flash-fw-test-size`
+  - `make ram-fast`
+  - Expected D2 code: 7 pulses
+
+Recovery to valid firmware:
+
+```bash
+make flash-fw-run
 ```
 
 ## Using the Test Suite

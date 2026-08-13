@@ -125,7 +125,7 @@ $(BUILD)/start.o: start.S | $(BUILD)
 	$(CROSS)gcc $(CFLAGS) -c $< -o $@
 
 $(MAIN_OBJ): $(MAIN_SRC) | $(BUILD)
-	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
+	$(CROSS)g++ -x c++ $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/u8g2_hal.o: lib/u8g2_hal/u8g2_hal.cpp | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@

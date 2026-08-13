@@ -43,7 +43,7 @@ SOURCES := src/top.sv \
 SOURCES := $(sort $(SOURCES))
 
 
-.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only
+.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw-check-image flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only
 
 all: firmware-build $(BUILD)/$(TOP).bit
 
@@ -107,6 +107,13 @@ firmware-bootloader:
 # Program only the stage0 application image into SPI flash at fixed partition offset.
 # This avoids FPGA synthesis/P&R when firmware changes and stage0 stays unchanged.
 flash-fw-check: firmware-image
+	$(MAKE) flash-fw-check-image
+
+flash-fw-check-image:
+	@if [ ! -f $(FIRMWARE_IMAGE) ]; then \
+		echo "[FWIMG][ERROR] Missing image: $(FIRMWARE_IMAGE)"; \
+		exit 2; \
+	fi
 	@img_size=$$(wc -c < $(FIRMWARE_IMAGE)); \
 	offset=$$(( $(FW_IMAGE_FLASH_OFFSET) )); \
 	min_off=$$(( $(FW_IMAGE_MIN_OFFSET) )); \
@@ -179,7 +186,9 @@ $(FIRMWARE_HEX): firmware-build
 
 # Build test firmware (src/firmware/test_main.cpp) without manual MAIN_SRC override.
 firmware-test:
-	$(MAKE) -C src/firmware MAIN_SRC=test_main.cpp ROM_CAPACITY_BYTES=$(ROM_BYTES)
+	@echo "[TEST][ERROR] Legacy test firmware target is not maintained with current APIs."; \
+	echo "[TEST][ERROR] Use boot robustness flow in TEST.md (firmware-image-tests + flash-fw-test-*)."; \
+	exit 2
 
 # Build complete bring-up image (test firmware + FPGA bitstream).
 bringup: firmware-test $(BUILD)/$(TOP).bit
