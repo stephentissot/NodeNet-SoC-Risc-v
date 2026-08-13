@@ -121,6 +121,10 @@ make firmware-image
 # Program firmware payload only in SPI flash (no FPGA rebuild)
 make flash-fw
 
+# Optional: enforce verify failure as fatal (default is tolerant for OpenOCD backends
+# that do not support checksum_memory on this target)
+make FW_STRICT_VERIFY=1 flash-fw
+
 # Generate boot robustness test images (missing/size/crc fault injections)
 make firmware-image-tests
 
