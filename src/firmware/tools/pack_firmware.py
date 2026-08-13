@@ -8,6 +8,7 @@ FW_IMAGE_MAGIC = 0x46574E4E
 FW_IMAGE_VERSION = 0x0001
 FW_IMAGE_HEADER_SIZE = 64
 FW_IMAGE_OFFSET = 64
+FW_IMAGE_FORMAT = "<IHHIIIIIII28s"
 
 
 def parse_u32(text: str) -> int:
@@ -19,12 +20,15 @@ def crc32(data: bytes) -> int:
 
 
 def build_header(payload: bytes, load_addr: int, entry_addr: int, flags: int) -> bytes:
+    if struct.calcsize(FW_IMAGE_FORMAT) != FW_IMAGE_HEADER_SIZE:
+        raise RuntimeError("FW_IMAGE_FORMAT size mismatch")
+
     image_size = len(payload)
     image_crc = crc32(payload)
 
     # header_crc32 is written as zero for checksum computation.
     header = struct.pack(
-        "<IHHIIIIIII24s",
+        FW_IMAGE_FORMAT,
         FW_IMAGE_MAGIC,
         FW_IMAGE_VERSION,
         FW_IMAGE_HEADER_SIZE,
@@ -35,13 +39,13 @@ def build_header(payload: bytes, load_addr: int, entry_addr: int, flags: int) ->
         image_crc,
         0,
         FW_IMAGE_OFFSET,
-        b"\x00" * 24,
+        b"\x00" * 28,
     )
 
     header_crc = crc32(header)
 
     return struct.pack(
-        "<IHHIIIIIII24s",
+        FW_IMAGE_FORMAT,
         FW_IMAGE_MAGIC,
         FW_IMAGE_VERSION,
         FW_IMAGE_HEADER_SIZE,
@@ -52,7 +56,7 @@ def build_header(payload: bytes, load_addr: int, entry_addr: int, flags: int) ->
         image_crc,
         header_crc,
         FW_IMAGE_OFFSET,
-        b"\x00" * 24,
+        b"\x00" * 28,
     )
 
 

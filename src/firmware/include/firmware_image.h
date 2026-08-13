@@ -25,7 +25,7 @@ typedef struct __attribute__((packed)) fw_image_header {
     uint32_t image_crc32;
     uint32_t header_crc32;
     uint32_t image_offset;
-    uint8_t reserved[24];
+    uint8_t reserved[28];
 } fw_image_header_t;
 
 #ifdef __cplusplus

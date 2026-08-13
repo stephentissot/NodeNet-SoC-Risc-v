@@ -179,7 +179,8 @@ targets in `Makefile` to ecpdap. Reference commands:
 ```
 
 **Output**:
-- `src/firmware/build/nodenet_riscv.hex` – Firmware binary (loaded into ROM)
+- `src/firmware/build/boot_stage0.hex` – Stage0 bootloader image (loaded into ROM)
+- `src/firmware/build/nodenet_riscv_app.img` – SDRAM app payload with stage0 header (written in SPI flash)
 - `build/top.bit` – FPGA bitstream (~300 KB)
 - `build/top.json` – Netlist (debug/inspection)
 

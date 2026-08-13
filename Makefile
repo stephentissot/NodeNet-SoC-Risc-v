@@ -10,10 +10,15 @@ LPF=constraints/colorlight_i9.lpf
 OPENOCD_SCRIPTS ?= D:/oss-cad-suite/share/openocd/scripts
 # CMSIS-DAP v1 probes are often unstable above 100 kHz on ECP5 JTAG chains.
 ECPDAP_FREQ ?= 100k
+PYTHON ?= python
 
 FIRMWARE_HEX=src/firmware/build/boot_stage0.hex
 FIRMWARE_IMAGE=src/firmware/build/nodenet_riscv_app.img
 FW_IMAGE_FLASH_OFFSET=0x244000
+FW_IMAGE_MIN_OFFSET=0x244000
+FLASH_TOTAL_BYTES=0x800000
+FW_IMAGE_SLOT_BYTES=0x5BC000
+FW_IMAGE_VERIFY_TOOL=src/firmware/tools/verify_firmware_image.py
 FIRMWARE_PREV_HEX=$(BUILD)/nodenet_riscv.prev.hex
 FIRMWARE_PADDED_HEX=$(BUILD)/nodenet_riscv.padded.hex
 FIRMWARE_PREV_PADDED_HEX=$(BUILD)/nodenet_riscv.prev_padded.hex
@@ -34,7 +39,7 @@ SOURCES := src/top.sv \
 SOURCES := $(sort $(SOURCES))
 
 
-.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only
+.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw flash-fw-run bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only
 
 all: firmware-build $(BUILD)/$(TOP).bit
 
@@ -91,7 +96,28 @@ firmware-bootloader:
 
 # Program only the stage0 application image into SPI flash at fixed partition offset.
 # This avoids FPGA synthesis/P&R when firmware changes and stage0 stays unchanged.
-flash-fw: firmware-image
+flash-fw-check: firmware-image
+	@img_size=$$(wc -c < $(FIRMWARE_IMAGE)); \
+	offset=$$(( $(FW_IMAGE_FLASH_OFFSET) )); \
+	min_off=$$(( $(FW_IMAGE_MIN_OFFSET) )); \
+	flash_total=$$(( $(FLASH_TOTAL_BYTES) )); \
+	slot_size=$$(( $(FW_IMAGE_SLOT_BYTES) )); \
+	if [ $$offset -lt $$min_off ]; then \
+		echo "[FWIMG][ERROR] FW_IMAGE_FLASH_OFFSET is below allowed minimum"; \
+		exit 2; \
+	fi; \
+	if [ $$img_size -gt $$slot_size ]; then \
+		echo "[FWIMG][ERROR] image too large for slot: $$img_size > $$slot_size"; \
+		exit 2; \
+	fi; \
+	end_off=$$((offset + img_size)); \
+	if [ $$end_off -gt $$flash_total ]; then \
+		echo "[FWIMG][ERROR] image exceeds flash range: end=$$end_off total=$$flash_total"; \
+		exit 2; \
+	fi; \
+	$(PYTHON) $(FW_IMAGE_VERIFY_TOOL) --input $(FIRMWARE_IMAGE)
+
+flash-fw: flash-fw-check
 	openocd \
 		-s $(OPENOCD_SCRIPTS) \
 		-f interface/cmsis-dap.cfg \
@@ -105,6 +131,11 @@ flash-fw: firmware-image
 		    flash write_image erase unlock $(FIRMWARE_IMAGE) $(FW_IMAGE_FLASH_OFFSET); \
 		    flash verify_image $(FIRMWARE_IMAGE) $(FW_IMAGE_FLASH_OFFSET); \
 		    exit"
+
+# End-to-end firmware-only cycle: build+verify image, program flash partition, then
+# reload the current bitstream in SRAM to restart stage0 without synthesis/P&R.
+flash-fw-run: flash-fw
+	$(MAKE) ram-fast
 
 
 # Ensure firmware is rebuilt before any target that consumes the hex.

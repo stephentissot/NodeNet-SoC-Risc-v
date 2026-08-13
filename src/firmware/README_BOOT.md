@@ -38,8 +38,15 @@ make bootloader-build
 make firmware-image APP_LOAD_ADDR=0x20000000 APP_ENTRY_ADDR=0x20000000
 ```
 
-`firmware-image` runs `tools/pack_firmware.py` and generates `build/nodenet_riscv.img`.
 `firmware-image` runs `tools/pack_firmware.py` and generates `build/nodenet_riscv_app.img`.
+
+From project root, firmware-only flash update flow is:
+
+```bash
+make flash-fw-check   # build+package+structural verification
+make flash-fw         # program image at 0x244000
+make flash-fw-run     # flash-fw + FPGA RAM reload (stage0 restart)
+```
 
 ## Notes
 
