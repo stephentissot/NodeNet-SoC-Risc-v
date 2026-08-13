@@ -152,39 +152,12 @@ flash-fw-write-image:
 		echo "[FWIMG][ERROR] IMAGE_TO_FLASH larger than slot"; \
 		exit 2; \
 	fi
-	openocd \
-		-s $(OPENOCD_SCRIPTS) \
-		-f interface/cmsis-dap.cfg \
-		-c "transport select jtag" \
-		-f fpga/lattice_ecp5.cfg \
-		-c "set JTAGSPI_CHAIN_ID ecp5.pld; \
-		    source [find cpld/jtagspi.cfg]; \
-		    init; \
-		    jtagspi_init ecp5.pld \"\" -1; \
-		    flash protect 0 0 last off; \
-		    flash write_image erase unlock $(IMAGE_TO_FLASH) $(FW_IMAGE_FLASH_OFFSET); \
-		    exit"
-	@verify_rc=0; \
-	openocd \
-		-s $(OPENOCD_SCRIPTS) \
-		-f interface/cmsis-dap.cfg \
-		-c "transport select jtag" \
-		-f fpga/lattice_ecp5.cfg \
-		-c "set JTAGSPI_CHAIN_ID ecp5.pld; \
-		    source [find cpld/jtagspi.cfg]; \
-		    init; \
-		    jtagspi_init ecp5.pld \"\" -1; \
-		    flash verify_bank 0 $(IMAGE_TO_FLASH) $(FW_IMAGE_FLASH_OFFSET); \
-		    exit" || verify_rc=$$?; \
-	if [ $$verify_rc -ne 0 ]; then \
-		if [ "$(FW_STRICT_VERIFY)" = "1" ]; then \
-			echo "[FWIMG][ERROR] OpenOCD flash verify_bank failed (strict mode enabled)."; \
-			exit $$verify_rc; \
-		else \
-			echo "[FWIMG][WARN] OpenOCD verify_bank failed on this backend."; \
-			echo "[FWIMG][WARN] Continuing because FW_STRICT_VERIFY=$(FW_STRICT_VERIFY)."; \
-		fi; \
-	fi
+	@ofl_verify=""; \
+	if [ "$(FW_STRICT_VERIFY)" = "1" ]; then \
+		ofl_verify="--verify"; \
+	fi; \
+	echo "[FWIMG] openFPGALoader write offset=$(FW_IMAGE_FLASH_OFFSET) strict=$(FW_STRICT_VERIFY)"; \
+	openFPGALoader -b colorlight-i9 -f --unprotect-flash $$ofl_verify -o $(FW_IMAGE_FLASH_OFFSET) $(IMAGE_TO_FLASH)
 
 # End-to-end firmware-only cycle: build+verify image, program flash partition, then
 # reload the current bitstream in SRAM to restart stage0 without synthesis/P&R.
