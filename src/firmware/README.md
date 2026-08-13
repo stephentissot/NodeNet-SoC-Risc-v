@@ -117,7 +117,7 @@ led1.On();         // set default state ON
 led1.Off();        // set default state OFF
 ```
 
-`test_main.cpp` currently uses these two addresses for RJ45 LED validation.
+These two addresses remain available for diagnostics or visual activity signaling.
 
 ---
 

@@ -302,7 +302,7 @@ parameter BLINK_CYCLES = 32'd2500000; // 100 ms @ 25 MHz
 
 **Firmware usage**:
 - See `src/firmware/include/led.h` for helper functions and `wb_led::Led` wrapper.
-- Current policy: `main.cpp` uses only D2 (`wb_gpio`), while `test_main.cpp` exercises RJ45 LEDs through `wb_led`.
+- Current policy: D2 (`wb_gpio`) is used as the primary boot/status indicator; RJ45 LEDs can be driven through `wb_led` when needed.
 - Current board policy for external LEDs is active-low with pull-up, so wrappers set `ACTIVE_LOW=1` in top-level integrations.
 
 ---

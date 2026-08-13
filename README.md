@@ -124,14 +124,16 @@ make flash-fw
 # Generate boot robustness test images (missing/size/crc fault injections)
 make firmware-image-tests
 
+# Run boot robustness fault scenarios
+make flash-fw-test-missing
+make flash-fw-test-crc
+make flash-fw-test-size
+
 # Firmware-only FPGA RAM update (ecpbram patch, fallback to make ram if needed)
 make ram-fw
 
-# Firmware test build (uses src/firmware/test_main.cpp)
-make firmware-test
-
-# Full bring-up build (test firmware + FPGA bitstream)
-make bringup
+# Boot fault campaign checklist and expected blink codes
+# See TEST.md
 
 # FPGA synthesis only (requires pre-built firmware)
 make
@@ -250,7 +252,7 @@ NodeNet RJ45 pinout (both connectors):
 - Active-low wiring policy: GPIO high = LED OFF, GPIO low = LED ON.
 - LPF enables pull-up on these pins for deterministic OFF level during startup.
 - Write command bit0 triggers a non-blocking pulse (duration can be overridden by firmware).
-- Main firmware currently keeps RJ45 LEDs for dedicated test firmware (`test_main.cpp`).
+- RJ45 LEDs are available through `wb_led` and can be used by application firmware when needed.
 
 ### NodeNet Activity LEDs (100% hardware)
 - **RX activity LED (E5, green)**: default ON, pulses OFF when a valid frame is received.
