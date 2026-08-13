@@ -154,16 +154,16 @@ firmware-stats: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).hex
 	ram_used=$$((data + bss)); ram_total=65536; \
 	ram_pct=$$(awk "BEGIN { printf \"%.2f\", ($$ram_used*100)/$$ram_total }"); \
 	hex_file_bytes=$$(wc -c < $(BUILD)/$(TARGET).hex); \
-	hex_data_bytes=$$(awk '{for(i=1;i<=NF;i++) if($$i !~ /^@/) c++} END{print c+0}' $(BUILD)/$(TARGET).hex); \
+	hex_used_bytes=$$(awk 'BEGIN{addr=0;max=0} {for(i=1;i<=NF;i++){tok=toupper($$i); if(tok ~ /^@/){addr=strtonum("0x" substr(tok,2));} else {addr++; if(addr>max) max=addr;}}} END{print max+0}' $(BUILD)/$(TARGET).hex); \
 	rom_cap=$(ROM_CAPACITY_BYTES); \
-	rom_pct=$$(awk "BEGIN { printf \"%.2f\", ($$hex_data_bytes*100)/$$rom_cap }"); \
+	rom_pct=$$(awk "BEGIN { printf \"%.2f\", ($$hex_used_bytes*100)/$$rom_cap }"); \
 	echo "[FW] ELF text/data/bss: $$text/$$data/$$bss bytes"; \
 	echo "[FW] RAM usage (.data + .bss): $$ram_used / $$ram_total bytes ($$ram_pct%)"; \
 	echo "[FW] HEX file size: $$hex_file_bytes bytes"; \
-	echo "[FW] HEX payload bytes: $$hex_data_bytes bytes"; \
-	echo "[FW] ROM usage: $$hex_data_bytes / $$rom_cap bytes ($$rom_pct%)"; \
-	if [ $$hex_data_bytes -gt $$rom_cap ]; then \
-		echo "[FW][ERROR] Firmware payload exceeds wb_rom capacity by $$((hex_data_bytes-rom_cap)) bytes"; \
+	echo "[FW] HEX payload bytes: $$hex_used_bytes bytes"; \
+	echo "[FW] ROM usage: $$hex_used_bytes / $$rom_cap bytes ($$rom_pct%)"; \
+	if [ $$hex_used_bytes -gt $$rom_cap ]; then \
+		echo "[FW][ERROR] Firmware payload exceeds wb_rom capacity by $$((hex_used_bytes-rom_cap)) bytes"; \
 		exit 2; \
 	fi
 
