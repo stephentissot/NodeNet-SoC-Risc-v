@@ -14,7 +14,6 @@ module top (
     input  wire rx1,
     output wire tx1,
     // SPI Flash (W25Q64) — Configuration Flash Access
-    // SCK is generated internally (USRMCLK), not a GPIO pin
     output wire flash_cs_n,
     output wire flash_mosi,
     input  wire flash_miso,
