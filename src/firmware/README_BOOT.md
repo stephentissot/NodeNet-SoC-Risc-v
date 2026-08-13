@@ -53,3 +53,53 @@ make flash-fw-run     # flash-fw + FPGA RAM reload (stage0 restart)
 - Stage0 validates: magic, version, header size, bounds in SDRAM range, header CRC, payload CRC.
 - On validation failure, stage0 enters a LED blink fault loop.
 - Running firmware from SDRAM requires the application to be linked for SDRAM addresses.
+
+## Stage0 Blink Codes
+
+Stage0 reports boot errors on D2 LED with pulse-count patterns:
+
+- 1 pulse: header read failure from flash
+- 2 pulses: image absent (erased header, `0xFFFFFFFF` magic)
+- 3 pulses: invalid magic
+- 4 pulses: unsupported header version
+- 5 pulses: invalid header size
+- 6 pulses: header CRC mismatch
+- 7 pulses: invalid image size/range
+- 8 pulses: invalid entry address range
+- 9 pulses: payload read failure during copy
+- 10 pulses: payload CRC mismatch
+- 11 pulses: unexpected return from application entry
+
+## Hardware Robustness Checklist
+
+Preconditions:
+
+1. Build/program FPGA once with stage0 in ROM (`make all` then `make ram` if needed).
+2. Ensure firmware app slot offset remains `0x244000`.
+
+Test assets:
+
+1. Generate test images: `make firmware-image-tests`
+
+Test 1 — Missing image:
+
+1. Program missing image pattern: `make flash-fw-test-missing`
+2. Reload FPGA SRAM image: `make ram-fast`
+3. Expected: stage0 stays in fault loop, D2 blinks 2 pulses.
+
+Test 2 — Invalid payload CRC:
+
+1. Program CRC-corrupted image: `make flash-fw-test-crc`
+2. Reload FPGA SRAM image: `make ram-fast`
+3. Expected: stage0 copies then fails CRC, D2 blinks 10 pulses.
+
+Test 3 — Invalid size:
+
+1. Program size-invalid image: `make flash-fw-test-size`
+2. Reload FPGA SRAM image: `make ram-fast`
+3. Expected: stage0 rejects header/range, D2 blinks 7 pulses.
+
+Recovery:
+
+1. Reprogram valid app image: `make flash-fw-run`
+2. Expected: normal boot and jump to application.

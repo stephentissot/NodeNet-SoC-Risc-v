@@ -121,6 +121,9 @@ make firmware-image
 # Program firmware payload only in SPI flash (no FPGA rebuild)
 make flash-fw
 
+# Generate boot robustness test images (missing/size/crc fault injections)
+make firmware-image-tests
+
 # Firmware-only FPGA RAM update (ecpbram patch, fallback to make ram if needed)
 make ram-fw
 

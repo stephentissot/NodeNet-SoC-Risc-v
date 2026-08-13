@@ -14,11 +14,15 @@ PYTHON ?= python
 
 FIRMWARE_HEX=src/firmware/build/boot_stage0.hex
 FIRMWARE_IMAGE=src/firmware/build/nodenet_riscv_app.img
+FIRMWARE_IMAGE_BAD_CRC=src/firmware/build/nodenet_riscv_app.bad_crc.img
+FIRMWARE_IMAGE_BAD_SIZE=src/firmware/build/nodenet_riscv_app.bad_size.img
+FIRMWARE_IMAGE_MISSING=src/firmware/build/nodenet_riscv_app.missing.img
 FW_IMAGE_FLASH_OFFSET=0x244000
 FW_IMAGE_MIN_OFFSET=0x244000
 FLASH_TOTAL_BYTES=0x800000
 FW_IMAGE_SLOT_BYTES=0x5BC000
 FW_IMAGE_VERIFY_TOOL=src/firmware/tools/verify_firmware_image.py
+FW_IMAGE_TEST_TOOL=src/firmware/tools/make_boot_test_images.py
 FIRMWARE_PREV_HEX=$(BUILD)/nodenet_riscv.prev.hex
 FIRMWARE_PADDED_HEX=$(BUILD)/nodenet_riscv.padded.hex
 FIRMWARE_PREV_PADDED_HEX=$(BUILD)/nodenet_riscv.prev_padded.hex
@@ -39,7 +43,7 @@ SOURCES := src/top.sv \
 SOURCES := $(sort $(SOURCES))
 
 
-.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw flash-fw-run bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only
+.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only
 
 all: firmware-build $(BUILD)/$(TOP).bit
 
@@ -91,6 +95,12 @@ firmware-build:
 firmware-image:
 	$(MAKE) -C src/firmware firmware-image ROM_CAPACITY_BYTES=$(ROM_BYTES)
 
+firmware-image-tests: firmware-image
+	$(PYTHON) $(FW_IMAGE_TEST_TOOL) \
+		--input $(FIRMWARE_IMAGE) \
+		--out-dir src/firmware/build \
+		--prefix nodenet_riscv_app
+
 firmware-bootloader:
 	$(MAKE) -C src/firmware bootloader-build ROM_CAPACITY_BYTES=$(ROM_BYTES)
 
@@ -118,6 +128,22 @@ flash-fw-check: firmware-image
 	$(PYTHON) $(FW_IMAGE_VERIFY_TOOL) --input $(FIRMWARE_IMAGE)
 
 flash-fw: flash-fw-check
+	$(MAKE) IMAGE_TO_FLASH=$(FIRMWARE_IMAGE) flash-fw-write-image
+
+flash-fw-write-image:
+	@if [ -z "$(IMAGE_TO_FLASH)" ]; then \
+		echo "[FWIMG][ERROR] IMAGE_TO_FLASH is empty"; \
+		exit 2; \
+	fi
+	@if [ ! -f $(IMAGE_TO_FLASH) ]; then \
+		echo "[FWIMG][ERROR] Missing image: $(IMAGE_TO_FLASH)"; \
+		exit 2; \
+	fi
+	@img_size=$$(wc -c < $(IMAGE_TO_FLASH)); \
+	if [ $$img_size -gt $$(( $(FW_IMAGE_SLOT_BYTES) )) ]; then \
+		echo "[FWIMG][ERROR] IMAGE_TO_FLASH larger than slot"; \
+		exit 2; \
+	fi
 	openocd \
 		-s $(OPENOCD_SCRIPTS) \
 		-f interface/cmsis-dap.cfg \
@@ -128,14 +154,23 @@ flash-fw: flash-fw-check
 		    init; \
 		    jtagspi_init ecp5.pld \"\" -1; \
 		    flash protect 0 0 last off; \
-		    flash write_image erase unlock $(FIRMWARE_IMAGE) $(FW_IMAGE_FLASH_OFFSET); \
-		    flash verify_image $(FIRMWARE_IMAGE) $(FW_IMAGE_FLASH_OFFSET); \
+		    flash write_image erase unlock $(IMAGE_TO_FLASH) $(FW_IMAGE_FLASH_OFFSET); \
+		    flash verify_image $(IMAGE_TO_FLASH) $(FW_IMAGE_FLASH_OFFSET); \
 		    exit"
 
 # End-to-end firmware-only cycle: build+verify image, program flash partition, then
 # reload the current bitstream in SRAM to restart stage0 without synthesis/P&R.
 flash-fw-run: flash-fw
 	$(MAKE) ram-fast
+
+flash-fw-test-missing: firmware-image-tests
+	$(MAKE) IMAGE_TO_FLASH=$(FIRMWARE_IMAGE_MISSING) flash-fw-write-image
+
+flash-fw-test-size: firmware-image-tests
+	$(MAKE) IMAGE_TO_FLASH=$(FIRMWARE_IMAGE_BAD_SIZE) flash-fw-write-image
+
+flash-fw-test-crc: firmware-image-tests
+	$(MAKE) IMAGE_TO_FLASH=$(FIRMWARE_IMAGE_BAD_CRC) flash-fw-write-image
 
 
 # Ensure firmware is rebuilt before any target that consumes the hex.

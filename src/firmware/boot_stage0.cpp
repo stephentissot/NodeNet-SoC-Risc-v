@@ -16,6 +16,21 @@ static constexpr uint32_t kSdramMax = SDRAM_BASE + SDRAM_SIZE;
 
 static volatile uint32_t* const kLedD2 = reinterpret_cast<volatile uint32_t*>(kLedBase);
 
+enum class BootFault : uint8_t {
+    None = 0,
+    HeaderRead = 1,
+    ImageAbsent = 2,
+    HeaderMagic = 3,
+    HeaderVersion = 4,
+    HeaderSize = 5,
+    HeaderCrc = 6,
+    ImageSize = 7,
+    EntryRange = 8,
+    ImageRead = 9,
+    PayloadCrc = 10,
+    UnexpectedReturn = 11
+};
+
 static uint32_t crc32_update(uint32_t crc, uint8_t data)
 {
     crc ^= data;
@@ -108,41 +123,74 @@ static bool addr_range_ok(uint32_t start, uint32_t size)
     return end <= kSdramMax;
 }
 
-static bool header_valid(const fw_image_header_t& hdr)
+static bool image_flash_range_ok(const fw_image_header_t& hdr)
 {
-    if (hdr.magic != FW_IMAGE_MAGIC) {
+    const uint32_t payload_start = kImageFlashBase + hdr.image_offset;
+    if (payload_start < kImageFlashBase) {
         return false;
+    }
+    const uint32_t payload_end = payload_start + hdr.image_size;
+    if (payload_end < payload_start) {
+        return false;
+    }
+    return payload_end <= Flash::kFlashSize;
+}
+
+static BootFault header_fault(const fw_image_header_t& hdr)
+{
+    if (hdr.magic == 0xFFFFFFFFu) {
+        return BootFault::ImageAbsent;
+    }
+    if (hdr.magic != FW_IMAGE_MAGIC) {
+        return BootFault::HeaderMagic;
     }
     if (hdr.header_version != FW_IMAGE_VERSION) {
-        return false;
+        return BootFault::HeaderVersion;
     }
     if (hdr.header_size != FW_IMAGE_HEADER_SIZE) {
-        return false;
+        return BootFault::HeaderSize;
     }
-    if (hdr.image_offset < hdr.header_size) {
-        return false;
-    }
-    if (!addr_range_ok(hdr.load_addr, hdr.image_size)) {
-        return false;
-    }
-    if (hdr.entry_addr < hdr.load_addr || hdr.entry_addr >= (hdr.load_addr + hdr.image_size)) {
-        return false;
-    }
-
     fw_image_header_t tmp = hdr;
     tmp.header_crc32 = 0u;
     const uint32_t computed = crc32_buffer(reinterpret_cast<const uint8_t*>(&tmp), sizeof(tmp));
-    return computed == hdr.header_crc32;
+    if (computed != hdr.header_crc32) {
+        return BootFault::HeaderCrc;
+    }
+
+    if (hdr.image_offset < hdr.header_size || !image_flash_range_ok(hdr)) {
+        return BootFault::ImageSize;
+    }
+
+    if (!addr_range_ok(hdr.load_addr, hdr.image_size)) {
+        return BootFault::ImageSize;
+    }
+
+    if (hdr.entry_addr < hdr.load_addr || hdr.entry_addr >= (hdr.load_addr + hdr.image_size)) {
+        return BootFault::EntryRange;
+    }
+
+    return BootFault::None;
 }
 
-[[noreturn]] static void boot_fault_loop(uint32_t blink_div)
+static inline void spin_delay(uint32_t cycles)
 {
-    uint32_t ctr = 0;
+    volatile uint32_t ctr = cycles;
+    while (ctr != 0u) {
+        --ctr;
+    }
+}
+
+[[noreturn]] static void boot_fault_loop(BootFault fault)
+{
+    const uint8_t code = static_cast<uint8_t>(fault);
     while (true) {
-        ++ctr;
-        if ((ctr % blink_div) == 0u) {
-            *kLedD2 ^= 1u;
+        for (uint8_t i = 0; i < code; ++i) {
+            *kLedD2 = 1u;
+            spin_delay(300000u);
+            *kLedD2 = 0u;
+            spin_delay(300000u);
         }
+        spin_delay(1200000u);
     }
 }
 
@@ -157,11 +205,12 @@ extern "C" int main(void)
 
     fw_image_header_t hdr = {};
     if (!reader.readBytes(kImageFlashBase, reinterpret_cast<uint8_t*>(&hdr), sizeof(hdr))) {
-        boot_fault_loop(500000u);
+        boot_fault_loop(BootFault::HeaderRead);
     }
 
-    if (!header_valid(hdr)) {
-        boot_fault_loop(250000u);
+    const BootFault hdr_fault = header_fault(hdr);
+    if (hdr_fault != BootFault::None) {
+        boot_fault_loop(hdr_fault);
     }
 
     volatile uint8_t* dst = reinterpret_cast<volatile uint8_t*>(hdr.load_addr);
@@ -175,7 +224,7 @@ extern "C" int main(void)
 
         const uint32_t src_off = kImageFlashBase + hdr.image_offset + copied;
         if (!reader.readBytes(src_off, chunk, n)) {
-            boot_fault_loop(125000u);
+            boot_fault_loop(BootFault::ImageRead);
         }
 
         for (uint32_t i = 0; i < n; ++i) {
@@ -188,12 +237,12 @@ extern "C" int main(void)
 
     crc = ~crc;
     if (crc != hdr.image_crc32) {
-        boot_fault_loop(60000u);
+        boot_fault_loop(BootFault::PayloadCrc);
     }
 
     using entry_fn_t = void (*)();
     const entry_fn_t entry = reinterpret_cast<entry_fn_t>(hdr.entry_addr);
     entry();
 
-    boot_fault_loop(30000u);
+    boot_fault_loop(BootFault::UnexpectedReturn);
 }
