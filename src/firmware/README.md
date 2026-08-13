@@ -11,6 +11,14 @@ make all               # firmware + FPGA bitstream
 make clean             # remove all build artifacts
 ```
 
+`make firmware-build` also prints a compact size report:
+- ELF text/data/bss bytes
+- RAM usage (`.data + .bss`) and percentage
+- HEX file size and payload bytes
+- ROM usage (`payload / ROM_CAPACITY_BYTES`) and percentage
+
+The build fails if HEX payload exceeds configured ROM capacity.
+
 After cloning, fetch the u8g2 submodule first:
 ```bash
 git submodule update --init
@@ -70,6 +78,11 @@ src/firmware/
 ---
 
 ## Peripheral Examples
+
+Flash persistence status snapshot (current `main.cpp` boot flow):
+- `[FLASH] LowLevel PASS`
+- `[FDB] Ready`
+- `[FDB] boot cnt updated`
 
 ### D2 LED GPIO (`0x10000000`)
 
@@ -315,25 +328,27 @@ For full protocol documentation including frame format, CRC, and encoding detail
 
 ---
 
-### SPI Flash (`0x10007000`) — Persistent Parameter Storage
+### SPI Flash (`0x10007000`) — Low-Level Access + FlashDB KV Storage
 
 The onboard W25Q64 (8 MB) is exposed through the `wb_flash` peripheral.
-`flash.h` provides both low-level page/sector operations and key-value style helpers for application parameters.
+`flash.h` provides low-level page/sector operations, and `flashdb_port.h` provides typed key-value helpers.
 
 ```cpp
 #include "flash.h"
+#include "flashdb_port.h"
 
-// Store and retrieve settings in flash
-flash_put_string("device_name", "nodenet-01");
+Flash flash(0x10007000u);
+flashdb_init(&flash, nullptr);
 
-char name[32];
-flash_get_string("device_name", name, sizeof(name), "default");
+flashdb_set_str("device_name", "nodenet-01");
+char name[32] = {};
+flashdb_get_str("device_name", name, sizeof(name));
 ```
 
 Implementation notes:
 - SPI SCK uses the ECP5 dedicated USRMCLK path (not a normal GPIO pin).
 - Firmware-side protection keeps writes/erases out of the boot region.
-- Parameter storage starts after the protected boot area.
+- FlashDB uses partition `nodenet_kv` at `0x204000–0x243FFF`.
 
 Detailed register-level documentation is available in [../wbDevices/README_FLASH.md](../wbDevices/README_FLASH.md).
 

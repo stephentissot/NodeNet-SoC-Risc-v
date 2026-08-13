@@ -24,6 +24,11 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - Broadcast RX acceptance path.
   - Non-matching destination address ignore path.
 
+### FlashDB Validation Snapshot (2026-08-13)
+- Flash low-level test passes at boot (`[FLASH] LowLevel PASS`).
+- FlashDB initialization passes (`[FDB] Ready`).
+- Boot counter write path passes (`[FDB] boot cnt updated`).
+
 ### Hardware
 - **Wishbone B.4 Bus** interconnect with 32-bit data, 32-bit address
 - **PicoRV32 Core**: Open-source RISC-V ISA, ~6K LUT footprint
@@ -68,10 +73,11 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 
 - **SPI Flash Module** (`wb_flash.sv`, `spi_master.sv`):
   - Wishbone interface to on-board SPI flash (W25Q64, 8 MB)
-  - Memory layout: 2 MB boot config (protected) + 16 KB parameters + 5.75 MB app
-  - C++ firmware API for parameter storage (like Arduino preferences)
+  - Memory layout: 2 MB boot config (protected) + 16 KB params + 256 KB FlashDB KV + app data
+  - C++ firmware uses low-level page/sector API (`Flash`) plus FlashDB wrapper (`flashdb_port`)
   - Boot region protection: firmware rejects writes/erases to 0x000000–0x1FFFFF
   - Parameter storage at 0x200000–0x203FFF (16 KB, 4 sectors)
+  - FlashDB KV partition at 0x204000–0x243FFF (256 KB)
   - Wishbone address: 0x10007000
   - See [src/wbDevices/README_FLASH.md](src/wbDevices/README_FLASH.md) for details
 ### Firmware
@@ -109,6 +115,9 @@ make all
 # Firmware only
 make firmware-build
 
+# Firmware-only FPGA RAM update (ecpbram patch, fallback to make ram if needed)
+make ram-fw
+
 # Firmware test build (uses src/firmware/test_main.cpp)
 make firmware-test
 
@@ -131,6 +140,14 @@ make flash
 make unlock-flash
 make lock-flash
 ```
+
+`make firmware-build` prints firmware size telemetry on each build:
+- ELF text/data/bss
+- RAM usage (`.data + .bss`)
+- HEX file size and payload bytes
+- ROM usage (`payload / ROM_BYTES`, in %)
+
+If payload exceeds ROM capacity, build stops with an explicit error.
 
 CPU profile note:
 - Default build is configured in fast mode for PicoRV32 in [src/top.sv](src/top.sv) with:
@@ -180,7 +197,8 @@ Address Range               Size      Purpose
 ────────────────────────────────────────────────────────────
 0x00000000–0x1FFFFF       2 MB     SPI Flash — FPGA boot config (PROTECTED)
 0x200000–0x203FFF         16 KB    SPI Flash — Parameter storage
-0x204000–0x7FFFFF         5.75 MB  SPI Flash — Application data
+0x204000–0x243FFF         256 KB   SPI Flash — FlashDB KV partition
+0x244000–0x7FFFFF         5.73 MB  SPI Flash — Application data
 ```
 
 ## Device Pinout
@@ -233,9 +251,10 @@ NodeNet RJ45 pinout (both connectors):
 ### SPI Flash (W25Q64)
 - **Pins**: R2 (CS), W2 (MOSI), V2 (MISO)
 - **Clock**: Generated internally (10 MHz typical, no GPIO pin)
-- **Capacity**: 8 MB (2 MB boot + 16 KB parameters + 5.75 MB app)
+- **Capacity**: 8 MB (2 MB boot + 16 KB params + 256 KB FlashDB KV + ~5.73 MB app)
 - **Boot Protection**: Firmware API rejects writes to 0x000000–0x1FFFFF
-- **Parameter Region**: 0x200000–0x203FFF (key-value store, Arduino preferences-like)
+- **Parameter Region**: 0x200000–0x203FFF (raw/scratch area)
+- **FlashDB KV Region**: 0x204000–0x243FFF (`nodenet_kv` partition)
 
 ## Firmware Examples
 

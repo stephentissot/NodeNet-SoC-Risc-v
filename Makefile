@@ -18,7 +18,7 @@ FIRMWARE_PREV_PADDED_HEX=$(BUILD)/nodenet_riscv.prev_padded.hex
 FW_PATCH_CONFIG=$(BUILD)/$(TOP)_fw.config
 FW_PATCH_BIT=$(BUILD)/$(TOP)_fw.bit
 FLASH_BOOT_IMAGE=$(BUILD)/$(TOP)_flash.bit
-ROM_BYTES=16384
+ROM_BYTES=65536
 
 # Synthesis sources.
 # Keep this explicit so the build uses the Alex Forencich RTL from src/verilog-i2c/rtl
@@ -79,7 +79,7 @@ lab-fw: lab
 
 # Default firmware build uses src/firmware/main.cpp.
 firmware-build:
-	$(MAKE) -C src/firmware
+	$(MAKE) -C src/firmware ROM_CAPACITY_BYTES=$(ROM_BYTES)
 
 
 # Ensure firmware is rebuilt before any target that consumes the hex.
@@ -88,7 +88,7 @@ $(FIRMWARE_HEX): firmware-build
 
 # Build test firmware (src/firmware/test_main.cpp) without manual MAIN_SRC override.
 firmware-test:
-	$(MAKE) -C src/firmware MAIN_SRC=test_main.cpp
+	$(MAKE) -C src/firmware MAIN_SRC=test_main.cpp ROM_CAPACITY_BYTES=$(ROM_BYTES)
 
 # Build complete bring-up image (test firmware + FPGA bitstream).
 bringup: firmware-test $(BUILD)/$(TOP).bit

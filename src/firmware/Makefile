@@ -32,10 +32,20 @@ I2C_OBJ=$(BUILD)/i2c.o
 SERIAL_DIR=lib/serial
 SERIAL_SRC=$(SERIAL_DIR)/Serial.cpp
 SERIAL_OBJ=$(BUILD)/Serial.o
+FLASH_DIR=lib/flash
+FLASH_SRC=$(FLASH_DIR)/flash.cpp
+FLASH_OBJ=$(BUILD)/flash.o
+FLASHDB_DIR=lib/FlashDB-2.2.0
+FLASHDB_INC=$(FLASHDB_DIR)/inc
+FLASHDB_SRC_DIR=$(FLASHDB_DIR)/src
+FLASHDB_PORT_SRC=$(FLASH_DIR)/flashdb_port.cpp
+FLASHDB_PORT_OBJ=$(BUILD)/flashdb_port.o
+FLASHDB_CORE_SRCS=$(FLASHDB_SRC_DIR)/fdb.c $(FLASHDB_SRC_DIR)/fdb_kvdb.c $(FLASHDB_SRC_DIR)/fdb_utils.c
+FLASHDB_CORE_OBJS=$(BUILD)/fdb.o $(BUILD)/fdb_kvdb.o $(BUILD)/fdb_utils.o
 SDRAM_TEST_SRC=sdram.cpp
 SDRAM_TEST_OBJ=$(BUILD)/sdram.o
 
-DEPS=$(BUILD)/start.d $(MAIN_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(BUILD)/Serial.d $(BUILD)/sdram.d $(U8G2_OBJS:.o=.d)
+DEPS=$(BUILD)/start.d $(MAIN_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(BUILD)/Serial.d $(BUILD)/flash.d $(BUILD)/flashdb_port.d $(BUILD)/sdram.d $(BUILD)/fdb.d $(BUILD)/fdb_kvdb.d $(BUILD)/fdb_utils.d $(U8G2_OBJS:.o=.d)
 
 CFLAGS=-march=rv32im -mabi=ilp32 \
        -Wall \
@@ -47,7 +57,9 @@ CFLAGS=-march=rv32im -mabi=ilp32 \
         -MP \
        -I$(U8G2_DIR) \
        -I$(I2C_DIR) \
+	-I$(FLASH_DIR) \
         -I$(SERIAL_DIR) \
+        -I$(FLASHDB_INC) \
        -Iinclude \
        -DFIRMWARE_VERSION='"$(VERSION)-$(GIT_HASH)"'
 
@@ -74,8 +86,11 @@ LDFLAGS=-march=rv32im -mabi=ilp32 -T link.ld \
         --specs=nosys.specs
 
 BUILD=build
+ROM_CAPACITY_BYTES ?= 65536
 
-all: $(BUILD)/$(TARGET).hex
+all: $(BUILD)/$(TARGET).hex firmware-stats
+
+.PHONY: firmware-stats
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -83,7 +98,7 @@ $(BUILD):
 $(U8G2_CACHE):
 	mkdir -p $@
 
-$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(SDRAM_TEST_OBJ) $(U8G2_LIB) | $(BUILD)
+$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_TEST_OBJ) $(U8G2_LIB) | $(BUILD)
 	$(CROSS)g++ $(LDFLAGS) $^ -o $@
 
 $(BUILD)/start.o: start.S | $(BUILD)
@@ -101,6 +116,21 @@ $(I2C_OBJ): $(I2C_SRC) | $(BUILD)
 $(SERIAL_OBJ): $(SERIAL_SRC) | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
+$(FLASH_OBJ): $(FLASH_SRC) | $(BUILD)
+	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
+
+$(FLASHDB_PORT_OBJ): $(FLASHDB_PORT_SRC) | $(BUILD)
+	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/fdb.o: $(FLASHDB_SRC_DIR)/fdb.c | $(BUILD)
+	$(CROSS)gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD)/fdb_kvdb.o: $(FLASHDB_SRC_DIR)/fdb_kvdb.c | $(BUILD)
+	$(CROSS)gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD)/fdb_utils.o: $(FLASHDB_SRC_DIR)/fdb_utils.c | $(BUILD)
+	$(CROSS)gcc $(CFLAGS) -c $< -o $@
+
 $(SDRAM_TEST_OBJ): $(SDRAM_TEST_SRC) | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
@@ -117,6 +147,25 @@ $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 		-O verilog \
 		$< \
 		$@
+
+firmware-stats: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).hex
+	@set -- $$($(CROSS)size $(BUILD)/$(TARGET).elf | tail -n 1); \
+	text=$$1; data=$$2; bss=$$3; \
+	ram_used=$$((data + bss)); ram_total=65536; \
+	ram_pct=$$(awk "BEGIN { printf \"%.2f\", ($$ram_used*100)/$$ram_total }"); \
+	hex_file_bytes=$$(wc -c < $(BUILD)/$(TARGET).hex); \
+	hex_used_bytes=$$(awk 'BEGIN{addr=0;max=0} {for(i=1;i<=NF;i++){tok=toupper($$i); if(tok ~ /^@/){addr=strtonum("0x" substr(tok,2));} else {addr++; if(addr>max) max=addr;}}} END{print max+0}' $(BUILD)/$(TARGET).hex); \
+	rom_cap=$(ROM_CAPACITY_BYTES); \
+	rom_pct=$$(awk "BEGIN { printf \"%.2f\", ($$hex_used_bytes*100)/$$rom_cap }"); \
+	echo "[FW] ELF text/data/bss: $$text/$$data/$$bss bytes"; \
+	echo "[FW] RAM usage (.data + .bss): $$ram_used / $$ram_total bytes ($$ram_pct%)"; \
+	echo "[FW] HEX file size: $$hex_file_bytes bytes"; \
+	echo "[FW] HEX payload bytes: $$hex_used_bytes bytes"; \
+	echo "[FW] ROM usage: $$hex_used_bytes / $$rom_cap bytes ($$rom_pct%)"; \
+	if [ $$hex_used_bytes -gt $$rom_cap ]; then \
+		echo "[FW][ERROR] Firmware payload exceeds wb_rom capacity by $$((hex_used_bytes-rom_cap)) bytes"; \
+		exit 2; \
+	fi
 
 clean:
 	rm -rf $(BUILD)

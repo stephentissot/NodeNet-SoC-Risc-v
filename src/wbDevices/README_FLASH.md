@@ -1,11 +1,12 @@
-# SPI Flash (W25Q64) Module — Parameter Storage
+# SPI Flash (W25Q64) Module — Low-Level Driver + FlashDB KV
 
 ## Overview
 
-The W25Q64JVSIQ is an 8 MB SPI flash memory IC on the Colorlight i9 that provides persistent storage for:
-- **Application parameters** (like Arduino preferences)
-- **Calibration data**, settings, logs
-- **Firmware backups** or configuration images
+The W25Q64JVSIQ is an 8 MB SPI flash memory IC on the Colorlight i9.
+
+Current firmware integration has two layers:
+- **Low-level layer**: `Flash` class (`src/firmware/lib/flash/flash.h`) for page read/write and sector erase.
+- **KV layer**: FlashDB (`flashdb_port.cpp`) on top of a dedicated FAL partition.
 
 ### Specifications
 
@@ -115,11 +116,7 @@ while (*status & 1) {}
 
 ### Overview
 
-The `flash.h` header provides:
-1. **Low-level page/sector operations** for direct flash access
-2. **Parameter storage API** (key-value store, like Arduino preferences)
-3. **Convenience functions** for common types (int32, strings)
-4. **Automatic protection** against boot region overwrites
+The low-level API is provided by the `Flash` class, and KV storage is provided by `flashdb_port` wrappers.
 
 ### Safety Features
 
@@ -128,45 +125,36 @@ The `flash.h` header provides:
 - Any erase attempt to 0x000000–0x1FFFFF returns `false`
 - Functions silently reject invalid operations (safe for embedded systems)
 
-Example:
-```cpp
-flash_put("test", ...);  // Writes to 0x200000 (safe, after boot region)
-flash_write_page(0x100, ...);  // Returns false (in boot region!)
-flash_erase_sector(0);  // Returns false (in boot region!)
-```
-
-### Low-Level API
+### Low-Level API (`Flash` class)
 
 ```cpp
 #include "flash.h"
 
-void flash_wait_ready();                          // Poll until ready
-void flash_read_page(uint32_t offset, uint8_t* buf);   // Read 256 bytes (no protection check)
-bool flash_write_page(uint32_t offset, const uint8_t* buf);  // Write 256 bytes (protected!)
-bool flash_erase_sector(uint16_t sector);        // Erase 4 KB sector (protected!)
-bool flash_is_safe_address(uint32_t offset);     // Check if address is outside boot region
+Flash flash(0x10007000u);
+
+bool ok = flash.lowLevelTest();
+ok = flash.readPage(0x200000u, page_buf_256);
+ok = flash.writePage(0x200000u, page_buf_256);
+ok = flash.eraseSector(0x200000u);
 ```
 
-### Parameter Storage (Key-Value API)
+### FlashDB KV API (`flashdb_port.h`)
 
 ```cpp
-// Store a parameter
-flash_put("wifi_ssid", (uint8_t*)"MyNetwork", 9);
-flash_put_string("hostname", "colorlight-i9");
-flash_put_int("channel", 6);
+// Init once at boot
+flashdb_init(&flash, status_callback);
 
-// Retrieve a parameter
-uint8_t buf[256];
-uint16_t len = flash_get("wifi_ssid", buf, sizeof(buf));
-if (len > 0) {
-    // Parameter found (len bytes in buf)
-}
+// Optional smoke test
+flashdb_boot_counter_test(status_callback);
 
-// Retrieve with type conversion
-char ssid[32];
-flash_get_string("wifi_ssid", ssid, sizeof(ssid), "DefaultSSID");
+// Typed helpers
+flashdb_set_i32("channel", 6);
+int32_t channel = 0;
+flashdb_get_i32("channel", &channel);
 
-int channel = flash_get_int("channel", 1);  // Returns 1 if not found
+flashdb_set_str("hostname", "colorlight-i9");
+char host[32] = {};
+flashdb_get_str("hostname", host, sizeof(host));
 ```
 
 ### Memory Layout
@@ -174,46 +162,13 @@ int channel = flash_get_int("channel", 1);  // Returns 1 if not found
 ```
 Flash Address Space (8 MB total)
 ├─ 0x000000–0x1FFFFF (2 MB)      ← FPGA Boot Configuration (PROTECTED!)
-├─ 0x200000–0x203FFF (16 KB)     ← Parameter region (safe for PicoRV32)
+├─ 0x200000–0x203FFF (16 KB)     ← Parameter/scratch region (safe for PicoRV32)
 │  ├─ Sector 128 (0x200000–0x200FFF)
 │  ├─ Sector 129 (0x201000–0x201FFF)
 │  ├─ Sector 130 (0x202000–0x202FFF)
 │  └─ Sector 131 (0x203000–0x203FFF)
-└─ 0x204000–0x7FFFFF (7.75 MB)   ← Application data
-```
-
-### Parameter Entry Format
-
-Each parameter is stored as:
-```
-[key_len(1B)] [value_len_lo(1B)] [value_len_hi(1B)] [key(N)] [value(M)]
-```
-
-Example: Store "temp" = 25.5°C
-
-```
-Key:   "setpoint" (8 bytes)
-Value: [0xCC, 0x00] (2 bytes) representing 0x00CC in little-endian
-
-[0x08] [0x02] [0x00] ['s']['e']['t']['p']['o']['i']['n']['t'] [0xCC] [0x00]
-```
-
-### Wear-Leveling Strategy
-
-The current implementation uses **simple append semantics**:
-- New parameters written sequentially to end of region
-- Old values NOT automatically erased (wastes space)
-- Recommended: Periodically compact region by reading all params, erasing sector, re-writing
-
-Example compaction:
-
-```cpp
-void flash_compact() {
-    // 1. Read all parameters from current region
-    // 2. Erase all 4 sectors (0–3)
-    // 3. Write parameters back sequentially
-    // 4. Done!
-}
+├─ 0x204000–0x243FFF (256 KB)    ← FlashDB KV partition (`nodenet_kv`)
+└─ 0x244000–0x7FFFFF (~5.73 MB)  ← Application data
 ```
 
 ## Integration Checklist
@@ -222,7 +177,7 @@ void flash_compact() {
 - [ ] Add decoupling capacitor (100 nF) near flash VCC
 - [x] `wb_flash` instantiated in `top.sv` with Wishbone mux
 - [ ] Verify pin voltage levels (3.3 V)
-- [ ] Test with `flash_get_string()` / `flash_put_string()` in firmware
+- [x] Test with `flashdb_init()` and typed KV get/set wrappers
 
 ## Testing
 
@@ -250,22 +205,22 @@ for (int i = 0; i < 256; i++) {
 }
 ```
 
-### Test 3: Parameter Storage
+### Test 3: FlashDB boot counter
 
 ```cpp
-flash_put_string("test_key", "Hello Flash!");
-char buf[32];
-flash_get_string("test_key", buf, sizeof(buf), "");
-// buf should contain "Hello Flash!"
+bool ok = flashdb_init(&flash, status_callback);
+if (ok) {
+    flashdb_boot_counter_test(status_callback);
+    // Expect status callback line: "[FDB] boot cnt updated"
+}
 ```
 
 ## Known Limitations
 
-1. **No automatic wear-leveling**: Parameters written sequentially, old values not recycled
-2. **Parameter region limited**: 16 KB for all parameters combined
-3. **No CRC/checksum**: Bit errors not detected (optional enhancement)
-4. **Page-aligned writes**: Cannot write partial pages
-5. **No read-modify-write**: Updating a 1-byte field requires read whole page + rewrite
+1. `Flash::writePage()` expects page-sized (256 B) writes at page-aligned base addresses.
+2. `Flash::eraseSector()` expects sector-aligned addresses (4 KB).
+3. Flash programming cannot flip bits from 0 back to 1 without erase (NOR flash rule).
+4. The 2 MB boot region is intentionally write-protected by firmware safety checks.
 
 ## Future Enhancements
 
@@ -279,5 +234,5 @@ flash_get_string("test_key", buf, sizeof(buf), "");
 
 - **W25Q64 Datasheet**: https://www.winbond.com/hq/product/code-storage-flash-memory/ (search for W25Q64)
 - **SPI Flash Protocol**: Standard JEDEC SPI flash command set
-- **Arduino Preferences Library**: Inspiration for simple key-value API
+- **FlashDB**: https://github.com/armink/FlashDB
 

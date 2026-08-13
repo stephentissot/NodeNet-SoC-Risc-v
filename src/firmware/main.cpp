@@ -10,6 +10,8 @@
 #include "sdram.h"
 #include "nodenet.h"
 #include "Serial.h"
+#include "flash.h"
+#include "flashdb_port.h"
 
 // Hardware — compile-time constants so GCC emits direct MMIO addresses
 static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x10000000UL);
@@ -17,6 +19,7 @@ static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x
 #define LED1_BASE  0x10000008UL
 #define I2C0_BASE  0x10005000UL
 #define SERIAL1_BASE 0x10004000u
+#define FLASH_BASE 0x10007000u
 static constexpr uint32_t NODENET0_BASE = 0x10006000u;
 
 #define SERIAL1_BUFFER_LENGTH 32
@@ -166,9 +169,15 @@ static void led_d2_blink()
 
 int main(void)
 {
+    // Initial startup LED blink to indicate booting.
     led_d2_blink();
+    // Harware definition
     WbLed  ledGreen(LED0_BASE);
     WbLed  ledYellow(LED1_BASE);
+    Serial Serial1(SERIAL1_BASE);
+    Serial1.begin(115200u);
+    Flash myFlash(FLASH_BASE);
+
     static constexpr uint32_t kBlinkPeriodMs = 2000u;
     bool led_on = false;
     uint32_t next_toggle_ms = *TIMER_MS + kBlinkPeriodMs;
@@ -176,21 +185,36 @@ int main(void)
     oled_init(0x3C);
     oled_write("  NodeNet SoC RISC-V");
     oled_write("v" FIRMWARE_VERSION);
-    oled_write("[BOOT] Running tests");
+    
     // NodeNet definition and initialization
     NodeNet myNodeNet(NODENET0_BASE, 0x41, 1000000, NODENET_PRIORITY_NORMAL, 200);
     const bool nodenet_ok = myNodeNet.test(oled_boot_status);
+
+    // POST Tests
+    oled_write("[BOOT] Running tests");
     oled_write(nodenet_ok ? "[NN] Self-test PASS" : "[NN] Self-test FAIL");
 
     // Serial definition and initialization
-    Serial Serial1(SERIAL1_BASE);
-    Serial1.begin(115200u);
+    
     char serial1rxBuffer[SERIAL1_BUFFER_LENGTH] = {};
     uint8_t serial1rxCount = 0;
 
     const bool sdram_ok = sdramTest(oled_boot_status);
     oled_write(sdram_ok ? "[BOOT] System ready" : "[BOOT] Degraded mode");
-    uint32_t next_nn_dbg_ms = millis() + 1000u;
+
+    const bool flash_ok = myFlash.lowLevelTest(oled_boot_status);
+    oled_write(flash_ok ? "[FLASH] LowLevel PASS" : "[FLASH] LowLevel FAIL");
+
+    bool flashdb_ok = false;
+    if (flash_ok) {
+        flashdb_ok = flashdb_init(&myFlash, oled_boot_status);
+        oled_write(flashdb_ok ? "[FDB] Ready" : "[FDB] Init FAIL");
+    } else {
+        oled_write("[FDB] skip (flash)");
+    }
+    if (flashdb_ok) {
+        (void)flashdb_boot_counter_test(oled_boot_status);
+    }
     
     while (1) {
 
@@ -211,11 +235,14 @@ int main(void)
 
         if (myNodeNet.HasMessage()) {
             NodeNetMessage msg = myNodeNet.ReadMessage();
-            oled_print_rx_header(msg.src_addr, msg.len);
-            oled_write_payload_safe(msg.data, msg.len);
-            ledYellow.blink(300u);
-            // Send a reply to the sender, then release RX buffer.
-            myNodeNet.Send(msg.src_addr, "Hello from NodeNet!");
+            // if(msg.src_addr != 0){ // No response to broadcast messages
+            //     oled_print_rx_header(msg.src_addr, msg.len);
+            //     oled_write_payload_safe(msg.data, msg.len);
+            //     ledYellow.blink(300u);
+            //     // Send a reply to the sender, then release RX buffer.            
+            //     myNodeNet.Send(msg.src_addr, "Hello from NodeNet!");
+            // }
+            
             NodeNet::FreeMessage(msg);
         }
         uint32_t now_ms = millis();
