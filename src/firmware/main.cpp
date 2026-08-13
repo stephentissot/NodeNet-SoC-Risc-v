@@ -201,8 +201,8 @@ int main(void)
     const bool sdram_ok = sdramTest(oled_boot_status);
     oled_write(sdram_ok ? "[BOOT] System ready" : "[BOOT] Degraded mode");
 
-    bool flash_ok = myFlash.lowLevelTest(oled_boot_status);
-    //oled_write(flash_ok ? "[FLASH] Boot test PASS" : "[FLASH] Boot test FAIL");
+    const bool flash_ok = myFlash.lowLevelTest(oled_boot_status);
+    oled_write(flash_ok ? "[FLASH] LowLevel PASS" : "[FLASH] LowLevel FAIL");
     uint32_t next_nn_dbg_ms = millis() + 1000u;
     
     while (1) {

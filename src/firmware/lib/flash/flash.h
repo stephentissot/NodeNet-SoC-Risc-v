@@ -1,11 +1,6 @@
 /**
  * @file flash.h
- * @brief Object-oriented flash preferences API for wb_flash.
- *
- * Usage:
- *   Flash myFlash(0x10007000u);
- *   myFlash.putInt("wifi_channel", 6);
- *   int ch = myFlash.getInt("wifi_channel", 1);
+ * @brief Low-level wb_flash driver for W25Q64 access.
  */
 
 #ifndef FLASH_LIB_FLASH_H
@@ -19,22 +14,16 @@ public:
 
   explicit Flash(uint32_t baseAddress);
 
-  // Preferences-like high-level API.
-  bool putInt(const char* key, int32_t value);
-  int32_t getInt(const char* key, int32_t defaultValue) const;
+  // Low-level operations used directly by boot tests and FlashDB wrapper.
+  bool waitReady() const;
+  bool readPage(uint32_t pageBase, uint8_t* out256) const;
+  bool writePage(uint32_t pageBase, const uint8_t* in256) const;
+  bool eraseSector(uint32_t sectorBase) const;
 
-  bool putUInt(const char* key, uint32_t value);
-  uint32_t getUInt(const char* key, uint32_t defaultValue) const;
-
-  bool putString(const char* key, const char* value);
-  uint16_t getString(const char* key, char* out, uint16_t outSize, const char* defaultValue = "") const;
-
-  bool putBytes(const char* key, const uint8_t* data, uint16_t len);
-  uint16_t getBytes(const char* key, uint8_t* out, uint16_t outSize) const;
-
-  bool contains(const char* key) const;
+  // Optional helper for cleanup/format of the parameter partition.
   bool clearAll();
-  bool bootTest(StatusCallback callback = nullptr);
+
+  // Built-in low-level boot test.
   bool lowLevelTest(StatusCallback callback = nullptr);
 
   // Region constants (W25Q64).
@@ -67,22 +56,9 @@ private:
   static constexpr uint32_t kStatSpiWaiting = 1u << 3;
   static constexpr uint32_t kStatPageBufferOverflow = 1u << 4;
 
-  static constexpr uint16_t kMaxValueSize = 2048u;
-  static constexpr uint8_t kMaxKeySize = 63u;
-
-  // Low-level helpers kept private on purpose.
+  // MMIO register accessor and safety guard.
   volatile uint32_t& reg(uint32_t offset) const;
   bool isSafeWriteAddress(uint32_t flashOffset) const;
-  bool waitReady() const;
-  bool readPage(uint32_t pageBase, uint8_t* out256) const;
-  bool writePage(uint32_t pageBase, const uint8_t* in256) const;
-  bool eraseSector(uint32_t sectorBase) const;
-
-  bool readSpan(uint32_t flashOffset, uint8_t* out, uint16_t len) const;
-  bool patchSpan(uint32_t flashOffset, const uint8_t* data, uint16_t len);
-
-  bool validateKey(const char* key, uint8_t* keyLenOut) const;
-  bool scanForKey(const char* key, uint32_t* valuePosOut, uint16_t* valueLenOut, uint32_t* appendPosOut) const;
 };
 
 #endif
