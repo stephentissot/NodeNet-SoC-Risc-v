@@ -157,7 +157,7 @@ flash-fw-write-image:
 		ofl_verify="--verify"; \
 	fi; \
 	echo "[FWIMG] openFPGALoader write offset=$(FW_IMAGE_FLASH_OFFSET) strict=$(FW_STRICT_VERIFY)"; \
-	openFPGALoader -b colorlight-i9 -f --unprotect-flash $$ofl_verify -o $(FW_IMAGE_FLASH_OFFSET) $(IMAGE_TO_FLASH)
+	openFPGALoader -b colorlight-i9 -f --skip-reset --unprotect-flash $$ofl_verify -o $(FW_IMAGE_FLASH_OFFSET) $(IMAGE_TO_FLASH)
 
 # End-to-end firmware-only cycle: build+verify image, program flash partition, then
 # reload the current bitstream in SRAM to restart stage0 without synthesis/P&R.
