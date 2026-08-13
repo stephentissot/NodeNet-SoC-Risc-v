@@ -184,13 +184,13 @@ flash-fw-test-crc: firmware-image-tests
 $(FIRMWARE_HEX): firmware-build
 	@test -f $@ || (echo "Missing $@ after firmware-build" && exit 1)
 
-# Build test firmware (src/firmware/test_main.cpp) without manual MAIN_SRC override.
+# Legacy test firmware target kept as an explicit guidance error.
 firmware-test:
 	@echo "[TEST][ERROR] Legacy test firmware target is not maintained with current APIs."; \
 	echo "[TEST][ERROR] Use boot robustness flow in TEST.md (firmware-image-tests + flash-fw-test-*)."; \
 	exit 2
 
-# Build complete bring-up image (test firmware + FPGA bitstream).
+# Legacy bringup alias now intentionally triggers firmware-test guidance.
 bringup: firmware-test $(BUILD)/$(TOP).bit
 
 clean-firmware:
