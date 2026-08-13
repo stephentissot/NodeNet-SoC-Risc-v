@@ -174,14 +174,14 @@ flash-fw-write-image:
 		    source [find cpld/jtagspi.cfg]; \
 		    init; \
 		    jtagspi_init ecp5.pld \"\" -1; \
-		    flash verify_image $(IMAGE_TO_FLASH) $(FW_IMAGE_FLASH_OFFSET); \
+		    flash verify_bank 0 $(IMAGE_TO_FLASH) $(FW_IMAGE_FLASH_OFFSET); \
 		    exit" || verify_rc=$$?; \
 	if [ $$verify_rc -ne 0 ]; then \
 		if [ "$(FW_STRICT_VERIFY)" = "1" ]; then \
-			echo "[FWIMG][ERROR] OpenOCD verify failed (strict mode enabled)."; \
+			echo "[FWIMG][ERROR] OpenOCD flash verify_bank failed (strict mode enabled)."; \
 			exit $$verify_rc; \
 		else \
-			echo "[FWIMG][WARN] OpenOCD verify failed on this backend (often unsupported checksum_memory)."; \
+			echo "[FWIMG][WARN] OpenOCD verify_bank failed on this backend."; \
 			echo "[FWIMG][WARN] Continuing because FW_STRICT_VERIFY=$(FW_STRICT_VERIFY)."; \
 		fi; \
 	fi
