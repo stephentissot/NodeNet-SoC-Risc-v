@@ -7,6 +7,8 @@ Firmware for the Colorlight i9 RISC-V SoC. Written in C++17, compiled with `risc
 ```bash
 # From the project root
 make firmware-build    # firmware only
+make firmware-bootloader  # stage0 bootloader (ROM image)
+make firmware-image    # package payload with stage0 header
 make all               # firmware + FPGA bitstream
 make clean             # remove all build artifacts
 ```

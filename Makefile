@@ -32,7 +32,7 @@ SOURCES := src/top.sv \
 SOURCES := $(sort $(SOURCES))
 
 
-.PHONY: all firmware-build firmware-test bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only
+.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only
 
 all: firmware-build $(BUILD)/$(TOP).bit
 
@@ -80,6 +80,12 @@ lab-fw: lab
 # Default firmware build uses src/firmware/main.cpp.
 firmware-build:
 	$(MAKE) -C src/firmware ROM_CAPACITY_BYTES=$(ROM_BYTES)
+
+firmware-image:
+	$(MAKE) -C src/firmware firmware-image ROM_CAPACITY_BYTES=$(ROM_BYTES)
+
+firmware-bootloader:
+	$(MAKE) -C src/firmware bootloader-build ROM_CAPACITY_BYTES=$(ROM_BYTES)
 
 
 # Ensure firmware is rebuilt before any target that consumes the hex.

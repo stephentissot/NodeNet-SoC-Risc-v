@@ -13,6 +13,13 @@ GIT_HASH := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 # You can still override manually: make MAIN_SRC=test_main.cpp
 MAIN_SRC ?= main.cpp
 MAIN_OBJ = $(BUILD)/$(basename $(notdir $(MAIN_SRC))).o
+BOOT_SRC = boot_stage0.cpp
+BOOT_OBJ = $(BUILD)/$(basename $(notdir $(BOOT_SRC))).o
+
+PYTHON ?= python
+IMG_TOOL = tools/pack_firmware.py
+APP_LOAD_ADDR ?= 0x20000000
+APP_ENTRY_ADDR ?= 0x20000000
 
 # Persistent cache root for third-party library objects/archives.
 # Reuse this pattern if more vendored libraries need expensive rebuilds later.
@@ -88,7 +95,15 @@ LDFLAGS=-march=rv32im -mabi=ilp32 -T link.ld \
 BUILD=build
 ROM_CAPACITY_BYTES ?= 65536
 
+FW_BIN = $(BUILD)/$(TARGET).bin
+FW_IMG = $(BUILD)/$(TARGET).img
+BOOT_TARGET = boot_stage0
+BOOT_ELF = $(BUILD)/$(BOOT_TARGET).elf
+BOOT_HEX = $(BUILD)/$(BOOT_TARGET).hex
+
 all: $(BUILD)/$(TARGET).hex firmware-stats
+
+.PHONY: bootloader-build firmware-image
 
 .PHONY: firmware-stats
 
@@ -147,6 +162,40 @@ $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 		-O verilog \
 		$< \
 		$@
+
+$(FW_BIN): $(BUILD)/$(TARGET).elf
+	$(CROSS)objcopy -O binary $< $@
+
+$(FW_IMG): $(FW_BIN) $(IMG_TOOL)
+	$(PYTHON) $(IMG_TOOL) \
+		--input $(FW_BIN) \
+		--output $(FW_IMG) \
+		--load-addr $(APP_LOAD_ADDR) \
+		--entry-addr $(APP_ENTRY_ADDR)
+
+firmware-image: $(FW_IMG)
+
+$(BOOT_OBJ): $(BOOT_SRC) | $(BUILD)
+	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
+
+$(BOOT_ELF): $(BUILD)/start.o $(BOOT_OBJ) $(FLASH_OBJ) | $(BUILD)
+	$(CROSS)g++ $(LDFLAGS) $^ -o $@
+
+$(BOOT_HEX): $(BOOT_ELF)
+	$(CROSS)objcopy -O verilog $< $@
+
+bootloader-build: $(BOOT_HEX)
+	@set -- $$($(CROSS)size $(BOOT_ELF) | tail -n 1); \
+	text=$$1; data=$$2; bss=$$3; \
+	echo "[BOOT] ELF text/data/bss: $$text/$$data/$$bss bytes"; \
+	hex_used_bytes=$$(awk 'BEGIN{addr=0;max=0} {for(i=1;i<=NF;i++){tok=toupper($$i); if(tok ~ /^@/){addr=strtonum("0x" substr(tok,2));} else {addr++; if(addr>max) max=addr;}}} END{print max+0}' $(BOOT_HEX)); \
+	rom_cap=$(ROM_CAPACITY_BYTES); \
+	rom_pct=$$(awk "BEGIN { printf \"%.2f\", ($$hex_used_bytes*100)/$$rom_cap }"); \
+	echo "[BOOT] ROM usage: $$hex_used_bytes / $$rom_cap bytes ($$rom_pct%)"; \
+	if [ $$hex_used_bytes -gt $$rom_cap ]; then \
+		echo "[BOOT][ERROR] Bootloader payload exceeds wb_rom capacity by $$((hex_used_bytes-rom_cap)) bytes"; \
+		exit 2; \
+	fi
 
 firmware-stats: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).hex
 	@set -- $$($(CROSS)size $(BUILD)/$(TARGET).elf | tail -n 1); \
