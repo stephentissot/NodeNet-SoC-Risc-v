@@ -11,6 +11,7 @@
 #include "nodenet.h"
 #include "Serial.h"
 #include "flash.h"
+#include "flashdb_port.h"
 
 // Hardware — compile-time constants so GCC emits direct MMIO addresses
 static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x10000000UL);
@@ -203,7 +204,17 @@ int main(void)
 
     const bool flash_ok = myFlash.lowLevelTest(oled_boot_status);
     oled_write(flash_ok ? "[FLASH] LowLevel PASS" : "[FLASH] LowLevel FAIL");
-    uint32_t next_nn_dbg_ms = millis() + 1000u;
+
+    bool flashdb_ok = false;
+    if (flash_ok) {
+        flashdb_ok = flashdb_init(&myFlash, oled_boot_status);
+        oled_write(flashdb_ok ? "[FDB] Ready" : "[FDB] Init FAIL");
+    } else {
+        oled_write("[FDB] skip (flash)");
+    }
+    if (flashdb_ok) {
+        (void)flashdb_boot_counter_test(oled_boot_status);
+    }
     
     while (1) {
 
