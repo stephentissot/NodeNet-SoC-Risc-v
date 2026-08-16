@@ -4,8 +4,8 @@
     "memtype": "SDR",
     "sdram_module": "M12L64322A",
     "sdram_module_nb": 4,
-    "sdram_phy": "HalfRateGENSDRPHY",
-    "sdram_rate": "1:2",
+    "sdram_phy": "GENSDRPHY",
+    "sdram_rate": "1:1",
 
     "input_clk_freq": 25e6,
     "sys_clk_freq":   25e6,

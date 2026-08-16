@@ -9,11 +9,13 @@ module wb_sdram_litedram #(
     parameter [31:0] ADDR         = 32'h2000_0000,
     parameter        CLK_FREQ_MHZ = 25,
     parameter        SELFTEST_AUTO_START = 1'b0,
+    parameter        BYPASS_REQ_CDC = 1'b1,
     parameter [23:0] WB_POST_ENABLE_GUARD_CYCLES = 24'd12500000,
     parameter [23:0] WB_TIMEOUT_CYCLES = 24'd2000000
 )(
     input  wire        clk,
     input  wire        rst,
+    input  wire        sdram_clk_i,
 
     input  wire [31:0] wb_adr_i,
     input  wire [31:0] wb_dat_i,
@@ -37,6 +39,10 @@ module wb_sdram_litedram #(
     output wire        dbg_selftest_fail_o,
     output wire        dbg_selftest_timeout_o,
     output wire        dbg_selftest_wb_err_o,
+    output wire        dbg_cpu_req_seen_o,
+    output wire        dbg_cpu_resp_seen_o,
+    output wire [31:0] dbg_rmw_read_dat_o,
+    output wire [31:0] dbg_rmw_write_dat_o,
 
     output wire        sdram_clk,
     output wire [10:0] sdram_a,
@@ -47,20 +53,20 @@ module wb_sdram_litedram #(
     output wire        sdram_we_n
 );
 
-    localparam [2:0] ST_IDLE     = 3'd0;
-    localparam [2:0] ST_WB_WAIT  = 3'd1;
-    localparam [2:0] ST_RMW_READ = 3'd2;
-    localparam [2:0] ST_RMW_GAP  = 3'd3;
-    localparam [2:0] ST_RMW_WRITE= 3'd4;
-    localparam [2:0] ST_SELF_WRITE = 3'd5;
-    localparam [2:0] ST_SELF_READ  = 3'd6;
-    localparam [2:0] ST_SELF_GAP   = 3'd7;
+    localparam [3:0] ST_IDLE         = 4'd0;
+    localparam [3:0] ST_WB_WAIT      = 4'd1;
+    localparam [3:0] ST_RMW_READ_LO  = 4'd2;
+    localparam [3:0] ST_RMW_READ_HI  = 4'd3;
+    localparam [3:0] ST_RMW_GAP      = 4'd4;
+    localparam [3:0] ST_RMW_WRITE_LO = 4'd5;
+    localparam [3:0] ST_RMW_WRITE_HI = 4'd6;
+    localparam [3:0] ST_SELF_READ    = 4'd7;
+    localparam [3:0] ST_SELF_GAP     = 4'd8;
 
     wire init_done;
     wire init_error;
     wire user_clk;
     wire user_rst;
-    wire core_sdram_clk_2x_ps;
     wire sdram_cs_n;
     wire [3:0] sdram_dm;
     wire sdram_cke;
@@ -68,47 +74,33 @@ module wb_sdram_litedram #(
     wire user_port_wb_ack_raw;
     wire [31:0] user_port_wb_dat_raw;
     wire user_port_wb_ack_or_err;
-    wire cpu_partial_write_req;
+    wire cpu_write_req;
     wire wb_req_active;
     wire [3:0] cpu_read_sel;
+    wire [3:0] cpu_write_sel;
 
-    reg  [2:0]  state;
+    reg  [3:0]  state;
     reg  [31:0] req_adr;
     reg  [31:0] req_wdat;
     reg  [3:0]  req_sel;
     reg         req_we;
     reg  [31:0] rmw_adr;
+    reg  [31:0] rmw_pair_base;
     reg  [31:0] rmw_wdat;
     reg  [3:0]  rmw_sel;
-    reg  [31:0] rmw_merged_dat;
+    reg  [31:0] rmw_lower_read_dat;
+    reg  [31:0] rmw_lower_write_dat;
+    reg  [31:0] rmw_upper_write_dat;
+    reg         rmw_target_upper;
+    reg         rmw_is_selftest;
     reg  [23:0] wb_wait_ctr;
     reg         wb_ack_r;
     reg         dbg_ack_r;
     reg         dbg_err_r;
     reg         dbg_timeout_r;
+    reg         dbg_cpu_req_seen_r;
+    reg         dbg_cpu_resp_seen_r;
     reg  [31:0] wb_dat_r;
-
-    reg         req_toggle_clk;
-    reg         req_busy_clk;
-    reg         req_block_new_clk;
-    reg  [31:0] req_adr_clk;
-    reg  [31:0] req_dat_clk;
-    reg  [3:0]  req_sel_clk;
-    reg         req_we_clk;
-    reg         resp_toggle_meta_clk;
-    reg         resp_toggle_sync_clk;
-    reg         resp_toggle_seen_clk;
-    reg  [10:0] status_level_meta_clk;
-    reg  [10:0] status_level_sync_clk;
-    reg         dbg_ack_toggle_meta_clk;
-    reg         dbg_ack_toggle_sync_clk;
-    reg         dbg_ack_toggle_seen_clk;
-    reg         dbg_err_toggle_meta_clk;
-    reg         dbg_err_toggle_sync_clk;
-    reg         dbg_err_toggle_seen_clk;
-    reg         dbg_timeout_toggle_meta_clk;
-    reg         dbg_timeout_toggle_sync_clk;
-    reg         dbg_timeout_toggle_seen_clk;
 
     wire [20:0] core_wb_adr;
     wire [31:0] core_wb_dat_w;
@@ -116,6 +108,7 @@ module wb_sdram_litedram #(
     wire        core_wb_cyc;
     wire        core_wb_stb;
     wire        core_wb_we;
+    wire [31:0] rmw_upper_adr;
 
     wire wb_ctrl_ack;
     wire [31:0] wb_ctrl_dat_r;
@@ -139,7 +132,6 @@ module wb_sdram_litedram #(
     reg  [23:0] wb_post_enable_guard_ctr;
     wire        user_port_ready_u;
     wire        wb_ctrl_pending_u;
-    wire [10:0] status_level_u;
 
     localparam [31:0] SELFTEST_REG_BASE = ADDR + 32'h007F_F000;
     localparam [31:0] SELFTEST_REG_END  = ADDR + 32'h007F_F01C;
@@ -175,24 +167,16 @@ module wb_sdram_litedram #(
     reg  [31:0] selftest_diag;
     reg  [31:0] selftest_pattern_hold;
     reg  [31:0] selftest_addr_hold;
+    reg         selftest_pair_active;
+    reg  [1:0]  selftest_pair_phase;
+    reg  [31:0] selftest_pair_addr0;
+    reg  [31:0] selftest_pair_addr1;
+    reg  [31:0] selftest_pair_pattern0;
+    reg  [31:0] selftest_pair_pattern1;
 
     wire selftest_reg_sel;
     wire selftest_reg_wr;
     wire selftest_reg_rd;
-
-    reg         req_toggle_meta_u;
-    reg         req_toggle_sync_u;
-    reg         req_toggle_seen_u;
-    reg         cpu_req_valid_u;
-    reg  [31:0] cpu_req_adr_u;
-    reg  [31:0] cpu_req_dat_u;
-    reg  [3:0]  cpu_req_sel_u;
-    reg         cpu_req_we_u;
-    reg         resp_toggle_u;
-    reg  [31:0] resp_dat_u;
-    reg         dbg_ack_toggle_u;
-    reg         dbg_err_toggle_u;
-    reg         dbg_timeout_toggle_u;
 
     function automatic [31:0] merge_wb_bytes;
         input [31:0] old_data;
@@ -240,287 +224,218 @@ module wb_sdram_litedram #(
 
     assign wb_ctrl_pending_u = wb_ctrl_arm_pending | wb_ctrl_enable_req;
     assign user_port_ready_u = init_done & wb_ctrl_done_r & ~wb_ctrl_err_r & ~user_rst & (wb_post_enable_guard_ctr == 24'd0);
-    assign status_level_u = {
-        selftest_wb_err,
-        selftest_timeout,
-        selftest_fail,
-        selftest_pass,
-        selftest_done,
-        selftest_running,
-        wb_ctrl_pending_u,
-        wb_ctrl_err_r,
-        wb_ctrl_done_r,
-        init_error,
-        user_port_ready_u
-    };
-    assign init_done_o = status_level_sync_clk[0];
-    assign init_error_o = status_level_sync_clk[1];
+    assign init_done_o = init_done;
+    assign init_error_o = init_error;
     assign dbg_ack_o = dbg_ack_r;
     assign dbg_err_o = dbg_err_r;
     assign dbg_timeout_o = dbg_timeout_r;
-    assign dbg_ctrl_done_o = status_level_sync_clk[2];
-    assign dbg_ctrl_err_o = status_level_sync_clk[3];
-    assign dbg_ctrl_pending_o = status_level_sync_clk[4];
-    assign dbg_selftest_running_o = status_level_sync_clk[5];
-    assign dbg_selftest_done_o = status_level_sync_clk[6];
-    assign dbg_selftest_pass_o = status_level_sync_clk[7];
-    assign dbg_selftest_fail_o = status_level_sync_clk[8];
-    assign dbg_selftest_timeout_o = status_level_sync_clk[9];
-    assign dbg_selftest_wb_err_o = status_level_sync_clk[10];
+    assign dbg_ctrl_done_o = wb_ctrl_done_r;
+    assign dbg_ctrl_err_o = wb_ctrl_err_r;
+    assign dbg_ctrl_pending_o = wb_ctrl_pending_u;
+    assign dbg_selftest_running_o = selftest_running;
+    assign dbg_selftest_done_o = selftest_done;
+    assign dbg_selftest_pass_o = selftest_pass;
+    assign dbg_selftest_fail_o = selftest_fail;
+    assign dbg_selftest_timeout_o = selftest_timeout;
+    assign dbg_selftest_wb_err_o = selftest_wb_err;
+    assign dbg_cpu_req_seen_o = dbg_cpu_req_seen_r;
+    assign dbg_cpu_resp_seen_o = dbg_cpu_resp_seen_r;
+    assign dbg_rmw_read_dat_o = rmw_lower_read_dat;
+    assign dbg_rmw_write_dat_o = rmw_lower_write_dat;
     assign user_port_wb_ack_or_err = user_port_wb_ack_raw | user_port_wb_err;
 
-    assign selftest_reg_sel = cpu_req_valid_u && (cpu_req_adr_u >= SELFTEST_REG_BASE) && (cpu_req_adr_u <= SELFTEST_REG_END);
-    assign selftest_reg_wr = selftest_reg_sel && cpu_req_we_u;
-    assign selftest_reg_rd = selftest_reg_sel && !cpu_req_we_u;
+    assign selftest_reg_sel = (state == ST_IDLE) && wb_req_active &&
+                              (wb_adr_i >= SELFTEST_REG_BASE) && (wb_adr_i <= SELFTEST_REG_END);
+    assign selftest_reg_wr = selftest_reg_sel && wb_we_i;
+    assign selftest_reg_rd = selftest_reg_sel && !wb_we_i;
 
     assign wb_req_active = wb_cyc_i && wb_stb_i;
-    assign cpu_partial_write_req = cpu_req_valid_u && cpu_req_we_u && (cpu_req_sel_u != 4'b1111);
-    assign cpu_read_sel = (!cpu_req_we_u && (cpu_req_sel_u == 4'b0000)) ? 4'b1111 : cpu_req_sel_u;
+    assign cpu_write_req = wb_req_active && wb_we_i;
+    assign cpu_read_sel = (!wb_we_i && (wb_sel_i == 4'b0000)) ? 4'b1111 : wb_sel_i;
+    assign cpu_write_sel = (wb_sel_i == 4'b0000) ? 4'b1111 : wb_sel_i;
 
-    // DQM is hard-wired low on this PCB, so LiteDRAM cannot perform native masked
-    // writes. Emulate sub-word stores with a read-modify-write sequence.
+    // DQM is hard-wired low on this PCB, so sub-word stores must be expanded
+    // into a read-modify-write of the addressed 32-bit word.
+    assign rmw_upper_adr = rmw_pair_base + 32'd4;
     assign core_wb_adr =
         (state == ST_WB_WAIT)  ? req_adr[22:2] :
-        (state == ST_RMW_READ) ? rmw_adr[22:2] :
-        (state == ST_RMW_WRITE)? rmw_adr[22:2] :
-        (state == ST_SELF_WRITE)? req_adr[22:2] :
+        (state == ST_RMW_READ_LO) ? rmw_adr[22:2] :
+        (state == ST_RMW_WRITE_LO)? rmw_adr[22:2] :
         (state == ST_SELF_READ) ? req_adr[22:2] :
         21'd0;
-    assign core_wb_dat_w = (state == ST_RMW_WRITE) ? rmw_merged_dat : req_wdat;
+    assign core_wb_dat_w =
+        (state == ST_RMW_WRITE_LO) ? rmw_lower_write_dat :
+        req_wdat;
     assign core_wb_sel =
         (state == ST_WB_WAIT)  ? req_sel :
-        (state == ST_RMW_READ) ? 4'b1111 :
-        (state == ST_RMW_WRITE)? 4'b1111 :
-        (state == ST_SELF_WRITE)? 4'b1111 :
+        (state == ST_RMW_READ_LO) ? 4'b1111 :
+        (state == ST_RMW_WRITE_LO)? 4'b1111 :
         (state == ST_SELF_READ) ? 4'b1111 :
         4'b0000;
-    assign core_wb_cyc = (state == ST_WB_WAIT) || (state == ST_RMW_READ) || (state == ST_RMW_WRITE) ||
-                         (state == ST_SELF_WRITE) || (state == ST_SELF_READ);
+    assign core_wb_cyc = (state == ST_WB_WAIT) || (state == ST_RMW_READ_LO) ||
+                         (state == ST_RMW_WRITE_LO) || (state == ST_SELF_READ);
     assign core_wb_stb = core_wb_cyc;
     assign core_wb_we  = (state == ST_WB_WAIT) ? req_we :
-                         (state == ST_RMW_WRITE) || (state == ST_SELF_WRITE);
+                         (state == ST_RMW_WRITE_LO);
 
-    ODDRX1F sdram_clk_oddr (
-        .D0(1'b1),
-        .D1(1'b0),
-        .SCLK(core_sdram_clk_2x_ps),
-        .RST(1'b0),
-        .Q(sdram_clk)
-    );
+    assign sdram_clk = sdram_clk_i;
 
     assign wb_ack_o = wb_ack_r;
     assign wb_dat_o = wb_dat_r;
 
-    always @(posedge clk or posedge rst) begin
+    // In GENSDRPHY 1:1 mode, user_clk == clk, so the external Wishbone path
+    // is handled synchronously in the main state machine below.
+
+    always @(posedge user_clk or posedge rst) begin
         if (rst) begin
             wb_ack_r <= 1'b0;
             wb_dat_r <= 32'd0;
             dbg_ack_r <= 1'b0;
             dbg_err_r <= 1'b0;
             dbg_timeout_r <= 1'b0;
-            req_toggle_clk <= 1'b0;
-            req_busy_clk <= 1'b0;
-            req_block_new_clk <= 1'b0;
-            req_adr_clk <= 32'd0;
-            req_dat_clk <= 32'd0;
-            req_sel_clk <= 4'd0;
-            req_we_clk <= 1'b0;
-            resp_toggle_meta_clk <= 1'b0;
-            resp_toggle_sync_clk <= 1'b0;
-            resp_toggle_seen_clk <= 1'b0;
-            status_level_meta_clk <= 11'd0;
-            status_level_sync_clk <= 11'd0;
-            dbg_ack_toggle_meta_clk <= 1'b0;
-            dbg_ack_toggle_sync_clk <= 1'b0;
-            dbg_ack_toggle_seen_clk <= 1'b0;
-            dbg_err_toggle_meta_clk <= 1'b0;
-            dbg_err_toggle_sync_clk <= 1'b0;
-            dbg_err_toggle_seen_clk <= 1'b0;
-            dbg_timeout_toggle_meta_clk <= 1'b0;
-            dbg_timeout_toggle_sync_clk <= 1'b0;
-            dbg_timeout_toggle_seen_clk <= 1'b0;
+            dbg_cpu_req_seen_r <= 1'b0;
+            dbg_cpu_resp_seen_r <= 1'b0;
+            wb_ctrl_enable_req <= 1'b0;
+            wb_ctrl_arm_pending <= 1'b1;
+            wb_ctrl_done_r   <= 1'b0;
+            wb_ctrl_err_r    <= 1'b0;
+            wb_ctrl_step     <= 2'd0;
+            wb_ctrl_adr_r    <= WB_CTRL_ADDR_CORE_ENABLE;
+            wb_ctrl_dat_w_r  <= 32'd1;
+            wb_ctrl_sel_r    <= 4'b1111;
+            wb_ctrl_we_r     <= 1'b1;
+            wb_ctrl_wait_ctr <= 24'd0;
+            wb_ctrl_start_delay_ctr <= 24'd2048;
+            wb_post_enable_guard_ctr <= 24'd0;
+            state          <= ST_IDLE;
+            req_adr        <= 32'd0;
+            req_wdat       <= 32'd0;
+            req_sel        <= 4'd0;
+            req_we         <= 1'b0;
+            rmw_adr        <= 32'd0;
+            rmw_pair_base  <= 32'd0;
+            rmw_wdat       <= 32'd0;
+            rmw_sel        <= 4'd0;
+            rmw_lower_read_dat <= 32'd0;
+            rmw_lower_write_dat <= 32'd0;
+            rmw_upper_write_dat <= 32'd0;
+            rmw_target_upper <= 1'b0;
+            rmw_is_selftest <= 1'b0;
+            wb_wait_ctr    <= 24'd0;
+            selftest_start_req <= 1'b0;
+            selftest_stop_req <= 1'b0;
+            selftest_reset_req <= 1'b0;
+            selftest_continuous <= 1'b0;
+            selftest_auto_start <= SELFTEST_AUTO_START;
+            selftest_running <= 1'b0;
+            selftest_done <= 1'b0;
+            selftest_pass <= 1'b0;
+            selftest_fail <= 1'b0;
+            selftest_timeout <= 1'b0;
+            selftest_wb_err <= 1'b0;
+            selftest_aborted <= 1'b0;
+            selftest_index <= 8'd0;
+            selftest_fail_addr <= 32'd0;
+            selftest_expected <= 32'd0;
+            selftest_observed <= 32'd0;
+            selftest_progress <= 32'd0;
+            selftest_error_count <= 16'd0;
+            selftest_verify_pending <= 1'b0;
+            selftest_diag <= 32'd0;
+            selftest_pattern_hold <= 32'd0;
+            selftest_addr_hold <= 32'd0;
+            selftest_pair_active <= 1'b0;
+            selftest_pair_phase <= 2'd0;
+            selftest_pair_addr0 <= 32'd0;
+            selftest_pair_addr1 <= 32'd0;
+            selftest_pair_pattern0 <= 32'd0;
+            selftest_pair_pattern1 <= 32'd0;
+        end else if (user_rst) begin
+            wb_ack_r <= 1'b0;
+            wb_dat_r <= 32'd0;
+            dbg_ack_r <= 1'b0;
+            dbg_err_r <= 1'b0;
+            dbg_timeout_r <= 1'b0;
+            dbg_cpu_req_seen_r <= 1'b0;
+            dbg_cpu_resp_seen_r <= 1'b0;
+            wb_ctrl_enable_req <= 1'b0;
+            wb_ctrl_arm_pending <= 1'b1;
+            wb_ctrl_done_r   <= 1'b0;
+            wb_ctrl_err_r    <= 1'b0;
+            wb_ctrl_step     <= 2'd0;
+            wb_ctrl_adr_r    <= WB_CTRL_ADDR_CORE_ENABLE;
+            wb_ctrl_dat_w_r  <= 32'd1;
+            wb_ctrl_sel_r    <= 4'b1111;
+            wb_ctrl_we_r     <= 1'b1;
+            wb_ctrl_wait_ctr <= 24'd0;
+            wb_ctrl_start_delay_ctr <= 24'd2048;
+            wb_post_enable_guard_ctr <= 24'd0;
+            state          <= ST_IDLE;
+            req_adr        <= 32'd0;
+            req_wdat       <= 32'd0;
+            req_sel        <= 4'd0;
+            req_we         <= 1'b0;
+            rmw_adr        <= 32'd0;
+            rmw_pair_base  <= 32'd0;
+            rmw_wdat       <= 32'd0;
+            rmw_sel        <= 4'd0;
+            rmw_lower_read_dat <= 32'd0;
+            rmw_lower_write_dat <= 32'd0;
+            rmw_upper_write_dat <= 32'd0;
+            rmw_target_upper <= 1'b0;
+            rmw_is_selftest <= 1'b0;
+            wb_wait_ctr    <= 24'd0;
+            selftest_start_req <= 1'b0;
+            selftest_stop_req <= 1'b0;
+            selftest_reset_req <= 1'b0;
+            selftest_continuous <= 1'b0;
+            selftest_auto_start <= SELFTEST_AUTO_START;
+            selftest_running <= 1'b0;
+            selftest_done <= 1'b0;
+            selftest_pass <= 1'b0;
+            selftest_fail <= 1'b0;
+            selftest_timeout <= 1'b0;
+            selftest_wb_err <= 1'b0;
+            selftest_aborted <= 1'b0;
+            selftest_index <= 8'd0;
+            selftest_fail_addr <= 32'd0;
+            selftest_expected <= 32'd0;
+            selftest_observed <= 32'd0;
+            selftest_progress <= 32'd0;
+            selftest_error_count <= 16'd0;
+            selftest_verify_pending <= 1'b0;
+            selftest_diag <= 32'd0;
+            selftest_pattern_hold <= 32'd0;
+            selftest_addr_hold <= 32'd0;
+            selftest_pair_active <= 1'b0;
+            selftest_pair_phase <= 2'd0;
+            selftest_pair_addr0 <= 32'd0;
+            selftest_pair_addr1 <= 32'd0;
+            selftest_pair_pattern0 <= 32'd0;
+            selftest_pair_pattern1 <= 32'd0;
         end else begin
             wb_ack_r <= 1'b0;
             dbg_ack_r <= 1'b0;
             dbg_err_r <= 1'b0;
             dbg_timeout_r <= 1'b0;
 
-            resp_toggle_meta_clk <= resp_toggle_u;
-            resp_toggle_sync_clk <= resp_toggle_meta_clk;
-            status_level_meta_clk <= status_level_u;
-            status_level_sync_clk <= status_level_meta_clk;
-
-            dbg_ack_toggle_meta_clk <= dbg_ack_toggle_u;
-            dbg_ack_toggle_sync_clk <= dbg_ack_toggle_meta_clk;
-            dbg_err_toggle_meta_clk <= dbg_err_toggle_u;
-            dbg_err_toggle_sync_clk <= dbg_err_toggle_meta_clk;
-            dbg_timeout_toggle_meta_clk <= dbg_timeout_toggle_u;
-            dbg_timeout_toggle_sync_clk <= dbg_timeout_toggle_meta_clk;
-
-            if (dbg_ack_toggle_sync_clk != dbg_ack_toggle_seen_clk) begin
-                dbg_ack_r <= 1'b1;
-                dbg_ack_toggle_seen_clk <= dbg_ack_toggle_sync_clk;
-            end
-            if (dbg_err_toggle_sync_clk != dbg_err_toggle_seen_clk) begin
-                dbg_err_r <= 1'b1;
-                dbg_err_toggle_seen_clk <= dbg_err_toggle_sync_clk;
-            end
-            if (dbg_timeout_toggle_sync_clk != dbg_timeout_toggle_seen_clk) begin
-                dbg_timeout_r <= 1'b1;
-                dbg_timeout_toggle_seen_clk <= dbg_timeout_toggle_sync_clk;
-            end
-
-            if (req_block_new_clk && !wb_req_active) begin
-                req_block_new_clk <= 1'b0;
-            end
-
-            if (req_busy_clk && (resp_toggle_sync_clk != resp_toggle_seen_clk)) begin
-                wb_ack_r <= 1'b1;
-                wb_dat_r <= resp_dat_u;
-                resp_toggle_seen_clk <= resp_toggle_sync_clk;
-                req_busy_clk <= 1'b0;
-                req_block_new_clk <= 1'b1;
-            end else if (!req_busy_clk && !req_block_new_clk && wb_req_active) begin
-                req_adr_clk <= wb_adr_i;
-                req_dat_clk <= wb_dat_i;
-                req_sel_clk <= wb_sel_i;
-                req_we_clk <= wb_we_i;
-                req_toggle_clk <= ~req_toggle_clk;
-                req_busy_clk <= 1'b1;
-            end
-        end
-    end
-
-    always @(posedge user_clk or posedge rst) begin
-        if (rst) begin
-            wb_ctrl_enable_req <= 1'b0;
-            wb_ctrl_arm_pending <= 1'b1;
-            wb_ctrl_done_r   <= 1'b0;
-            wb_ctrl_err_r    <= 1'b0;
-            wb_ctrl_step     <= 2'd0;
-            wb_ctrl_adr_r    <= WB_CTRL_ADDR_CORE_ENABLE;
-            wb_ctrl_dat_w_r  <= 32'd1;
-            wb_ctrl_sel_r    <= 4'b1111;
-            wb_ctrl_we_r     <= 1'b1;
-            wb_ctrl_wait_ctr <= 24'd0;
-            wb_ctrl_start_delay_ctr <= 24'd2048;
-            wb_post_enable_guard_ctr <= 24'd0;
-            state          <= ST_IDLE;
-            req_adr        <= 32'd0;
-            req_wdat       <= 32'd0;
-            req_sel        <= 4'd0;
-            req_we         <= 1'b0;
-            rmw_adr        <= 32'd0;
-            rmw_wdat       <= 32'd0;
-            rmw_sel        <= 4'd0;
-            rmw_merged_dat <= 32'd0;
-            wb_wait_ctr    <= 24'd0;
-            selftest_start_req <= 1'b0;
-            selftest_stop_req <= 1'b0;
-            selftest_reset_req <= 1'b0;
-            selftest_continuous <= 1'b0;
-            selftest_auto_start <= SELFTEST_AUTO_START;
-            selftest_running <= 1'b0;
-            selftest_done <= 1'b0;
-            selftest_pass <= 1'b0;
-            selftest_fail <= 1'b0;
-            selftest_timeout <= 1'b0;
-            selftest_wb_err <= 1'b0;
-            selftest_aborted <= 1'b0;
-            selftest_index <= 8'd0;
-            selftest_fail_addr <= 32'd0;
-            selftest_expected <= 32'd0;
-            selftest_observed <= 32'd0;
-            selftest_progress <= 32'd0;
-            selftest_error_count <= 16'd0;
-            selftest_verify_pending <= 1'b0;
-            selftest_diag <= 32'd0;
-            selftest_pattern_hold <= 32'd0;
-            selftest_addr_hold <= 32'd0;
-            req_toggle_meta_u <= 1'b0;
-            req_toggle_sync_u <= 1'b0;
-            req_toggle_seen_u <= 1'b0;
-            cpu_req_valid_u <= 1'b0;
-            cpu_req_adr_u <= 32'd0;
-            cpu_req_dat_u <= 32'd0;
-            cpu_req_sel_u <= 4'd0;
-            cpu_req_we_u <= 1'b0;
-            resp_toggle_u <= 1'b0;
-            resp_dat_u <= 32'd0;
-            dbg_ack_toggle_u <= 1'b0;
-            dbg_err_toggle_u <= 1'b0;
-            dbg_timeout_toggle_u <= 1'b0;
-        end else if (user_rst) begin
-            wb_ctrl_enable_req <= 1'b0;
-            wb_ctrl_arm_pending <= 1'b1;
-            wb_ctrl_done_r   <= 1'b0;
-            wb_ctrl_err_r    <= 1'b0;
-            wb_ctrl_step     <= 2'd0;
-            wb_ctrl_adr_r    <= WB_CTRL_ADDR_CORE_ENABLE;
-            wb_ctrl_dat_w_r  <= 32'd1;
-            wb_ctrl_sel_r    <= 4'b1111;
-            wb_ctrl_we_r     <= 1'b1;
-            wb_ctrl_wait_ctr <= 24'd0;
-            wb_ctrl_start_delay_ctr <= 24'd2048;
-            wb_post_enable_guard_ctr <= 24'd0;
-            state          <= ST_IDLE;
-            req_adr        <= 32'd0;
-            req_wdat       <= 32'd0;
-            req_sel        <= 4'd0;
-            req_we         <= 1'b0;
-            rmw_adr        <= 32'd0;
-            rmw_wdat       <= 32'd0;
-            rmw_sel        <= 4'd0;
-            rmw_merged_dat <= 32'd0;
-            wb_wait_ctr    <= 24'd0;
-            selftest_start_req <= 1'b0;
-            selftest_stop_req <= 1'b0;
-            selftest_reset_req <= 1'b0;
-            selftest_continuous <= 1'b0;
-            selftest_auto_start <= SELFTEST_AUTO_START;
-            selftest_running <= 1'b0;
-            selftest_done <= 1'b0;
-            selftest_pass <= 1'b0;
-            selftest_fail <= 1'b0;
-            selftest_timeout <= 1'b0;
-            selftest_wb_err <= 1'b0;
-            selftest_aborted <= 1'b0;
-            selftest_index <= 8'd0;
-            selftest_fail_addr <= 32'd0;
-            selftest_expected <= 32'd0;
-            selftest_observed <= 32'd0;
-            selftest_progress <= 32'd0;
-            selftest_error_count <= 16'd0;
-            selftest_verify_pending <= 1'b0;
-            selftest_diag <= 32'd0;
-            selftest_pattern_hold <= 32'd0;
-            selftest_addr_hold <= 32'd0;
-            req_toggle_meta_u <= 1'b0;
-            req_toggle_sync_u <= 1'b0;
-            req_toggle_seen_u <= req_toggle_sync_u;
-            cpu_req_valid_u <= 1'b0;
-            cpu_req_adr_u <= 32'd0;
-            cpu_req_dat_u <= 32'd0;
-            cpu_req_sel_u <= 4'd0;
-            cpu_req_we_u <= 1'b0;
-        end else begin
-            req_toggle_meta_u <= req_toggle_clk;
-            req_toggle_sync_u <= req_toggle_meta_u;
-
             if (user_port_wb_ack_raw) begin
-                dbg_ack_toggle_u <= ~dbg_ack_toggle_u;
+                dbg_ack_r <= 1'b1;
+                if (!rmw_is_selftest) begin
+                    dbg_cpu_resp_seen_r <= 1'b1;
+                end
+                if (selftest_running) begin
+                    selftest_diag[4] <= 1'b1;
+                end
             end
             if (user_port_wb_err) begin
-                dbg_err_toggle_u <= ~dbg_err_toggle_u;
-            end
-
-            if ((req_toggle_sync_u != req_toggle_seen_u) && !cpu_req_valid_u) begin
-                req_toggle_seen_u <= req_toggle_sync_u;
-                cpu_req_valid_u <= 1'b1;
-                cpu_req_adr_u <= req_adr_clk;
-                cpu_req_dat_u <= req_dat_clk;
-                cpu_req_sel_u <= req_sel_clk;
-                cpu_req_we_u <= req_we_clk;
+                dbg_err_r <= 1'b1;
+                if (!rmw_is_selftest) begin
+                    dbg_cpu_resp_seen_r <= 1'b1;
+                end
+                if (selftest_running) begin
+                    selftest_diag[5] <= 1'b1;
+                end
             end
 
             selftest_start_req <= 1'b0;
@@ -528,22 +443,21 @@ module wb_sdram_litedram #(
             selftest_reset_req <= 1'b0;
 
             if (selftest_reg_wr) begin
-                resp_dat_u <= 32'd0;
-                resp_toggle_u <= ~resp_toggle_u;
-                cpu_req_valid_u <= 1'b0;
-                if (cpu_req_adr_u == SELFTEST_CMD_ADDR) begin
-                    if (cpu_req_sel_u[0]) begin
-                        selftest_start_req <= cpu_req_dat_u[0];
-                        selftest_stop_req <= cpu_req_dat_u[1];
-                        selftest_reset_req <= cpu_req_dat_u[2];
-                        selftest_continuous <= cpu_req_dat_u[3];
-                        selftest_auto_start <= cpu_req_dat_u[4];
+                wb_ack_r <= 1'b1;
+                wb_dat_r <= 32'd0;
+                if (wb_adr_i == SELFTEST_CMD_ADDR) begin
+                    if (wb_sel_i[0]) begin
+                        selftest_start_req <= wb_dat_i[0];
+                        selftest_stop_req <= wb_dat_i[1];
+                        selftest_reset_req <= wb_dat_i[2];
+                        selftest_continuous <= wb_dat_i[3];
+                        selftest_auto_start <= wb_dat_i[4];
                     end
                 end
             end else if (selftest_reg_rd) begin
-                cpu_req_valid_u <= 1'b0;
-                if (cpu_req_adr_u == SELFTEST_STATUS_ADDR) begin
-                    resp_dat_u <= {
+                wb_ack_r <= 1'b1;
+                if (wb_adr_i == SELFTEST_STATUS_ADDR) begin
+                    wb_dat_r <= {
                         20'd0,
                         wb_ctrl_pending_u,
                         wb_ctrl_err_r,
@@ -558,22 +472,21 @@ module wb_sdram_litedram #(
                         selftest_running,
                         ~selftest_running
                     };
-                end else if (cpu_req_adr_u == SELFTEST_FAIL_ADDR_ADDR) begin
-                    resp_dat_u <= selftest_fail_addr;
-                end else if (cpu_req_adr_u == SELFTEST_EXPECTED_ADDR) begin
-                    resp_dat_u <= selftest_expected;
-                end else if (cpu_req_adr_u == SELFTEST_OBSERVED_ADDR) begin
-                    resp_dat_u <= selftest_observed;
-                end else if (cpu_req_adr_u == SELFTEST_PROGRESS_ADDR) begin
-                    resp_dat_u <= selftest_progress;
-                end else if (cpu_req_adr_u == SELFTEST_ERRORS_ADDR) begin
-                    resp_dat_u <= {16'd0, selftest_error_count};
-                end else if (cpu_req_adr_u == SELFTEST_DIAG_ADDR) begin
-                    resp_dat_u <= selftest_diag;
+                end else if (wb_adr_i == SELFTEST_FAIL_ADDR_ADDR) begin
+                    wb_dat_r <= selftest_fail_addr;
+                end else if (wb_adr_i == SELFTEST_EXPECTED_ADDR) begin
+                    wb_dat_r <= selftest_expected;
+                end else if (wb_adr_i == SELFTEST_OBSERVED_ADDR) begin
+                    wb_dat_r <= selftest_observed;
+                end else if (wb_adr_i == SELFTEST_PROGRESS_ADDR) begin
+                    wb_dat_r <= selftest_progress;
+                end else if (wb_adr_i == SELFTEST_ERRORS_ADDR) begin
+                    wb_dat_r <= {16'd0, selftest_error_count};
+                end else if (wb_adr_i == SELFTEST_DIAG_ADDR) begin
+                    wb_dat_r <= selftest_diag;
                 end else begin
-                    resp_dat_u <= 32'd0;
+                    wb_dat_r <= 32'd0;
                 end
-                resp_toggle_u <= ~resp_toggle_u;
             end
 
             if (selftest_reset_req) begin
@@ -590,6 +503,8 @@ module wb_sdram_litedram #(
                 selftest_error_count <= 16'd0;
                 selftest_verify_pending <= 1'b0;
                 selftest_diag <= 32'd0;
+                selftest_pair_active <= 1'b0;
+                selftest_pair_phase <= 2'd0;
             end
 
             if (selftest_stop_req && selftest_running) begin
@@ -619,8 +534,14 @@ module wb_sdram_litedram #(
                 selftest_error_count <= 16'd0;
                 selftest_verify_pending <= 1'b0;
                 selftest_diag <= 32'd0;
+                selftest_pair_active <= 1'b0;
+                selftest_pair_phase <= 2'd0;
                 selftest_addr_hold <= selftest_addr_for_index(8'd0);
                 selftest_pattern_hold <= selftest_pattern_for_index(8'd0);
+                selftest_pair_addr0 <= selftest_addr_for_index(8'd0);
+                selftest_pair_addr1 <= selftest_addr_for_index(8'd1);
+                selftest_pair_pattern0 <= selftest_pattern_for_index(8'd0);
+                selftest_pair_pattern1 <= selftest_pattern_for_index(8'd1);
                 selftest_progress <= {22'd0, 1'b0, 1'b0, 8'd0};
             end
 
@@ -718,6 +639,28 @@ module wb_sdram_litedram #(
                 ST_IDLE: begin
                     if (wb_ctrl_enable_req) begin
                         wb_wait_ctr <= 24'd0;
+                    end else if (selftest_running && selftest_pair_active && (selftest_pair_phase == 2'd2)) begin
+                        selftest_addr_hold <= selftest_pair_addr0;
+                        selftest_pattern_hold <= selftest_pair_pattern0;
+                        req_adr <= selftest_pair_addr0;
+                        req_wdat <= 32'd0;
+                        req_sel <= 4'b1111;
+                        req_we <= 1'b0;
+                        rmw_is_selftest <= 1'b1;
+                        selftest_progress <= {22'd0, 1'b1, 1'b1, 8'd0};
+                        wb_wait_ctr <= 24'd0;
+                        state <= ST_SELF_READ;
+                    end else if (selftest_running && selftest_pair_active) begin
+                        selftest_addr_hold <= (selftest_pair_phase == 2'd0) ? selftest_pair_addr0 : selftest_pair_addr1;
+                        selftest_pattern_hold <= (selftest_pair_phase == 2'd0) ? selftest_pair_pattern0 : selftest_pair_pattern1;
+                        req_adr <= (selftest_pair_phase == 2'd0) ? selftest_pair_addr0 : selftest_pair_addr1;
+                        req_wdat <= (selftest_pair_phase == 2'd0) ? selftest_pair_pattern0 : selftest_pair_pattern1;
+                        req_sel <= 4'b1111;
+                        req_we <= 1'b1;
+                        rmw_is_selftest <= 1'b1;
+                        selftest_progress <= {22'd0, 1'b1, 1'b0, (selftest_pair_phase == 2'd0) ? 8'd0 : 8'd1};
+                        wb_wait_ctr <= 24'd0;
+                        state <= ST_WB_WAIT;
                     end else if (selftest_running) begin
                         selftest_addr_hold <= selftest_addr_for_index(selftest_index);
                         selftest_pattern_hold <= selftest_pattern_for_index(selftest_index);
@@ -725,25 +668,36 @@ module wb_sdram_litedram #(
                         req_wdat <= selftest_pattern_for_index(selftest_index);
                         req_sel <= 4'b1111;
                         req_we <= 1'b1;
+                        rmw_is_selftest <= 1'b1;
                         // progress[9]=active, progress[8]=phase(read=1/write=0), progress[7:0]=index
                         selftest_progress <= {22'd0, 1'b1, 1'b0, selftest_index};
                         wb_wait_ctr <= 24'd0;
-                        state <= ST_SELF_WRITE;
+                        state <= ST_WB_WAIT;
                     end else if (selftest_reg_sel) begin
+                        wb_wait_ctr <= 24'd0;
+                    end else if (wb_req_active && !user_port_ready_u) begin
+                        dbg_cpu_req_seen_r <= 1'b1;
+                        wb_ack_r <= 1'b1;
+                        wb_dat_r <= 32'd0;
+                        dbg_timeout_r <= 1'b1;
                         wb_wait_ctr <= 24'd0;
                     end else if (!user_port_ready_u) begin
                         wb_wait_ctr <= 24'd0;
-                    end else if (cpu_partial_write_req) begin
-                        rmw_adr   <= cpu_req_adr_u;
-                        rmw_wdat  <= cpu_req_dat_u;
-                        rmw_sel   <= cpu_req_sel_u;
+                    end else if (cpu_write_req && (cpu_write_sel != 4'b1111)) begin
+                        dbg_cpu_req_seen_r <= 1'b1;
+                        rmw_adr   <= wb_adr_i;
+                        rmw_wdat  <= wb_dat_i;
+                        rmw_sel   <= cpu_write_sel;
+                        rmw_is_selftest <= 1'b0;
                         wb_wait_ctr <= 24'd0;
-                        state <= ST_RMW_READ;
-                    end else if (cpu_req_valid_u) begin
-                        req_adr     <= cpu_req_adr_u;
-                        req_wdat    <= cpu_req_dat_u;
+                        state <= ST_RMW_READ_HI;
+                    end else if (wb_req_active) begin
+                        dbg_cpu_req_seen_r <= 1'b1;
+                        req_adr     <= wb_adr_i;
+                        req_wdat    <= wb_dat_i;
                         req_sel     <= cpu_read_sel;
-                        req_we      <= cpu_req_we_u;
+                        req_we      <= wb_we_i;
+                        rmw_is_selftest <= 1'b0;
                         wb_wait_ctr <= 24'd0;
                         state       <= ST_WB_WAIT;
                     end
@@ -751,105 +705,167 @@ module wb_sdram_litedram #(
 
                 ST_WB_WAIT: begin
                     if (user_port_wb_ack_or_err) begin
-                        resp_dat_u <= user_port_wb_err ? 32'd0 : user_port_wb_dat_raw;
-                        resp_toggle_u <= ~resp_toggle_u;
-                        cpu_req_valid_u <= 1'b0;
-                        wb_wait_ctr <= 24'd0;
-                        state <= ST_IDLE;
-                    end else if (wb_wait_ctr < WB_TIMEOUT_CYCLES) begin
-                        wb_wait_ctr <= wb_wait_ctr + 24'd1;
-                    end else begin
-                        resp_dat_u <= 32'd0;
-                        resp_toggle_u <= ~resp_toggle_u;
-                        cpu_req_valid_u <= 1'b0;
-                        dbg_timeout_toggle_u <= ~dbg_timeout_toggle_u;
-                        wb_wait_ctr <= 24'd0;
-                        state <= ST_IDLE;
-                    end
-                end
-
-                ST_RMW_READ: begin
-                    if (user_port_wb_ack_or_err) begin
-                        if (user_port_wb_err) begin
-                            resp_dat_u <= 32'd0;
-                            resp_toggle_u <= ~resp_toggle_u;
-                            cpu_req_valid_u <= 1'b0;
+                        if (rmw_is_selftest) begin
+                            if (user_port_wb_err) begin
+                                selftest_running <= 1'b0;
+                                selftest_done <= 1'b1;
+                                selftest_fail <= 1'b1;
+                                selftest_wb_err <= 1'b1;
+                                selftest_fail_addr <= selftest_addr_hold;
+                                selftest_expected <= selftest_pattern_hold;
+                                selftest_observed <= 32'd0;
+                                selftest_verify_pending <= 1'b0;
+                                selftest_error_count <= selftest_error_count + 16'd1;
+                                wb_wait_ctr <= 24'd0;
+                                state <= ST_IDLE;
+                            end else begin
+                                req_adr <= selftest_addr_hold;
+                                req_wdat <= 32'd0;
+                                req_sel <= 4'b1111;
+                                req_we <= 1'b0;
+                                wb_wait_ctr <= 24'd0;
+                                state <= ST_SELF_GAP;
+                            end
+                        end else begin
+                            wb_ack_r <= 1'b1;
+                            wb_dat_r <= user_port_wb_err ? 32'd0 : user_port_wb_dat_raw;
                             wb_wait_ctr <= 24'd0;
                             state <= ST_IDLE;
-                        end else begin
-                            rmw_merged_dat <= merge_wb_bytes(user_port_wb_dat_raw, rmw_wdat, rmw_sel);
-                            wb_wait_ctr    <= 24'd0;
-                            state          <= ST_RMW_GAP;
                         end
                     end else if (wb_wait_ctr < WB_TIMEOUT_CYCLES) begin
                         wb_wait_ctr <= wb_wait_ctr + 24'd1;
                     end else begin
-                        resp_dat_u <= 32'd0;
-                        resp_toggle_u <= ~resp_toggle_u;
-                        cpu_req_valid_u <= 1'b0;
-                        dbg_timeout_toggle_u <= ~dbg_timeout_toggle_u;
-                        wb_wait_ctr  <= 24'd0;
-                        state        <= ST_IDLE;
-                    end
-                end
-
-                ST_RMW_GAP: begin
-                    wb_wait_ctr <= 24'd0;
-                    state <= ST_RMW_WRITE;
-                end
-
-                ST_RMW_WRITE: begin
-                    if (user_port_wb_ack_or_err) begin
-                        resp_dat_u <= 32'd0;
-                        resp_toggle_u <= ~resp_toggle_u;
-                        cpu_req_valid_u <= 1'b0;
-                        wb_wait_ctr <= 24'd0;
-                        state <= ST_IDLE;
-                    end else if (wb_wait_ctr < WB_TIMEOUT_CYCLES) begin
-                        wb_wait_ctr <= wb_wait_ctr + 24'd1;
-                    end else begin
-                        resp_dat_u <= 32'd0;
-                        resp_toggle_u <= ~resp_toggle_u;
-                        cpu_req_valid_u <= 1'b0;
-                        dbg_timeout_toggle_u <= ~dbg_timeout_toggle_u;
-                        wb_wait_ctr  <= 24'd0;
-                        state        <= ST_IDLE;
-                    end
-                end
-
-                ST_SELF_WRITE: begin
-                    if (user_port_wb_ack_or_err) begin
-                        if (user_port_wb_err) begin
+                        if (rmw_is_selftest) begin
                             selftest_running <= 1'b0;
                             selftest_done <= 1'b1;
                             selftest_fail <= 1'b1;
-                            selftest_wb_err <= 1'b1;
+                            selftest_timeout <= 1'b1;
                             selftest_fail_addr <= selftest_addr_hold;
                             selftest_expected <= selftest_pattern_hold;
                             selftest_observed <= 32'd0;
                             selftest_verify_pending <= 1'b0;
+                            selftest_diag[2] <= 1'b1;
                             selftest_error_count <= selftest_error_count + 16'd1;
+                        end else begin
+                            wb_ack_r <= 1'b1;
+                            wb_dat_r <= 32'd0;
+                        end
+                        dbg_timeout_r <= 1'b1;
+                        wb_wait_ctr <= 24'd0;
+                        state <= ST_IDLE;
+                    end
+                end
+
+                ST_RMW_READ_LO: begin
+                    if (user_port_wb_ack_or_err) begin
+                        if (user_port_wb_err) begin
+                            if (rmw_is_selftest) begin
+                                selftest_running <= 1'b0;
+                                selftest_done <= 1'b1;
+                                selftest_fail <= 1'b1;
+                                selftest_wb_err <= 1'b1;
+                                selftest_fail_addr <= selftest_addr_hold;
+                                selftest_expected <= selftest_pattern_hold;
+                                selftest_observed <= 32'd0;
+                                selftest_verify_pending <= 1'b0;
+                                selftest_error_count <= selftest_error_count + 16'd1;
+                            end else begin
+                                wb_ack_r <= 1'b1;
+                                wb_dat_r <= 32'd0;
+                            end
                             wb_wait_ctr <= 24'd0;
                             state <= ST_IDLE;
                         end else begin
+                            rmw_lower_read_dat <= user_port_wb_dat_raw;
+                            rmw_lower_write_dat <= merge_wb_bytes(user_port_wb_dat_raw, rmw_wdat, rmw_sel);
                             wb_wait_ctr <= 24'd0;
-                            state <= ST_SELF_GAP;
+                            state <= ST_RMW_GAP;
                         end
                     end else if (wb_wait_ctr < WB_TIMEOUT_CYCLES) begin
                         wb_wait_ctr <= wb_wait_ctr + 24'd1;
                     end else begin
-                        selftest_running <= 1'b0;
-                        selftest_done <= 1'b1;
-                        selftest_fail <= 1'b1;
-                        selftest_timeout <= 1'b1;
-                        selftest_fail_addr <= selftest_addr_hold;
-                        selftest_expected <= selftest_pattern_hold;
-                        selftest_observed <= 32'd0;
-                        selftest_verify_pending <= 1'b0;
-                        selftest_diag[2] <= 1'b1;
-                        dbg_timeout_toggle_u <= ~dbg_timeout_toggle_u;
-                        selftest_progress <= {22'd0, 1'b1, 1'b0, selftest_index};
-                        selftest_error_count <= selftest_error_count + 16'd1;
+                        if (rmw_is_selftest) begin
+                            selftest_running <= 1'b0;
+                            selftest_done <= 1'b1;
+                            selftest_fail <= 1'b1;
+                            selftest_timeout <= 1'b1;
+                            selftest_fail_addr <= selftest_addr_hold;
+                            selftest_expected <= selftest_pattern_hold;
+                            selftest_observed <= 32'd0;
+                            selftest_verify_pending <= 1'b0;
+                            selftest_diag[2] <= 1'b1;
+                            selftest_error_count <= selftest_error_count + 16'd1;
+                        end else begin
+                            wb_ack_r <= 1'b1;
+                            wb_dat_r <= 32'd0;
+                        end
+                        dbg_timeout_r <= 1'b1;
+                        wb_wait_ctr  <= 24'd0;
+                        state        <= ST_IDLE;
+                    end
+                end
+
+                ST_RMW_READ_HI: begin
+                    // Leave the user port idle for one full cycle before issuing
+                    // the RMW read so a previous transaction response cannot be
+                    // mis-consumed as the source word for byte-lane merging.
+                    wb_wait_ctr <= 24'd0;
+                    state <= ST_RMW_READ_LO;
+                end
+
+                ST_RMW_GAP: begin
+                    wb_wait_ctr <= 24'd0;
+                    state <= ST_RMW_WRITE_LO;
+                end
+
+                ST_RMW_WRITE_LO: begin
+                    if (user_port_wb_ack_or_err) begin
+                        if (user_port_wb_err) begin
+                            if (rmw_is_selftest) begin
+                                selftest_running <= 1'b0;
+                                selftest_done <= 1'b1;
+                                selftest_fail <= 1'b1;
+                                selftest_wb_err <= 1'b1;
+                                selftest_fail_addr <= selftest_addr_hold;
+                                selftest_expected <= selftest_pattern_hold;
+                                selftest_observed <= 32'd0;
+                                selftest_verify_pending <= 1'b0;
+                                selftest_error_count <= selftest_error_count + 16'd1;
+                            end else begin
+                                wb_ack_r <= 1'b1;
+                                wb_dat_r <= 32'd0;
+                            end
+                            wb_wait_ctr <= 24'd0;
+                            state <= ST_IDLE;
+                        end else begin
+                            wb_ack_r <= 1'b1;
+                            wb_dat_r <= 32'd0;
+                            wb_wait_ctr <= 24'd0;
+                            state <= ST_IDLE;
+                        end
+                    end else if (wb_wait_ctr < WB_TIMEOUT_CYCLES) begin
+                        wb_wait_ctr <= wb_wait_ctr + 24'd1;
+                    end else begin
+                        if (rmw_is_selftest) begin
+                            selftest_running <= 1'b0;
+                            selftest_done <= 1'b1;
+                            selftest_fail <= 1'b1;
+                            selftest_done <= 1'b1;
+                            selftest_fail <= 1'b1;
+                            selftest_timeout <= 1'b1;
+                            selftest_fail_addr <= selftest_addr_hold;
+                            selftest_expected <= selftest_pattern_hold;
+                            selftest_observed <= 32'd0;
+                            selftest_verify_pending <= 1'b0;
+                            selftest_diag[2] <= 1'b1;
+                            selftest_progress <= {22'd0, 1'b1, 1'b0, selftest_index};
+                            selftest_error_count <= selftest_error_count + 16'd1;
+                            selftest_pair_active <= 1'b0;
+                        end else begin
+                            wb_ack_r <= 1'b1;
+                            wb_dat_r <= 32'd0;
+                        end
+                        dbg_timeout_r <= 1'b1;
                         wb_wait_ctr <= 24'd0;
                         state <= ST_IDLE;
                     end
@@ -907,10 +923,16 @@ module wb_sdram_litedram #(
                             selftest_verify_pending <= 1'b1;
                             wb_wait_ctr <= 24'd0;
                             state <= ST_SELF_GAP;
-                        end else if (selftest_index == (SELFTEST_WORDS - 8'd1)) begin
-                            if (selftest_continuous) begin
-                                selftest_index <= 8'd0;
-                                selftest_progress <= 32'd0;
+                        end else if (selftest_pair_active) begin
+                            if (selftest_pair_phase == 2'd0) begin
+                                selftest_pair_phase <= 2'd1;
+                                selftest_progress <= {24'd0, 8'd1};
+                                selftest_verify_pending <= 1'b0;
+                                wb_wait_ctr <= 24'd0;
+                                state <= ST_IDLE;
+                            end else if (selftest_pair_phase == 2'd1) begin
+                                selftest_pair_phase <= 2'd2;
+                                selftest_progress <= {24'd0, 8'd0};
                                 selftest_verify_pending <= 1'b0;
                                 wb_wait_ctr <= 24'd0;
                                 state <= ST_IDLE;
@@ -918,6 +940,24 @@ module wb_sdram_litedram #(
                                 selftest_running <= 1'b0;
                                 selftest_done <= 1'b1;
                                 selftest_pass <= 1'b1;
+                                selftest_pair_active <= 1'b0;
+                                selftest_progress <= 32'd0;
+                                selftest_verify_pending <= 1'b0;
+                                wb_wait_ctr <= 24'd0;
+                                state <= ST_IDLE;
+                            end
+                        end else if (selftest_index == (SELFTEST_WORDS - 8'd1)) begin
+                            if (selftest_continuous) begin
+                                selftest_index <= 8'd0;
+                                selftest_progress <= 32'd0;
+                                selftest_verify_pending <= 1'b0;
+                                selftest_pair_active <= 1'b0;
+                                selftest_pair_phase <= 2'd0;
+                                wb_wait_ctr <= 24'd0;
+                                state <= ST_IDLE;
+                            end else begin
+                                selftest_pair_active <= 1'b1;
+                                selftest_pair_phase <= 2'd0;
                                 selftest_progress <= {24'd0, selftest_index};
                                 selftest_verify_pending <= 1'b0;
                                 wb_wait_ctr <= 24'd0;
@@ -942,7 +982,8 @@ module wb_sdram_litedram #(
                         selftest_observed <= 32'd0;
                         selftest_verify_pending <= 1'b0;
                         selftest_diag[3] <= 1'b1;
-                        dbg_timeout_toggle_u <= ~dbg_timeout_toggle_u;
+                        selftest_pair_active <= 1'b0;
+                        dbg_timeout_r <= 1'b1;
                         selftest_progress <= {22'd0, 1'b1, 1'b1, selftest_index};
                         selftest_error_count <= selftest_error_count + 16'd1;
                         wb_wait_ctr <= 24'd0;
@@ -996,8 +1037,7 @@ module wb_sdram_litedram #(
         .wb_ctrl_err(wb_ctrl_err),
         .wb_ctrl_sel(wb_ctrl_sel_r),
         .wb_ctrl_stb(wb_ctrl_enable_req),
-        .wb_ctrl_we(wb_ctrl_we_r),
-        .sdram_clk_2x_ps(core_sdram_clk_2x_ps)
+        .wb_ctrl_we(wb_ctrl_we_r)
     );
 
 endmodule

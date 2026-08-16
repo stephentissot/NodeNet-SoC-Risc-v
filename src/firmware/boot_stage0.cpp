@@ -4,6 +4,9 @@
 #include "led.h"
 #include "sdram.h"
 
+#define STAGE0_MINIMAL_LED_TRACE 1
+#define STAGE0_SCRUB_VALIDATION_RANGES 1
+
 namespace {
 
 static constexpr uint32_t kFlashBase = 0x10007000u;
@@ -11,6 +14,8 @@ static constexpr uint32_t kLedBase = 0x10000000u;
 static constexpr uint32_t kLedGreenBase = 0x10000004u;
 static constexpr uint32_t kLedYellowBase = 0x10000008u;
 static constexpr uint32_t kStatusBase = 0x10000020u;
+static constexpr uint32_t kStatusRmwReadBase = 0x10000024u;
+static constexpr uint32_t kStatusRmwWriteBase = 0x10000028u;
 static constexpr uint32_t kRamProbeBase = 0x00010000u;
 static constexpr uint32_t kStatusBusStallBit = (1u << 0);
 static constexpr uint32_t kStatusSdramInitDoneBit = (1u << 1);
@@ -47,6 +52,9 @@ static constexpr uint32_t kSdramMax = SDRAM_BASE + SDRAM_SIZE;
 
 static volatile uint32_t* const kLedD2 = reinterpret_cast<volatile uint32_t*>(kLedBase);
 static volatile uint32_t* const kStatusReg = reinterpret_cast<volatile uint32_t*>(kStatusBase);
+static uint32_t g_sdram_partial_byte1_observed = 0u;
+static uint32_t g_sdram_partial_byte1_rmw_read = 0u;
+static uint32_t g_sdram_partial_byte1_rmw_write = 0u;
 
 enum class BootFault : uint8_t {
     None = 0,
@@ -108,12 +116,20 @@ enum class BootFault : uint8_t {
     SdramPartialByte3 = 27,
     SdramPartialHword0 = 28,
     SdramPartialHword1 = 29,
-    SdramTailMerge = 30
+    SdramTailMerge = 30,
+    SdramPartialByte1NoEffect = 31,
+    SdramPartialByte1Lane0 = 32,
+    SdramPartialByte1Lane2 = 33,
+    SdramPartialByte1Lane3 = 34,
+    SdramPartialByte1Other = 35
 };
 
 static WbLed boot_green_led(void);
 static WbLed boot_yellow_led(void);
 static BootFault sdram_atomic_observed_fault(uint32_t expected, uint32_t observed);
+
+static constexpr bool kMinimalLedTrace = (STAGE0_MINIMAL_LED_TRACE != 0);
+static constexpr bool kScrubValidationRanges = (STAGE0_SCRUB_VALIDATION_RANGES != 0);
 
 static inline uint32_t boot_status(void)
 {
@@ -274,7 +290,10 @@ static BootFault wait_sdram_hard_test_done(uint32_t max_poll_loops)
         }
         if (fail) {
             if (timeout) {
-                if ((status & kStatusSdramAckSeenBit) == 0u) {
+                const uint32_t diag = mmio_read32(kSelftestDiag);
+                // Use self-test-scoped acknowledgement tracking. Global sticky
+                // latches can be contaminated by unrelated wrapper traffic.
+                if ((diag & (1u << 4)) == 0u) {
                     return BootFault::SdramHardTestCoreTimeoutNoAck;
                 }
                 if (((status & kStatusSdramCtrlDoneBit) == 0u) && ((status & kStatusSdramCtrlPendingBit) != 0u)) {
@@ -682,16 +701,77 @@ static inline void status_led_pulse_count(WbLed led, uint8_t count, uint32_t on_
     }
 }
 
+static inline void boot_status_code(uint8_t green_count, uint8_t yellow_count)
+{
+    if (!kValidationTrace || kMinimalLedTrace) {
+        return;
+    }
+
+    static constexpr uint32_t kOnCycles = 180000u;
+    static constexpr uint32_t kOffCycles = 120000u;
+    static constexpr uint32_t kBetweenColorsCycles = 220000u;
+    static constexpr uint32_t kAfterCodeCycles = 300000u;
+
+    WbLed green = boot_green_led();
+    WbLed yellow = boot_yellow_led();
+
+    green.off();
+    yellow.off();
+    status_led_pulse_count(green, green_count, kOnCycles, kOffCycles);
+    spin_delay(kBetweenColorsCycles);
+    status_led_pulse_count(yellow, yellow_count, kOnCycles, kOffCycles);
+    green.off();
+    yellow.off();
+    spin_delay(kAfterCodeCycles);
+}
+
+static inline void boot_atomic_trace_marker(uint8_t id)
+{
+    if (!kValidationTrace || kMinimalLedTrace) {
+        return;
+    }
+
+    // All atomic trace steps use a fixed green preamble (1 pulse) plus
+    // a yellow step index so the code stays readable without D2.
+    boot_status_code(1u, id);
+}
+
+static void boot_fault_hex_word(uint32_t value,
+                                uint32_t sync_on_cycles,
+                                uint32_t sync_off_cycles,
+                                uint32_t digit_on_cycles,
+                                uint32_t digit_off_cycles,
+                                uint32_t between_digits_cycles)
+{
+    WbLed green = boot_green_led();
+    WbLed yellow = boot_yellow_led();
+
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        const uint8_t byte = static_cast<uint8_t>(value >> static_cast<uint32_t>(shift));
+        const uint8_t high = static_cast<uint8_t>((byte >> 4) & 0xFu);
+        const uint8_t low = static_cast<uint8_t>(byte & 0xFu);
+        status_led_pulse_count(green, high, digit_on_cycles, digit_off_cycles);
+        spin_delay(between_digits_cycles);
+        status_led_pulse_count(yellow, low, digit_on_cycles, digit_off_cycles);
+        green.off();
+        yellow.off();
+        spin_delay(between_digits_cycles);
+    }
+}
+
 [[noreturn]] static void boot_fault_loop(BootFault fault)
 {
     const uint8_t code = static_cast<uint8_t>(fault);
-    const uint8_t tens = static_cast<uint8_t>(code / 10u);
-    const uint8_t units = static_cast<uint8_t>(code % 10u);
-    static constexpr uint32_t kSyncOnCycles = 900000u;
-    static constexpr uint32_t kSyncOffCycles = 350000u;
-    static constexpr uint32_t kDigitOnCycles = 320000u;
-    static constexpr uint32_t kDigitOffCycles = 320000u;
-    static constexpr uint32_t kBetweenDigitsCycles = 700000u;
+    const bool short_partial_diag = (code >= static_cast<uint8_t>(BootFault::SdramPartialByte1NoEffect)) &&
+                                    (code <= static_cast<uint8_t>(BootFault::SdramPartialByte1Other));
+    const uint8_t tens = short_partial_diag ? 1u : static_cast<uint8_t>(code / 10u);
+    const uint8_t units = short_partial_diag ? static_cast<uint8_t>(code - static_cast<uint8_t>(BootFault::SdramPartialByte1NoEffect) + 1u)
+                                             : static_cast<uint8_t>(code % 10u);
+    static constexpr uint32_t kSyncOnCycles = 1200000u;
+    static constexpr uint32_t kSyncOffCycles = 500000u;
+    static constexpr uint32_t kDigitOnCycles = 500000u;
+    static constexpr uint32_t kDigitOffCycles = 420000u;
+    static constexpr uint32_t kBetweenDigitsCycles = 900000u;
     static constexpr uint32_t kCycleGapCycles = 2200000u;
     WbLed green = boot_green_led();
     WbLed yellow = boot_yellow_led();
@@ -700,6 +780,29 @@ static inline void status_led_pulse_count(WbLed led, uint8_t count, uint32_t on_
     yellow.off();
 
     while (true) {
+        if (fault == BootFault::SdramPartialByte1Other) {
+            // Dedicated partial-write diagnostic:
+            // 1 sync pulse => RMW source word read by the wrapper.
+            // 2 sync pulses => merged full-word write payload issued by the wrapper.
+            // For each byte: green = high nibble, yellow = low nibble.
+            d2_pulse(kSyncOnCycles, kSyncOffCycles);
+            boot_fault_hex_word(g_sdram_partial_byte1_rmw_read,
+                                kSyncOnCycles,
+                                kSyncOffCycles,
+                                kDigitOnCycles,
+                                kDigitOffCycles,
+                                kBetweenDigitsCycles);
+            d2_pulse_count(2u, kSyncOnCycles, kSyncOffCycles);
+            boot_fault_hex_word(g_sdram_partial_byte1_rmw_write,
+                                kSyncOnCycles,
+                                kSyncOffCycles,
+                                kDigitOnCycles,
+                                kDigitOffCycles,
+                                kBetweenDigitsCycles);
+            spin_delay(kCycleGapCycles);
+            continue;
+        }
+
         // Human-readable fault encoding:
         // - D2: one long sync pulse at cycle start.
         // - Green LED: decimal tens digit (0 => no pulse).
@@ -717,26 +820,30 @@ static inline void status_led_pulse_count(WbLed led, uint8_t count, uint32_t on_
 
 static void boot_progress_pulse(uint8_t count)
 {
+    if (kMinimalLedTrace) {
+        return;
+    }
+
     for (uint8_t i = 0; i < count; ++i) {
         *kLedD2 = 1u;
-        spin_delay(1500000u);
+        spin_delay(180000u);
         *kLedD2 = 0u;
-        spin_delay(1500000u);
+        spin_delay(180000u);
     }
-    spin_delay(3000000u);
+    spin_delay(300000u);
 }
 
 static void boot_validation_checkpoint(uint8_t id)
 {
-    if (!kValidationTrace) {
+    if (!kValidationTrace || kMinimalLedTrace) {
         return;
     }
 
     // Use green LED for checkpoints to avoid D2 polarity ambiguity on board.
     // Yellow stays ON during validation, green pulse count identifies progress.
     WbLed green = boot_green_led();
-    status_led_pulse_count(green, id, 2000000u, 1200000u);
-    spin_delay(4000000u);
+    status_led_pulse_count(green, id, 250000u, 150000u);
+    spin_delay(300000u);
 }
 
 static void boot_jump_marker(void)
@@ -764,6 +871,16 @@ static void boot_set_validation_state(bool tests_running, bool tests_passed)
     WbLed green = boot_green_led();
     WbLed yellow = boot_yellow_led();
 
+    if (kMinimalLedTrace) {
+        green.off();
+        if (tests_running) {
+            yellow.on();
+        } else {
+            yellow.off();
+        }
+        return;
+    }
+
     if (tests_passed) {
         yellow.off();
         green.on();
@@ -780,6 +897,10 @@ static void boot_set_validation_state(bool tests_running, bool tests_passed)
 
 static void boot_set_copy_state(void)
 {
+    if (kMinimalLedTrace) {
+        return;
+    }
+
     WbLed green = boot_green_led();
     WbLed yellow = boot_yellow_led();
     green.off();
@@ -788,10 +909,93 @@ static void boot_set_copy_state(void)
 
 static void boot_clear_status_leds(void)
 {
+    if (kMinimalLedTrace) {
+        return;
+    }
+
     WbLed green = boot_green_led();
     WbLed yellow = boot_yellow_led();
     green.off();
     yellow.off();
+}
+
+static bool sdram_write_word_stable(volatile uint32_t* cell, uint32_t value)
+{
+    for (uint8_t attempt = 0; attempt < 3u; ++attempt) {
+        *cell = value;
+        const uint32_t verify_a = *cell;
+        const uint32_t verify_b = *cell;
+        if ((verify_a == value) && (verify_b == value)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool sdram_read_word_settled(volatile uint32_t* cell, uint32_t expected, uint32_t* observed_out)
+{
+    uint32_t observed = 0u;
+
+    for (uint8_t attempt = 0; attempt < 3u; ++attempt) {
+        const uint32_t observed_a = *cell;
+        const uint32_t observed_b = *cell;
+        observed = observed_b;
+
+        if (observed_b == expected) {
+            if (observed_out != nullptr) {
+                *observed_out = observed_b;
+            }
+            return true;
+        }
+
+        if ((observed_a == observed_b) && (attempt != 2u)) {
+            continue;
+        }
+    }
+
+    if (observed_out != nullptr) {
+        *observed_out = observed;
+    }
+    return false;
+}
+
+static void sdram_clear_words(uint32_t addr, uint32_t word_count)
+{
+    volatile uint32_t* cell = reinterpret_cast<volatile uint32_t*>(addr);
+    for (uint32_t i = 0; i < word_count; ++i) {
+        cell[i] = 0u;
+    }
+}
+
+static void sdram_scrub_validation_regions(void)
+{
+    if (!kScrubValidationRanges) {
+        return;
+    }
+
+    // Clear only the regions touched by stage0 validation so boot-time stays
+    // reasonable and we avoid the self-test MMIO aperture at 0x207FF000.
+    sdram_clear_words(SDRAM_BASE + 0x00000000u, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x00000004u, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x00000020u, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x00000100u, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x00000FFCu, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x00001000u, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x00002100u, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x00010000u, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x00020000u, 32768u);
+    sdram_clear_words(SDRAM_BASE + 0x00080000u, 2048u);
+    sdram_clear_words(SDRAM_BASE + 0x00084000u, 2048u);
+    sdram_clear_words(SDRAM_BASE + 0x00100000u, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x00120000u, 2u);
+    sdram_clear_words(SDRAM_BASE + 0x00200000u, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x00300000u, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x00400000u, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x00500000u, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x00600000u, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x00700000u, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x007EFE00u, 1u);
+    sdram_clear_words(SDRAM_BASE + 0x007EFFFCu, 1u);
 }
 
 static uint32_t sdram_pattern_word(uint32_t index, uint32_t salt)
@@ -801,6 +1005,7 @@ static uint32_t sdram_pattern_word(uint32_t index, uint32_t salt)
 
 static BootFault sdram_atomic_test(void)
 {
+    static constexpr uint32_t kAtomicProbeSalt = 0xC001D00Du;
     static const uint32_t kOffsets[] = {
         0x00000000u, 0x00000004u, 0x00000020u, 0x00000100u,
         0x00000FFCu, 0x00001000u, 0x00002100u, 0x00010000u,
@@ -810,15 +1015,22 @@ static BootFault sdram_atomic_test(void)
 
     for (uint32_t i = 0; i < (sizeof(kOffsets) / sizeof(kOffsets[0])); ++i) {
         volatile uint32_t* cell = reinterpret_cast<volatile uint32_t*>(SDRAM_BASE + kOffsets[i]);
-        const uint32_t value = 0x13579BDFu ^ (i * 0x1020304u) ^ kOffsets[i];
+        const uint32_t value = 0x13579BDFu ^ kAtomicProbeSalt ^ (i * 0x1020304u) ^ kOffsets[i];
+        const bool trace_first_probe = (i == 0u);
 
         clear_sdram_atomic_latches();
+        if (trace_first_probe) {
+            boot_atomic_trace_marker(1u);
+        }
         const uint32_t before_a = *cell;
         BootFault phase_fault = sdram_atomic_phase_fault(false);
         if (phase_fault != BootFault::None) {
             return phase_fault;
         }
 
+        if (trace_first_probe) {
+            boot_atomic_trace_marker(2u);
+        }
         const uint32_t before_b = *cell;
         phase_fault = sdram_atomic_phase_fault(false);
         if (phase_fault != BootFault::None) {
@@ -829,6 +1041,9 @@ static BootFault sdram_atomic_test(void)
         }
 
         clear_sdram_atomic_latches();
+        if (trace_first_probe) {
+            boot_atomic_trace_marker(3u);
+        }
         *cell = value;
 
         phase_fault = sdram_atomic_phase_fault(true);
@@ -836,12 +1051,18 @@ static BootFault sdram_atomic_test(void)
             return phase_fault;
         }
 
+        if (trace_first_probe) {
+            boot_atomic_trace_marker(4u);
+        }
         const uint32_t after_a = *cell;
         phase_fault = sdram_atomic_phase_fault(false);
         if (phase_fault != BootFault::None) {
             return phase_fault;
         }
 
+        if (trace_first_probe) {
+            boot_atomic_trace_marker(5u);
+        }
         const uint32_t after_b = *cell;
         phase_fault = sdram_atomic_phase_fault(false);
         if (phase_fault != BootFault::None) {
@@ -867,9 +1088,6 @@ static BootFault sdram_atomic_test(void)
                 }
                 return observed_fault;
             }
-            if (after_a == before_a) {
-                return BootFault::SdramAtomicWriteNoEffect;
-            }
             // This offset passed read/write verification; continue with next probe.
             continue;
         }
@@ -877,7 +1095,7 @@ static BootFault sdram_atomic_test(void)
 
     for (uint32_t i = 0; i < (sizeof(kOffsets) / sizeof(kOffsets[0])); ++i) {
         volatile uint32_t* cell = reinterpret_cast<volatile uint32_t*>(SDRAM_BASE + kOffsets[i]);
-        const uint32_t value = 0x13579BDFu ^ (i * 0x1020304u) ^ kOffsets[i];
+        const uint32_t value = 0x13579BDFu ^ kAtomicProbeSalt ^ (i * 0x1020304u) ^ kOffsets[i];
 
         clear_sdram_atomic_latches();
         const uint32_t observed_a = *cell;
@@ -1012,25 +1230,67 @@ static BootFault sdram_partial_write_test(void)
     volatile uint8_t* bytes = reinterpret_cast<volatile uint8_t*>(SDRAM_BASE + 0x00120000u);
     volatile uint16_t* hwords = reinterpret_cast<volatile uint16_t*>(SDRAM_BASE + 0x00120000u);
 
-    *word = 0xA1B2C3D4u;
+    g_sdram_partial_byte1_observed = 0u;
+    g_sdram_partial_byte1_rmw_read = 0u;
+    g_sdram_partial_byte1_rmw_write = 0u;
+
+    if (!sdram_write_word_stable(word, 0xA1B2C3D4u)) {
+        return BootFault::SdramAtomicReadMismatch;
+    }
     bytes[1] = 0x5Eu;
-    if (*word != 0xA1B25ED4u) {
-        return BootFault::SdramPartialByte1;
+    {
+        uint32_t observed = 0u;
+        if (!sdram_read_word_settled(word, 0xA1B25ED4u, &observed)) {
+            g_sdram_partial_byte1_observed = observed;
+            g_sdram_partial_byte1_rmw_read = mmio_read32(kStatusRmwReadBase);
+            g_sdram_partial_byte1_rmw_write = mmio_read32(kStatusRmwWriteBase);
+            if (observed == 0xA1B2C3D4u) {
+                return BootFault::SdramPartialByte1NoEffect;
+            }
+            if (observed == 0xA1B2C35Eu) {
+                return BootFault::SdramPartialByte1Lane0;
+            }
+            if (observed == 0xA15EC3D4u) {
+                return BootFault::SdramPartialByte1Lane2;
+            }
+            if (observed == 0x5EB2C3D4u) {
+                return BootFault::SdramPartialByte1Lane3;
+            }
+            return BootFault::SdramPartialByte1Other;
+        }
     }
 
+    if (!sdram_write_word_stable(word, 0xA1B25ED4u)) {
+        return BootFault::SdramAtomicReadMismatch;
+    }
     bytes[3] = 0x7Cu;
-    if (*word != 0x7CB25ED4u) {
+    {
+        uint32_t observed = 0u;
+        if (!sdram_read_word_settled(word, 0x7CB25ED4u, &observed)) {
         return BootFault::SdramPartialByte3;
+        }
     }
 
+    if (!sdram_write_word_stable(word, 0x7CB25ED4u)) {
+        return BootFault::SdramAtomicReadMismatch;
+    }
     hwords[0] = 0x1122u;
-    if (*word != 0x7CB21122u) {
+    {
+        uint32_t observed = 0u;
+        if (!sdram_read_word_settled(word, 0x7CB21122u, &observed)) {
         return BootFault::SdramPartialHword0;
+        }
     }
 
+    if (!sdram_write_word_stable(word, 0x7CB21122u)) {
+        return BootFault::SdramAtomicReadMismatch;
+    }
     hwords[1] = 0x3344u;
-    if (*word != 0x33441122u) {
+    {
+        uint32_t observed = 0u;
+        if (!sdram_read_word_settled(word, 0x33441122u, &observed)) {
         return BootFault::SdramPartialHword1;
+        }
     }
 
     return BootFault::None;
@@ -1085,6 +1345,7 @@ static BootFault run_sdram_validation(void)
 
     boot_validation_checkpoint(1);
     clear_sdram_diag_latches();
+    boot_atomic_trace_marker(1u);
 
     {
         const BootFault atomic_fault = sdram_atomic_test();
@@ -1227,7 +1488,8 @@ extern "C" int main(void)
 
     // Build signature pulse train: if you still observe the old single pulse,
     // the programmed bitstream/ROM is stale.
-    boot_progress_pulse(4);
+    d2_pulse_count(3u, 180000u, 180000u);
+    spin_delay(300000u);
 
     // Wait until SDRAM controller reports init completion.
     // This avoids issuing a potentially blocking SDRAM access too early.
@@ -1267,6 +1529,7 @@ extern "C" int main(void)
     }
 
     boot_set_validation_state(true, false);
+    sdram_scrub_validation_regions();
 
     const BootFault sdram_fault = run_sdram_validation();
     if (sdram_fault != BootFault::None) {

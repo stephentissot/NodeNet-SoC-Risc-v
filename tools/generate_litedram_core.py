@@ -50,6 +50,9 @@ def _run_with_patched_litedram(
                 pll.register_clkin(clk, core_config["input_clk_freq"])
                 pll.create_clkout(self.cd_sys, core_config["sys_clk_freq"])
                 pll.create_clkout(self.cd_sys2x, 2*core_config["sys_clk_freq"])
+                # Match the public LiteX Colorlight/ECP5 half-rate SDRAM CRGs:
+                # 90 degrees is theoretical, but 180 degrees is used in practice
+                # to relax forwarding margin on these boards.
                 pll.create_clkout(self.cd_sys2x_ps, 2*core_config["sys_clk_freq"], phase=180)
             else:
                 self.comb += self.cd_sys.clk.eq(platform.request("clk"))
@@ -160,9 +163,9 @@ def main() -> int:
             print("[LITEDRAM][ERROR] Generated RTL format likely changed; update tools/generate_litedram_core.py.", file=sys.stderr)
             return 2
 
-        # Export the CRG phase-shifted 2x clock so the top-level can forward
-        # SDRAM clock with the same PLL/phase strategy as LiteX.
-        if "sdram_clk_2x_ps" not in text:
+        # Half-rate mode needs the phase-shifted 2x clock exported so the
+        # wrapper can forward SDRAM clock with the same LiteDRAM CRG phase.
+        if force_half_rate and "sdram_clk_2x_ps" not in text:
             port_anchor = (
                 "    input  wire    [3:0] wb_ctrl_sel,\n"
                 "    input  wire          wb_ctrl_stb,\n"

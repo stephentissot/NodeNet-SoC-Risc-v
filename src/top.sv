@@ -31,6 +31,10 @@ module top (
     inout  wire        i2c0_sda
 );
 
+    wire sys_clk;
+    wire sdram_clk_phase;
+    wire pll_locked;
+
     localparam [31:0] ROM_BASE    = 32'h0000_0000;
     localparam [31:0] RAM_BASE    = 32'h0001_0000;
     localparam [31:0] LED_D2_ADDR = 32'h1000_0000;
@@ -38,19 +42,26 @@ module top (
     localparam [31:0] LED1_ADDR   = 32'h1000_0008;
     localparam [31:0] TIMER_ADDR  = 32'h1000_0010;
     localparam [31:0] STATUS_ADDR = 32'h1000_0020;
+    localparam [31:0] STATUS_RMW_READ_ADDR  = 32'h1000_0024;
+    localparam [31:0] STATUS_RMW_WRITE_ADDR = 32'h1000_0028;
     localparam [31:0] UART1_BASE  = 32'h1000_4000;
     localparam [31:0] I2C0_BASE   = 32'h1000_5000;  // 4 KB page, 8 regs @ +0x00..+0x1C
     localparam [31:0] NODENET_BASE = 32'h1000_6000;  // NodeNet485 Wishbone slave (1 Mb/s RS-485)
     localparam [31:0] FLASH_BASE  = 32'h1000_7000;  // W25Q64 SPI flash (8 MB)
     localparam [31:0] SDRAM_BASE  = 32'h2000_0000;  // 8MB: 0x20000000–0x207FFFFF
 
-    wire sys_clk = clk_25mhz;
-    wire pll_locked = 1'b1;
-
     // Hold reset active for a short deterministic startup window after PLL lock.
     reg [7:0] reset_cnt = 8'd0;
     reg [1:0] reset_sync = 2'b11;
     wire reset = reset_sync[1];
+
+    ecp5_sdram_pll sys_pll (
+        .clk_i(clk_25mhz),
+        .rst_i(1'b0),
+        .sys_clk_o(sys_clk),
+        .sdram_clk_o(sdram_clk_phase),
+        .locked_o(pll_locked)
+    );
 
     always @(posedge sys_clk or negedge pll_locked) begin
         if (!pll_locked) begin
@@ -111,8 +122,17 @@ module top (
     wire        sdram_dbg_selftest_fail;
     wire        sdram_dbg_selftest_timeout;
     wire        sdram_dbg_selftest_wb_err;
+    wire        sdram_dbg_cpu_req_seen;
+    wire        sdram_dbg_cpu_resp_seen;
+    wire [31:0] sdram_dbg_rmw_read_dat;
+    wire [31:0] sdram_dbg_rmw_write_dat;
     wire [31:0] status_dat;
+    wire [31:0] status_rmw_read_dat;
+    wire [31:0] status_rmw_write_dat;
     wire        status_ack;
+    wire        status_rmw_read_ack;
+    wire        status_rmw_write_ack;
+    wire        sdram_cpu_wait_live;
 
     // Debug: latch if a Wishbone transaction stalls too long without ACK.
     reg [23:0] wb_stall_ctr = 24'd0;
@@ -132,6 +152,8 @@ module top (
     wire wb_led1_sel;
     wire wb_timer_sel;
     wire wb_status_sel;
+    wire wb_status_rmw_read_sel;
+    wire wb_status_rmw_write_sel;
     wire wb_uart1_sel;
     wire wb_i2c0_sel;
     wire wb_nodenet_sel;
@@ -145,6 +167,8 @@ module top (
     assign wb_led1_sel   = wb_cyc && wb_stb && (wb_adr == LED1_ADDR);
     assign wb_timer_sel  = wb_cyc && wb_stb && (wb_adr == TIMER_ADDR);
     assign wb_status_sel = wb_cyc && wb_stb && (wb_adr == STATUS_ADDR);
+    assign wb_status_rmw_read_sel = wb_cyc && wb_stb && (wb_adr == STATUS_RMW_READ_ADDR);
+    assign wb_status_rmw_write_sel = wb_cyc && wb_stb && (wb_adr == STATUS_RMW_WRITE_ADDR);
     assign wb_uart1_sel  = wb_cyc && wb_stb && (wb_adr[31:12] == UART1_BASE[31:12]);
     assign wb_i2c0_sel   = wb_cyc && wb_stb && (wb_adr[31:12] == I2C0_BASE[31:12]);
     assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12]);
@@ -183,6 +207,8 @@ module top (
                       wb_led1_sel    ? led1_dat    :
                       wb_timer_sel   ? timer_dat   :
                       wb_status_sel  ? status_dat  :
+                      wb_status_rmw_read_sel ? status_rmw_read_dat :
+                      wb_status_rmw_write_sel ? status_rmw_write_dat :
                       wb_uart1_sel   ? uart1_dat   :
                       wb_sdram_sel   ? sdram_dat   :
                       32'h0000_0000;
@@ -196,6 +222,8 @@ module top (
                     (wb_led1_sel    && led1_ack)    ||
                     (wb_timer_sel   && timer_ack)   ||
                     (wb_status_sel  && status_ack)  ||
+                    (wb_status_rmw_read_sel && status_rmw_read_ack) ||
+                    (wb_status_rmw_write_sel && status_rmw_write_ack) ||
                     (wb_uart1_sel   && uart1_ack)   ||
                     (wb_sdram_sel   && sdram_ack);
 
@@ -220,6 +248,10 @@ module top (
         wb_stall_latched
     };
     assign status_ack = wb_status_sel;
+    assign status_rmw_read_dat = sdram_dbg_rmw_read_dat;
+    assign status_rmw_write_dat = sdram_dbg_rmw_write_dat;
+    assign status_rmw_read_ack = wb_status_rmw_read_sel;
+    assign status_rmw_write_ack = wb_status_rmw_write_sel;
 
     wire led_d2_out;
     wire led0_out;
@@ -235,8 +267,9 @@ module top (
     
     // Keep status LEDs driven only by wb_led so firmware diagnostics remain
     // unambiguous during boot investigations.
-    assign led_e18 = led0_out;
-    assign led_e16 = led1_out;
+    assign sdram_cpu_wait_live = wb_cyc && wb_stb && wb_sdram_sel && !wb_ack;
+    assign led_e18 = sdram_cpu_wait_live ? (sdram_dbg_cpu_req_seen ? 1'b0 : 1'b1) : led0_out;
+    assign led_e16 = sdram_cpu_wait_live ? (sdram_dbg_cpu_resp_seen ? 1'b0 : 1'b1) : led1_out;
 
     always @(posedge sys_clk) begin
         if (reset) begin
@@ -490,6 +523,7 @@ module top (
     ) sdram0 (
         .clk(sys_clk),
         .rst(reset),
+        .sdram_clk_i(sdram_clk_phase),
 
         .wb_adr_i(wb_adr),
         .wb_dat_i(wb_dat_o),
@@ -514,6 +548,10 @@ module top (
         .dbg_selftest_fail_o(sdram_dbg_selftest_fail),
         .dbg_selftest_timeout_o(sdram_dbg_selftest_timeout),
         .dbg_selftest_wb_err_o(sdram_dbg_selftest_wb_err),
+        .dbg_cpu_req_seen_o(sdram_dbg_cpu_req_seen),
+        .dbg_cpu_resp_seen_o(sdram_dbg_cpu_resp_seen),
+        .dbg_rmw_read_dat_o(sdram_dbg_rmw_read_dat),
+        .dbg_rmw_write_dat_o(sdram_dbg_rmw_write_dat),
 
         .sdram_clk(sdram_clk),
         .sdram_a(sdram_a),

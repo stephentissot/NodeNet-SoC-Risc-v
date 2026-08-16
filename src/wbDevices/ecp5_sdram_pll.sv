@@ -15,13 +15,13 @@ wire clkfb;
 // CLKOP_CPHASE=11 is sys_clk reference at 25MHz with DIV=24.
 // For CLKOS at same DIV, phase steps are 360/24=15 degrees.
 // 180-degree offset => 11 + 12 = 23 (old setting)
-// 90-degree offset  => 11 +  6 = 17 (current test candidate)
+// 90-degree offset  => 11 +  6 = 17
 // You can override at synthesis time with: -DSDRAM_CLKOS_CPHASE=<value>
 // Example: make all YOSYS_DEFINES='-DSDRAM_CLKOS_CPHASE=23'
 `ifdef SDRAM_CLKOS_CPHASE
 localparam integer CLKOS_CPHASE_TUNED = `SDRAM_CLKOS_CPHASE;
 `else
-localparam integer CLKOS_CPHASE_TUNED = 17;
+localparam integer CLKOS_CPHASE_TUNED = 23;
 `endif
 
 (* FREQUENCY_PIN_CLKI="25" *)
