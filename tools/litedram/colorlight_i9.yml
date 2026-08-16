@@ -1,0 +1,21 @@
+{
+    "device": "LFE5U-45F-6BG381C",
+    "cpu": None,
+    "memtype": "SDR",
+    "sdram_module": "M12L64322A",
+    "sdram_module_nb": 4,
+    "sdram_phy": "HalfRateGENSDRPHY",
+    "sdram_rate": "1:2",
+
+    "input_clk_freq": 25e6,
+    "sys_clk_freq":   25e6,
+
+    "cmd_buffer_depth": 16,
+
+    "user_ports": {
+        "wb": {
+            "type": "wishbone",
+            "data_width": 32
+        }
+    }
+}

@@ -46,6 +46,9 @@ SECTIONS
         __data_end = .;
     } > RAM AT > ROM
 
+    /* Anchor for gp-relative small data accesses (RISC-V relaxation). */
+    PROVIDE(__global_pointer$ = __data_start + 0x800);
+
     /* Load address of .data in ROM (for startup copy loop) */
     __data_load = LOADADDR(.data);
 
@@ -60,7 +63,7 @@ SECTIONS
 
     end = .;  /* Symbol for sbrk() — marks end of BSS/start of heap */
 
-    _stack_top = ORIGIN(RAM) + LENGTH(RAM);
+    _stack_top = (ORIGIN(RAM) + LENGTH(RAM)) & ~15;
 
     /* SDRAM region — placed at 0x20000000, NOT initialized at boot.
      * The SDRAM controller needs ~200 µs to initialize after reset;

@@ -29,25 +29,44 @@ static constexpr uint32_t NODENET0_BASE = 0x10006000u;
 // ════════════════════════════════════════════════════════════════════════════
 static u8g2_t g_oled;
 static bool g_oled_ready = false;
+static constexpr bool kOledRenderBypass = true;  // Temporary debug gate.
+static constexpr bool kOledInitBypass = true;    // Temporary debug gate.
 static constexpr uint8_t kOledConsoleLines = 5;
 static constexpr uint8_t kOledConsoleCols = 21;
 static char g_oled_console[kOledConsoleLines][kOledConsoleCols + 1] = {};
 static uint8_t g_oled_console_count = 0;
 
+static void dbg_stage(uint8_t count);
+
 static bool oled_init(uint8_t addr7 = 0x3C)
 {
+    dbg_stage(21);
     u8g2_Setup_ssd1306_i2c_128x64_noname_f(&g_oled, U8G2_R0, u8x8_byte_i2c_hw, u8x8_gpio_delay_hw);
+    dbg_stage(22);
+
     u8g2_SetI2CAddress(&g_oled, static_cast<uint8_t>(addr7 << 1));
+    dbg_stage(23);
+
     u8g2_InitDisplay(&g_oled);
+    dbg_stage(24);
+
     u8g2_SetPowerSave(&g_oled, 0);
+    dbg_stage(25);
+
     u8g2_ClearBuffer(&g_oled);
+    dbg_stage(26);
+
     u8g2_SendBuffer(&g_oled);
+    dbg_stage(27);
+
     g_oled_ready = true;
     return true;
 }
 // Console-style OLED write: append one line and scroll when full.
 static void oled_write(const char* text)
 {
+    static bool first_oled_trace = true;
+
     if (!g_oled_ready || text == nullptr) {
         return;
     }
@@ -72,12 +91,31 @@ static void oled_write(const char* text)
     }
     g_oled_console[line_idx][i] = '\0';
 
+    if (kOledRenderBypass) {
+        if (first_oled_trace) {
+            dbg_stage(11);
+            first_oled_trace = false;
+        }
+        return;
+    }
+
+    if (first_oled_trace) dbg_stage(11);
     u8g2_SetFont(&g_oled, u8g2_font_6x12_tf);
+    if (first_oled_trace) dbg_stage(12);
+
     u8g2_ClearBuffer(&g_oled);
+    if (first_oled_trace) dbg_stage(13);
+
     for (uint8_t row = 0; row < g_oled_console_count; ++row) {
         u8g2_DrawStr(&g_oled, 2, 10 + row * 13, g_oled_console[row]);
     }
+    if (first_oled_trace) dbg_stage(14);
+
     u8g2_SendBuffer(&g_oled);
+    if (first_oled_trace) {
+        dbg_stage(15);
+        first_oled_trace = false;
+    }
 
 }
 
@@ -167,91 +205,40 @@ static void led_d2_blink()
     delay(500u);
 }
 
+static void dbg_stage(uint8_t count)
+{
+    auto raw_delay = [](uint32_t cycles) {
+        for (volatile uint32_t i = 0; i < cycles; ++i) {
+            __asm__ volatile("nop" ::: "memory");
+        }
+    };
+
+    // Distinct startup stage marker: N short pulses then a long separator.
+    for (uint8_t i = 0; i < count; ++i) {
+        *LED_D2 = 1u;
+        raw_delay(450000u);
+        *LED_D2 = 0u;
+        raw_delay(450000u);
+    }
+    raw_delay(1800000u);
+}
+
 int main(void)
 {
-    // Initial startup LED blink to indicate booting.
-    led_d2_blink();
-    // Harware definition
-    WbLed  ledGreen(LED0_BASE);
-    WbLed  ledYellow(LED1_BASE);
-    Serial Serial1(SERIAL1_BASE);
-    Serial1.begin(115200u);
-    Flash myFlash(FLASH_BASE);
+    dbg_stage(1); // entered minimal firmware main
 
-    static constexpr uint32_t kBlinkPeriodMs = 2000u;
-    bool led_on = false;
-    uint32_t next_toggle_ms = *TIMER_MS + kBlinkPeriodMs;
-    *LED_D2 = 1u;
-    oled_init(0x3C);
-    oled_write("  NodeNet SoC RISC-V");
-    oled_write("v" FIRMWARE_VERSION);
-    
-    // NodeNet definition and initialization
-    NodeNet myNodeNet(NODENET0_BASE, 0x41, 1000000, NODENET_PRIORITY_NORMAL, 200);
-    const bool nodenet_ok = myNodeNet.test(oled_boot_status);
+    auto raw_delay = [](uint32_t cycles) {
+        for (volatile uint32_t i = 0; i < cycles; ++i) {
+            __asm__ volatile("nop" ::: "memory");
+        }
+    };
 
-    // POST Tests
-    oled_write("[BOOT] Running tests");
-    oled_write(nodenet_ok ? "[NN] Self-test PASS" : "[NN] Self-test FAIL");
-
-    // Serial definition and initialization
-    
-    char serial1rxBuffer[SERIAL1_BUFFER_LENGTH] = {};
-    uint8_t serial1rxCount = 0;
-
-    const bool sdram_ok = sdramTest(oled_boot_status);
-    oled_write(sdram_ok ? "[BOOT] System ready" : "[BOOT] Degraded mode");
-
-    const bool flash_ok = myFlash.lowLevelTest(oled_boot_status);
-    oled_write(flash_ok ? "[FLASH] LowLevel PASS" : "[FLASH] LowLevel FAIL");
-
-    bool flashdb_ok = false;
-    if (flash_ok) {
-        flashdb_ok = flashdb_init(&myFlash, oled_boot_status);
-        oled_write(flashdb_ok ? "[FDB] Ready" : "[FDB] Init FAIL");
-    } else {
-        oled_write("[FDB] skip (flash)");
-    }
-    if (flashdb_ok) {
-        (void)flashdb_boot_counter_test(oled_boot_status);
-    }
-    
     while (1) {
+        // Isolated heartbeat: no LED0/LED1 access.
+        *LED_D2 = 1u;
+        raw_delay(4000000u);
 
-        // Check serial1 input and echo back any received characters
-        while (Serial1.available()) {
-            uint8_t c = Serial1.read();
-            if (static_cast<char>(c) == '\n') {
-                oled_write("[RX1] Received:");
-                oled_write(serial1rxBuffer);
-                serial1rxCount = 0;
-                serial1rxBuffer[0] = '\0';
-            }
-            else if (serial1rxCount < SERIAL1_BUFFER_LENGTH - 1) {
-                serial1rxBuffer[serial1rxCount++] = static_cast<char>(c);
-                serial1rxBuffer[serial1rxCount] = '\0';
-            }
-        }
-
-        if (myNodeNet.HasMessage()) {
-            NodeNetMessage msg = myNodeNet.ReadMessage();
-            // if(msg.src_addr != 0){ // No response to broadcast messages
-            //     oled_print_rx_header(msg.src_addr, msg.len);
-            //     oled_write_payload_safe(msg.data, msg.len);
-            //     ledYellow.blink(300u);
-            //     // Send a reply to the sender, then release RX buffer.            
-            //     myNodeNet.Send(msg.src_addr, "Hello from NodeNet!");
-            // }
-            
-            NodeNet::FreeMessage(msg);
-        }
-        uint32_t now_ms = millis();
-        if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
-            Serial1.println("Hello");
-            led_on = !led_on;
-            *LED_D2 = led_on ? 0u : 1u;
-            next_toggle_ms += kBlinkPeriodMs;
-            ledGreen.blink(100u);            
-        }
+        *LED_D2 = 0u;
+        raw_delay(4000000u);
     }
 }

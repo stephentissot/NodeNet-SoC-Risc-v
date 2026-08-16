@@ -11,6 +11,11 @@ OPENOCD_SCRIPTS ?= D:/oss-cad-suite/share/openocd/scripts
 # CMSIS-DAP v1 probes are often unstable above 100 kHz on ECP5 JTAG chains.
 ECPDAP_FREQ ?= 100k
 PYTHON ?= python
+ifneq ($(wildcard .venv/Scripts/python.exe),)
+PYTHON := .venv/Scripts/python.exe
+else ifneq ($(wildcard .venv/bin/python),)
+PYTHON := .venv/bin/python
+endif
 FW_STRICT_VERIFY ?= 0
 
 FIRMWARE_HEX=src/firmware/build/boot_stage0.hex
@@ -31,6 +36,20 @@ FW_PATCH_CONFIG=$(BUILD)/$(TOP)_fw.config
 FW_PATCH_BIT=$(BUILD)/$(TOP)_fw.bit
 FLASH_BOOT_IMAGE=$(BUILD)/$(TOP)_flash.bit
 ROM_BYTES=65536
+LITEDRAM_BUILD_DIR ?= $(BUILD)/litedram
+LITEDRAM_CONFIG ?= tools/litedram/colorlight_i9.yml
+LITEDRAM_NAME ?= litedram_core
+LITEDRAM_RTL ?= $(LITEDRAM_BUILD_DIR)/gateware/$(LITEDRAM_NAME).v
+LITEDRAM_VALID_STAMP ?= $(LITEDRAM_BUILD_DIR)/.rtl_valid.stamp
+YOSYS_DEFINES :=
+LITEDRAM_DEPS := $(LITEDRAM_RTL) $(LITEDRAM_VALID_STAMP)
+FIRMWARE_DEPS := src/firmware/Makefile \
+				 src/firmware/boot_stage0.cpp \
+				 src/firmware/start.S \
+				 src/firmware/link.ld \
+				 src/firmware/lib/flash/flash.cpp \
+				 src/firmware/lib/flash/flash.h \
+				 $(wildcard src/firmware/include/*.h)
 
 # Synthesis sources.
 # Keep this explicit so the build uses the Alex Forencich RTL from src/verilog-i2c/rtl
@@ -41,12 +60,28 @@ SOURCES := src/top.sv \
            $(wildcard src/uart/*.v) \
            $(wildcard src/verilog-i2c/rtl/*.v)
 
+SOURCES += $(LITEDRAM_RTL)
+
 SOURCES := $(sort $(SOURCES))
 
 
-.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw-check-image flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only
+.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw-check-image flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only litedram-gen
 
 all: firmware-build $(BUILD)/$(TOP).bit
+
+litedram-gen:
+	$(PYTHON) tools/generate_litedram_core.py --config $(LITEDRAM_CONFIG) --output-dir $(LITEDRAM_BUILD_DIR) --name $(LITEDRAM_NAME)
+
+$(LITEDRAM_RTL): tools/generate_litedram_core.py $(LITEDRAM_CONFIG)
+	@mkdir -p $(LITEDRAM_BUILD_DIR)
+	$(PYTHON) tools/generate_litedram_core.py --config $(LITEDRAM_CONFIG) --output-dir $(LITEDRAM_BUILD_DIR) --name $(LITEDRAM_NAME)
+	@test -s $(LITEDRAM_RTL) || (echo "[LITEDRAM][ERROR] Generated RTL is empty: $(LITEDRAM_RTL)"; rm -f $(LITEDRAM_RTL); exit 1)
+	@grep -Eq "^[[:space:]]*module[[:space:]]+$(LITEDRAM_NAME)[[:space:]#(]" $(LITEDRAM_RTL) || (echo "[LITEDRAM][ERROR] Top module $(LITEDRAM_NAME) not found in $(LITEDRAM_RTL)"; rm -f $(LITEDRAM_RTL); exit 1)
+
+$(LITEDRAM_VALID_STAMP): $(LITEDRAM_RTL)
+	@test -s $(LITEDRAM_RTL) || (echo "[LITEDRAM][ERROR] RTL is empty: $(LITEDRAM_RTL)"; rm -f $(LITEDRAM_RTL); exit 1)
+	@grep -Eq "^[[:space:]]*module[[:space:]]+$(LITEDRAM_NAME)[[:space:]#(]" $(LITEDRAM_RTL) || (echo "[LITEDRAM][ERROR] Top module $(LITEDRAM_NAME) not found in $(LITEDRAM_RTL)"; rm -f $(LITEDRAM_RTL); exit 1)
+	@touch $(LITEDRAM_VALID_STAMP)
 
 fw firmware-only: firmware-build
 
@@ -174,8 +209,10 @@ flash-fw-test-crc: firmware-image-tests
 	$(MAKE) IMAGE_TO_FLASH=$(FIRMWARE_IMAGE_BAD_CRC) flash-fw-write-image
 
 
-# Ensure firmware is rebuilt before any target that consumes the hex.
-$(FIRMWARE_HEX): firmware-build
+# Ensure bootloader hex tracks firmware source changes, but avoid forcing
+# synthesis when nothing changed.
+$(FIRMWARE_HEX): $(FIRMWARE_DEPS)
+	$(MAKE) -C src/firmware bootloader-build ROM_CAPACITY_BYTES=$(ROM_BYTES)
 	@test -f $@ || (echo "Missing $@ after firmware-build" && exit 1)
 
 # Legacy test firmware target kept as an explicit guidance error.
@@ -199,9 +236,9 @@ $(BUILD):
 
 
 # Synthesis
-$(BUILD)/$(TOP).json: $(SOURCES) $(FIRMWARE_HEX) | $(BUILD)
+$(BUILD)/$(TOP).json: $(SOURCES) $(FIRMWARE_HEX) $(LITEDRAM_DEPS) | $(BUILD)
 	yosys \
-		-p "read_verilog -sv $(SOURCES); \
+		-p "read_verilog -sv $(YOSYS_DEFINES) $(SOURCES); \
 		    synth_ecp5 -top $(TOP) -json $@"
 
 # 	yosys \
@@ -235,9 +272,9 @@ $(BUILD)/$(TOP).svf: $(BUILD)/$(TOP).bit
 		$<
 
 
-# Program FPGA configuration RAM (default: openFPGALoader)
-ram: $(BUILD)/$(TOP).bit
-	openFPGALoader -b colorlight-i9 $<
+# Program FPGA configuration RAM without rebuilding.
+# Use 'make all' first if the bitstream is missing.
+ram: ram-fast
 
 
 # Program FPGA RAM with the last built bitstream without triggering rebuilds.

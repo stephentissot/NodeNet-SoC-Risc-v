@@ -39,6 +39,9 @@ SECTIONS
         __data_end = .;
     } > SDRAM
 
+    /* Anchor for gp-relative small data accesses (RISC-V relaxation). */
+    PROVIDE(__global_pointer$ = __data_start + 0x800);
+
     __data_load = LOADADDR(.data);
 
     .bss :
@@ -52,7 +55,7 @@ SECTIONS
 
     end = .;
 
-    _stack_top = ORIGIN(RAM) + LENGTH(RAM);
+    _stack_top = (ORIGIN(RAM) + LENGTH(RAM)) & ~15;
 
     .sdram (NOLOAD) :
     {

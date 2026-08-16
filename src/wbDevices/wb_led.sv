@@ -15,7 +15,7 @@ module wb_led #(
     input  wire        wb_stb_i,
 
     output reg [31:0]  wb_dat_o,
-    output wire        wb_ack_o,
+    output reg         wb_ack_o,
 
     output reg         led
 );
@@ -63,10 +63,8 @@ module wb_led #(
         .default_state_o(default_state_core)
     );
 
-    // ACK must be combinational (synchronous with wb_hit) for Wishbone compliance
-    assign wb_ack_o = wb_hit;
-
     always @(posedge clk) begin
+        wb_ack_o <= wb_hit;
         wb_hit_d  <= wb_hit;
 
         trigger_pulse <= 1'b0;

@@ -54,27 +54,50 @@ extern char _sdram_end;
 #define SDRAM_APP_BASE  SDRAM_BASE
 #define SDRAM_APP_SIZE  SDRAM_SIZE
 
+/* SoC status register exported by top.sv (bit0=bus stall, bit1=SDRAM init done). */
+#define SOC_STATUS_ADDR            0x10000020UL
+#define SOC_STATUS_BUS_STALL_BIT   (1UL << 0)
+#define SOC_STATUS_SDRAM_READY_BIT (1UL << 1)
+
 /* ── Initialization wait ─────────────────────────────────────────────────── */
 
 /**
- * sdram_wait_ready() — busy-wait until the SDRAM controller has completed
- * its power-on initialization sequence.
+ * sdram_wait_ready_timeout() — poll SoC status until SDRAM init is done.
  *
- * The wb_sdram Wishbone controller needs ~200 µs (5000 cycles at 25 MHz) to
- * initialize the SDRAM after FPGA reset. During that time, any Wishbone
- * access to the SDRAM address window will be stalled (wb_ack never asserted),
- * effectively hanging the CPU.
+ * Returns true on ready, false on timeout or if the bus stall flag is latched.
+ */
+static inline bool sdram_wait_ready_timeout(uint32_t max_poll_loops)
+{
+    volatile uint32_t *status = (volatile uint32_t *)SOC_STATUS_ADDR;
+
+    for (uint32_t i = 0; i < max_poll_loops; ++i) {
+        const uint32_t v = *status;
+        if ((v & SOC_STATUS_BUS_STALL_BIT) != 0UL) {
+            return false;
+        }
+        if ((v & SOC_STATUS_SDRAM_READY_BIT) != 0UL) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * sdram_wait_ready() — compatibility helper that waits with a bounded timeout,
+ * then performs one write/read probe to confirm accesses are live.
  *
- * Strategy: perform a dummy write + read-back to a known SDRAM address.
- * The first access will stall until the controller is ready (init completes
- * before any wb_stb is acknowledged). Once the read-back succeeds the SDRAM
- * is operational.
+ * Returns true when ready, false on timeout/stall.
  *
  * Call this once at the beginning of main(), before any SDRAM_DATA variable
  * is accessed.
  */
-static inline void sdram_wait_ready(void)
+static inline bool sdram_wait_ready(void)
 {
+    if (!sdram_wait_ready_timeout(2000000UL)) {
+        return false;
+    }
+
     volatile uint32_t *p = (volatile uint32_t *)SDRAM_BASE;
 
     /* Write a known pattern; the Wishbone stall mechanism ensures this
@@ -83,6 +106,8 @@ static inline void sdram_wait_ready(void)
 
     /* Dummy read to flush the pipeline. */
     (void)(*p);
+
+    return true;
 }
 
 /**
@@ -211,7 +236,10 @@ static inline bool sdramTest(sdram_status_cb_t status_cb)
     uint32_t errors = 0;
 
     if (status_cb != 0) status_cb(2, "[BOOT] SDRAM init...");
-    sdram_wait_ready();
+    if (!sdram_wait_ready()) {
+        if (status_cb != 0) status_cb(2, "[BOOT] SDRAM timeout");
+        return false;
+    }
 
     if (status_cb != 0) status_cb(2, "[BOOT] SDRAM T1 base");
     {
@@ -258,7 +286,9 @@ static inline bool sdramTest(sdram_status_cb_t status_cb)
 }
 
 static inline bool sdram_basic_test(void) {
-    sdram_wait_ready();
+    if (!sdram_wait_ready()) {
+        return false;
+    }
     return sdram_test(256) == 0;
 }
 

@@ -20,6 +20,10 @@ IOBUF PORT "led_e18" IO_TYPE=LVCMOS33 DRIVE=8 PULLMODE=UP;
 # led_e16: wb_led LED1 output
 LOCATE COMP "led_e16" SITE "E6";
 IOBUF PORT "led_e16" IO_TYPE=LVCMOS33 DRIVE=8 PULLMODE=UP;
+# led_f17: red led cpu trap
+LOCATE COMP "led_f17" SITE "F17";
+IOBUF PORT "led_f17" IO_TYPE=LVCMOS33 DRIVE=8 PULLMODE=UP;
+
 
 # SPI Flash (W25Q64) — Configuration Flash Access
 # SCK driven via USRMCLK (internal to FPGA), not a GPIO pin
