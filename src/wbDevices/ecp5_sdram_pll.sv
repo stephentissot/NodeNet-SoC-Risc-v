@@ -16,6 +16,13 @@ wire clkfb;
 // For CLKOS at same DIV, phase steps are 360/24=15 degrees.
 // 180-degree offset => 11 + 12 = 23 (old setting)
 // 90-degree offset  => 11 +  6 = 17
+// Tested phase sweep from 0 to 360 degrees in 15-degree increments (CPHASE=22 to 27):
+// CPHASE=22 (165°)
+// CPHASE=23 (180°) référence actuelle
+// CPHASE=24 (195°)
+// CPHASE=25 (210°)
+// CPHASE=26 (225°)
+// CPHASE=27 (240°)
 // You can override at synthesis time with: -DSDRAM_CLKOS_CPHASE=<value>
 // Example: make all YOSYS_DEFINES='-DSDRAM_CLKOS_CPHASE=23'
 `ifdef SDRAM_CLKOS_CPHASE

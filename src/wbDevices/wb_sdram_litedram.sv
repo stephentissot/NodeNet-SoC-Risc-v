@@ -1,7 +1,8 @@
 `default_nettype none
 
 // LiteDRAM standalone adapter for the Colorlight i9 SDR SDRAM.
-// Expected generated core: build/litedram/gateware/litedram_core.v
+// HDL build consumes the tracked copy at src/sdram/litedram_core.v.
+// Refresh flow: generate into build/litedram/gateware/, then copy into src/sdram/.
 // The generated LiteDRAM core runs its user port on user_clk from its own CRG.
 // Requests from the SoC Wishbone clock domain are bridged one-at-a-time into
 // that domain so SDRAM traffic is no longer sampled asynchronously.
@@ -62,6 +63,7 @@ module wb_sdram_litedram #(
     localparam [3:0] ST_RMW_WRITE_HI = 4'd6;
     localparam [3:0] ST_SELF_READ    = 4'd7;
     localparam [3:0] ST_SELF_GAP     = 4'd8;
+    localparam [3:0] ST_CPU_GAP      = 4'd9;
 
     wire init_done;
     wire init_error;
@@ -699,8 +701,17 @@ module wb_sdram_litedram #(
                         req_we      <= wb_we_i;
                         rmw_is_selftest <= 1'b0;
                         wb_wait_ctr <= 24'd0;
-                        state       <= ST_WB_WAIT;
+                        state       <= ST_CPU_GAP;
                     end
+                end
+
+                ST_CPU_GAP: begin
+                    // Leave the LiteDRAM user port idle for one full cycle before
+                    // each ordinary CPU request. This matches the protective gap
+                    // already used on RMW/self-test flows and avoids back-to-back
+                    // instruction fetches reusing a stale response boundary.
+                    wb_wait_ctr <= 24'd0;
+                    state <= ST_WB_WAIT;
                 end
 
                 ST_WB_WAIT: begin

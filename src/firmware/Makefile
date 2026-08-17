@@ -13,7 +13,12 @@ GIT_HASH := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 # You can still override manually: make MAIN_SRC=test_main.cpp
 MAIN_SRC ?= main.cpp
 MAIN_OBJ = $(BUILD)/$(basename $(notdir $(MAIN_SRC))).o
-BOOT_SRC = boot_stage0.cpp
+BOOTLOADER_DIR ?= ../bootloader
+APP_START_SRC = start.S
+APP_START_OBJ = $(BUILD)/app_start.o
+BOOT_START_SRC = $(BOOTLOADER_DIR)/start.S
+BOOT_START_OBJ = $(BUILD)/boot_start.o
+BOOT_SRC = $(BOOTLOADER_DIR)/boot_stage0.cpp
 BOOT_OBJ = $(BUILD)/$(basename $(notdir $(BOOT_SRC))).o
 
 PYTHON ?= python
@@ -54,7 +59,7 @@ FLASHDB_CORE_OBJS=$(BUILD)/fdb.o $(BUILD)/fdb_kvdb.o $(BUILD)/fdb_utils.o
 SDRAM_TEST_SRC=sdram.cpp
 SDRAM_TEST_OBJ=$(BUILD)/sdram.o
 
-DEPS=$(BUILD)/start.d $(MAIN_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(BUILD)/Serial.d $(BUILD)/flash.d $(BUILD)/flashdb_port.d $(BUILD)/sdram.d $(BUILD)/fdb.d $(BUILD)/fdb_kvdb.d $(BUILD)/fdb_utils.d $(U8G2_OBJS:.o=.d)
+DEPS=$(BUILD)/start.d $(BUILD)/app_start.d $(BUILD)/boot_start.d $(MAIN_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(BUILD)/Serial.d $(BUILD)/flash.d $(BUILD)/flashdb_port.d $(BUILD)/sdram.d $(BUILD)/fdb.d $(BUILD)/fdb_kvdb.d $(BUILD)/fdb_utils.d $(U8G2_OBJS:.o=.d)
 
 CFLAGS=-march=rv32im -mabi=ilp32 \
        -Wall \
@@ -93,6 +98,12 @@ LDFLAGS=-march=rv32im -mabi=ilp32 -T link.ld \
         -Wl,--gc-sections \
         --specs=nano.specs \
         --specs=nosys.specs
+
+BOOT_LDFLAGS=-march=rv32im -mabi=ilp32 -T $(BOOTLOADER_DIR)/link.ld \
+	     -nostartfiles \
+	     -Wl,--gc-sections \
+	     --specs=nano.specs \
+	     --specs=nosys.specs
 
 BUILD=build
 ROM_CAPACITY_BYTES ?= 65536
@@ -171,8 +182,11 @@ $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 $(FW_BIN): $(BUILD)/$(TARGET).elf
 	$(CROSS)objcopy -O binary $< $@
 
-$(APP_ELF): $(BUILD)/start.o $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_TEST_OBJ) $(U8G2_LIB) | $(BUILD)
+$(APP_ELF): $(APP_START_OBJ) $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_TEST_OBJ) $(U8G2_LIB) | $(BUILD)
 	$(CROSS)g++ -march=rv32im -mabi=ilp32 -T $(APP_LINKER) -nostartfiles -Wl,--gc-sections --specs=nano.specs --specs=nosys.specs $^ -o $@
+
+$(APP_START_OBJ): $(APP_START_SRC) | $(BUILD)
+	$(CROSS)gcc $(CFLAGS) -c $< -o $@
 
 $(APP_BIN): $(APP_ELF)
 	$(CROSS)objcopy -O binary $< $@
@@ -191,8 +205,11 @@ firmware-image: $(APP_IMG)
 $(BOOT_OBJ): $(BOOT_SRC) | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
-$(BOOT_ELF): $(BUILD)/start.o $(BOOT_OBJ) $(FLASH_OBJ) | $(BUILD)
-	$(CROSS)g++ $(LDFLAGS) $^ -o $@
+$(BOOT_START_OBJ): $(BOOT_START_SRC) | $(BUILD)
+	$(CROSS)gcc $(CFLAGS) -c $< -o $@
+
+$(BOOT_ELF): $(BOOT_START_OBJ) $(BOOT_OBJ) $(FLASH_OBJ) | $(BUILD)
+	$(CROSS)g++ $(BOOT_LDFLAGS) $^ -o $@
 
 $(BOOT_HEX): $(BOOT_ELF)
 	$(CROSS)objcopy -O verilog $< $@

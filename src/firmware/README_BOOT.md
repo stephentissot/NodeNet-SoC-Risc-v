@@ -1,6 +1,6 @@
 # Stage0 Flash Boot Format
 
-This document defines the stage0 image format used by `boot_stage0.cpp`.
+This document defines the stage0 image format used by `src/bootloader/boot_stage0.cpp`.
 
 ## Flash Layout (current)
 
@@ -37,6 +37,8 @@ From `src/firmware`:
 make bootloader-build
 make firmware-image APP_LOAD_ADDR=0x20000000 APP_ENTRY_ADDR=0x20000000
 ```
+
+`bootloader-build` now consumes stage0 sources from `src/bootloader/`, while `firmware-image` still packages the SDRAM application from `src/firmware/`.
 
 `firmware-image` runs `tools/pack_firmware.py` and generates `build/nodenet_riscv_app.img`.
 

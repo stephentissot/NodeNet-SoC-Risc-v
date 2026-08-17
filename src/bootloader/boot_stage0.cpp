@@ -55,6 +55,12 @@ static volatile uint32_t* const kStatusReg = reinterpret_cast<volatile uint32_t*
 static uint32_t g_sdram_partial_byte1_observed = 0u;
 static uint32_t g_sdram_partial_byte1_rmw_read = 0u;
 static uint32_t g_sdram_partial_byte1_rmw_write = 0u;
+static uint32_t g_sdram_hardtest_expected = 0u;
+static uint32_t g_sdram_hardtest_observed = 0u;
+static uint32_t g_sdram_hardtest_diag = 0u;
+static uint32_t g_sdram_tailmerge_expected = 0u;
+static uint32_t g_sdram_tailmerge_observed = 0u;
+static uint32_t g_sdram_tailmerge_stage = 0u;
 
 enum class BootFault : uint8_t {
     None = 0,
@@ -211,6 +217,9 @@ static BootFault refine_hard_test_fail_fault(void)
     const uint32_t expected = mmio_read32(kSelftestExpected);
     const uint32_t observed = mmio_read32(kSelftestObserved);
     const uint32_t diag = mmio_read32(kSelftestDiag);
+    g_sdram_hardtest_expected = expected;
+    g_sdram_hardtest_observed = observed;
+    g_sdram_hardtest_diag = diag;
     const BootFault observed_fault = sdram_atomic_observed_fault(expected, observed);
 
     if (fail_index != 0xFFu) {
@@ -762,8 +771,10 @@ static void boot_fault_hex_word(uint32_t value,
 [[noreturn]] static void boot_fault_loop(BootFault fault)
 {
     const uint8_t code = static_cast<uint8_t>(fault);
+    const bool compact_boot_fault_diag = (code >= 1u) && (code <= 13u);
     const bool short_partial_diag = (code >= static_cast<uint8_t>(BootFault::SdramPartialByte1NoEffect)) &&
                                     (code <= static_cast<uint8_t>(BootFault::SdramPartialByte1Other));
+    const bool hardtest_stable_mismatch_diag = (code >= 224u) && (code <= 239u);
     const uint8_t tens = short_partial_diag ? 1u : static_cast<uint8_t>(code / 10u);
     const uint8_t units = short_partial_diag ? static_cast<uint8_t>(code - static_cast<uint8_t>(BootFault::SdramPartialByte1NoEffect) + 1u)
                                              : static_cast<uint8_t>(code % 10u);
@@ -780,6 +791,19 @@ static void boot_fault_hex_word(uint32_t value,
     yellow.off();
 
     while (true) {
+        if (compact_boot_fault_diag) {
+            // Dedicated early-boot fault encoding for codes 1..13:
+            // 1 green pulse marks "compact boot fault mode", then D2 pulses
+            // directly encode the fault number. This avoids any invisible 0 digit.
+            status_led_pulse_count(green, 1u, kDigitOnCycles, kDigitOffCycles);
+            spin_delay(kBetweenDigitsCycles);
+            d2_pulse_count(code, kDigitOnCycles, kDigitOffCycles);
+            green.off();
+            yellow.off();
+            spin_delay(kCycleGapCycles);
+            continue;
+        }
+
         if (fault == BootFault::SdramPartialByte1Other) {
             // Dedicated partial-write diagnostic:
             // 1 sync pulse => RMW source word read by the wrapper.
@@ -794,6 +818,66 @@ static void boot_fault_hex_word(uint32_t value,
                                 kBetweenDigitsCycles);
             d2_pulse_count(2u, kSyncOnCycles, kSyncOffCycles);
             boot_fault_hex_word(g_sdram_partial_byte1_rmw_write,
+                                kSyncOnCycles,
+                                kSyncOffCycles,
+                                kDigitOnCycles,
+                                kDigitOffCycles,
+                                kBetweenDigitsCycles);
+            spin_delay(kCycleGapCycles);
+            continue;
+        }
+
+        if (fault == BootFault::SdramTailMerge) {
+            // Dedicated tail-merge diagnostic for code 30:
+            // 1 sync pulse => expected merged word.
+            // 2 sync pulses => observed word after writeback.
+            // 3 sync pulses => stage index (1/2/3) in low byte.
+            d2_pulse(kSyncOnCycles, kSyncOffCycles);
+            boot_fault_hex_word(g_sdram_tailmerge_expected,
+                                kSyncOnCycles,
+                                kSyncOffCycles,
+                                kDigitOnCycles,
+                                kDigitOffCycles,
+                                kBetweenDigitsCycles);
+            d2_pulse_count(2u, kSyncOnCycles, kSyncOffCycles);
+            boot_fault_hex_word(g_sdram_tailmerge_observed,
+                                kSyncOnCycles,
+                                kSyncOffCycles,
+                                kDigitOnCycles,
+                                kDigitOffCycles,
+                                kBetweenDigitsCycles);
+            d2_pulse_count(3u, kSyncOnCycles, kSyncOffCycles);
+            boot_fault_hex_word(g_sdram_tailmerge_stage,
+                                kSyncOnCycles,
+                                kSyncOffCycles,
+                                kDigitOnCycles,
+                                kDigitOffCycles,
+                                kBetweenDigitsCycles);
+            spin_delay(kCycleGapCycles);
+            continue;
+        }
+
+        if (hardtest_stable_mismatch_diag) {
+            // Dedicated hard-test mismatch diagnostic for 224..239:
+            // 1 sync pulse => expected word.
+            // 2 sync pulses => observed word.
+            // 3 sync pulses => self-test diag bits.
+            d2_pulse(kSyncOnCycles, kSyncOffCycles);
+            boot_fault_hex_word(g_sdram_hardtest_expected,
+                                kSyncOnCycles,
+                                kSyncOffCycles,
+                                kDigitOnCycles,
+                                kDigitOffCycles,
+                                kBetweenDigitsCycles);
+            d2_pulse_count(2u, kSyncOnCycles, kSyncOffCycles);
+            boot_fault_hex_word(g_sdram_hardtest_observed,
+                                kSyncOnCycles,
+                                kSyncOffCycles,
+                                kDigitOnCycles,
+                                kDigitOffCycles,
+                                kBetweenDigitsCycles);
+            d2_pulse_count(3u, kSyncOnCycles, kSyncOffCycles);
+            boot_fault_hex_word(g_sdram_hardtest_diag,
                                 kSyncOnCycles,
                                 kSyncOffCycles,
                                 kDigitOnCycles,
@@ -831,6 +915,18 @@ static void boot_progress_pulse(uint8_t count)
         spin_delay(180000u);
     }
     spin_delay(300000u);
+}
+
+static void boot_flash_checkpoint(uint8_t count)
+{
+    // Always emit these markers, even in minimal LED mode, because they are
+    // used to distinguish a clean flash read failure from a hard lockup.
+    static constexpr uint32_t kCheckpointOnCycles = 260000u;
+    static constexpr uint32_t kCheckpointOffCycles = 220000u;
+    static constexpr uint32_t kCheckpointGapCycles = 420000u;
+
+    d2_pulse_count(count, kCheckpointOnCycles, kCheckpointOffCycles);
+    spin_delay(kCheckpointGapCycles);
 }
 
 static void boot_validation_checkpoint(uint8_t id)
@@ -1299,41 +1395,108 @@ static BootFault sdram_partial_write_test(void)
 static BootFault sdram_tail_merge_test(void)
 {
     volatile uint32_t* cell = reinterpret_cast<volatile uint32_t*>(SDRAM_BASE + 0x00120004u);
+    g_sdram_tailmerge_expected = 0u;
+    g_sdram_tailmerge_observed = 0u;
+    g_sdram_tailmerge_stage = 0u;
 
-    *cell = 0x11223344u;
-    uint32_t tail = *cell;
+    if (!sdram_write_word_stable(cell, 0x11223344u)) {
+        g_sdram_tailmerge_expected = 0x11223344u;
+        g_sdram_tailmerge_observed = *cell;
+        g_sdram_tailmerge_stage = 0x11u;
+        return BootFault::SdramTailMerge;
+    }
+    uint32_t tail = 0u;
+    if (!sdram_read_word_settled(cell, 0x11223344u, &tail)) {
+        g_sdram_tailmerge_expected = 0x11223344u;
+        g_sdram_tailmerge_observed = tail;
+        g_sdram_tailmerge_stage = 0x12u;
+        return BootFault::SdramTailMerge;
+    }
     uint32_t acc = 0x000000AAu;
     for (uint8_t i = 0; i < 1u; ++i) {
         const uint32_t mask = 0xFFu << (static_cast<uint32_t>(i) * 8u);
         tail = (tail & ~mask) | (acc & mask);
     }
-    *cell = tail;
-    if (*cell != 0x112233AAu) {
+    if (!sdram_write_word_stable(cell, tail)) {
+        g_sdram_tailmerge_expected = 0x112233AAu;
+        g_sdram_tailmerge_observed = *cell;
+        g_sdram_tailmerge_stage = 1u;
         return BootFault::SdramTailMerge;
     }
+    {
+        uint32_t observed = 0u;
+        if (!sdram_read_word_settled(cell, 0x112233AAu, &observed)) {
+            g_sdram_tailmerge_expected = 0x112233AAu;
+            g_sdram_tailmerge_observed = observed;
+            g_sdram_tailmerge_stage = 1u;
+            return BootFault::SdramTailMerge;
+        }
+    }
 
-    *cell = 0x55667788u;
-    tail = *cell;
+    if (!sdram_write_word_stable(cell, 0x55667788u)) {
+        g_sdram_tailmerge_expected = 0x55667788u;
+        g_sdram_tailmerge_observed = *cell;
+        g_sdram_tailmerge_stage = 0x21u;
+        return BootFault::SdramTailMerge;
+    }
+    if (!sdram_read_word_settled(cell, 0x55667788u, &tail)) {
+        g_sdram_tailmerge_expected = 0x55667788u;
+        g_sdram_tailmerge_observed = tail;
+        g_sdram_tailmerge_stage = 0x22u;
+        return BootFault::SdramTailMerge;
+    }
     acc = 0x0000BBAAu;
     for (uint8_t i = 0; i < 2u; ++i) {
         const uint32_t mask = 0xFFu << (static_cast<uint32_t>(i) * 8u);
         tail = (tail & ~mask) | (acc & mask);
     }
-    *cell = tail;
-    if (*cell != 0x5566BBAAu) {
+    if (!sdram_write_word_stable(cell, tail)) {
+        g_sdram_tailmerge_expected = 0x5566BBAAu;
+        g_sdram_tailmerge_observed = *cell;
+        g_sdram_tailmerge_stage = 2u;
         return BootFault::SdramTailMerge;
     }
+    {
+        uint32_t observed = 0u;
+        if (!sdram_read_word_settled(cell, 0x5566BBAAu, &observed)) {
+            g_sdram_tailmerge_expected = 0x5566BBAAu;
+            g_sdram_tailmerge_observed = observed;
+            g_sdram_tailmerge_stage = 2u;
+            return BootFault::SdramTailMerge;
+        }
+    }
 
-    *cell = 0x99AABBCCu;
-    tail = *cell;
+    if (!sdram_write_word_stable(cell, 0x99AABBCCu)) {
+        g_sdram_tailmerge_expected = 0x99AABBCCu;
+        g_sdram_tailmerge_observed = *cell;
+        g_sdram_tailmerge_stage = 0x31u;
+        return BootFault::SdramTailMerge;
+    }
+    if (!sdram_read_word_settled(cell, 0x99AABBCCu, &tail)) {
+        g_sdram_tailmerge_expected = 0x99AABBCCu;
+        g_sdram_tailmerge_observed = tail;
+        g_sdram_tailmerge_stage = 0x32u;
+        return BootFault::SdramTailMerge;
+    }
     acc = 0x00CCBBAAu;
     for (uint8_t i = 0; i < 3u; ++i) {
         const uint32_t mask = 0xFFu << (static_cast<uint32_t>(i) * 8u);
         tail = (tail & ~mask) | (acc & mask);
     }
-    *cell = tail;
-    if (*cell != 0x99CCBBAAu) {
+    if (!sdram_write_word_stable(cell, tail)) {
+        g_sdram_tailmerge_expected = 0x99CCBBAAu;
+        g_sdram_tailmerge_observed = *cell;
+        g_sdram_tailmerge_stage = 3u;
         return BootFault::SdramTailMerge;
+    }
+    {
+        uint32_t observed = 0u;
+        if (!sdram_read_word_settled(cell, 0x99CCBBAAu, &observed)) {
+            g_sdram_tailmerge_expected = 0x99CCBBAAu;
+            g_sdram_tailmerge_observed = observed;
+            g_sdram_tailmerge_stage = 3u;
+            return BootFault::SdramTailMerge;
+        }
     }
 
     return BootFault::None;
@@ -1544,14 +1707,17 @@ extern "C" int main(void)
     FlashReader reader(kFlashBase);
 
     fw_image_header_t hdr = {};
+    boot_flash_checkpoint(1u);
     if (!reader.readBytes(kImageFlashBase, reinterpret_cast<uint8_t*>(&hdr), sizeof(hdr))) {
         boot_fault_loop(BootFault::HeaderRead);
     }
+    boot_flash_checkpoint(2u);
 
     const BootFault hdr_fault = header_fault(hdr);
     if (hdr_fault != BootFault::None) {
         boot_fault_loop(hdr_fault);
     }
+    boot_flash_checkpoint(3u);
 
     // Header parsed and validated.
     boot_progress_pulse(3);
@@ -1586,6 +1752,7 @@ extern "C" int main(void)
 
         copied += n;
     }
+    boot_flash_checkpoint(4u);
 
     if (acc_count != 0u) {
         // Preserve bytes past image end while still issuing a full-word SDRAM write.
@@ -1606,6 +1773,7 @@ extern "C" int main(void)
     if (crc != hdr.image_crc32) {
         boot_fault_loop(BootFault::PayloadCrc);
     }
+    boot_flash_checkpoint(5u);
 
     // Payload copied + CRC verified, about to jump.
     boot_progress_pulse(4);
@@ -1631,6 +1799,7 @@ extern "C" int main(void)
 
     // Force a known D2 baseline right before handing control to SDRAM code.
     *kLedD2 = 0u;
+    boot_flash_checkpoint(6u);
 
     jump_to_entry(hdr.entry_addr);
 

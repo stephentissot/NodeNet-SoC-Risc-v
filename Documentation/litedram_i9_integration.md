@@ -33,16 +33,24 @@ generator does not itself create the forwarded SDRAM clock for this board.
 
    `make litedram-gen`
 
-3. Build with LiteDRAM selected:
+3. Copy the generated core into the tracked HDL source location:
+
+   `make litedram-copy`
+
+4. Build with LiteDRAM selected:
 
    `make USE_LITEDRAM=1 all`
 
-Generated RTL is expected at:
+Generated RTL is produced at:
 
 - `build/litedram/gateware/litedram_core.v`
 
+Tracked RTL used by the HDL build is:
+
+- `src/sdram/litedram_core.v`
+
 ## Next expected work
 
-1. Validate the generated `litedram_core.v` port names against `wb_sdram_litedram.sv`.
+1. Validate the tracked `src/sdram/litedram_core.v` port names against `wb_sdram_litedram.sv` after each refresh.
 2. If LiteDRAM works at `25 MHz`, move to a PLL-backed system clock and explicit SDRAM clock-forwarding block, following the LiteX Colorlight ECP5 target strategy.
 3. Retune timer/UART prescalers if the SoC system clock is raised above `25 MHz`.

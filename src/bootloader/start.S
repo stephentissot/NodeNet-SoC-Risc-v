@@ -1,39 +1,18 @@
 .section .text
 .global _start
 
-.macro app_spin_delay cycles
-    li   t2, \cycles
-.Lapp_spin_\@:
-    addi t2, t2, -1
-    bnez t2, .Lapp_spin_\@
-.endm
-
-.macro app_d2_checkpoint count
-    li   t0, 0x10000000
-    li   t3, \count
-.Lapp_d2_count_\@:
-    li   t1, 1
-    sw   t1, 0(t0)
-    app_spin_delay 260000
-    sw   zero, 0(t0)
-    app_spin_delay 220000
-    addi t3, t3, -1
-    bnez t3, .Lapp_d2_count_\@
-    app_spin_delay 420000
-.endm
-
 _start:
 
-    # App checkpoint 1: entered _start after bootloader handoff.
-    app_d2_checkpoint 1
+    # Post-jump checkpoint A: D2 ON.
+    # Keep only one MMIO target here to avoid false stalls during diagnosis.
+    li   t0, 0x10000000
+    li   t1, 1
+    sw   t1, 0(t0)
 
     # Temporary bring-up switch:
     # 1 = skip .data/.bss/.init_array and jump directly to main for diagnosis.
-    # This is safe for the current minimal blink firmware, which does not rely
-    # on initialized globals or constructors before entering main().
     # 0 = normal startup sequence.
-    .set BOOT_FAST_ENTRY, 1
-    .set BOOT_LOCAL_HEARTBEAT, 1
+    .set BOOT_FAST_ENTRY, 0
 
     .option push
     .option norelax
@@ -42,18 +21,10 @@ _start:
 
     la sp, _stack_top
 
-    # App checkpoint 2: gp/sp initialized.
-    app_d2_checkpoint 2
-
     .if BOOT_FAST_ENTRY
-    # App checkpoint 3: fast path reached just before C main.
-    app_d2_checkpoint 3
-
-    .if BOOT_LOCAL_HEARTBEAT
-2:
-    j    2b
-    .endif
-
+    # Checkpoint FAST: D2 OFF just before entering C main.
+    li   t0, 0x10000000
+    sw   zero, 0(t0)
     call main
 1:  j 1b
     .endif
@@ -96,8 +67,10 @@ _start:
     j    .Lctor_loop
 .Lctor_done:
 
-    # App checkpoint 3: full startup reached just before C main.
-    app_d2_checkpoint 3
+    # Post-jump checkpoint B: D2 OFF.
+    # Means startup reached just before calling C main().
+    li   t0, 0x10000000
+    sw   zero, 0(t0)
 
     call main
 

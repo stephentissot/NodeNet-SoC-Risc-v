@@ -39,14 +39,15 @@ ROM_BYTES=65536
 LITEDRAM_BUILD_DIR ?= $(BUILD)/litedram
 LITEDRAM_CONFIG ?= tools/litedram/colorlight_i9.yml
 LITEDRAM_NAME ?= litedram_core
-LITEDRAM_RTL ?= $(LITEDRAM_BUILD_DIR)/gateware/$(LITEDRAM_NAME).v
-LITEDRAM_VALID_STAMP ?= $(LITEDRAM_BUILD_DIR)/.rtl_valid.stamp
+LITEDRAM_GENERATED_RTL ?= $(LITEDRAM_BUILD_DIR)/gateware/$(LITEDRAM_NAME).v
+LITEDRAM_RTL ?= src/sdram/$(LITEDRAM_NAME).v
+LITEDRAM_VALID_STAMP ?= $(BUILD)/.litedram_rtl_valid.stamp
 YOSYS_DEFINES :=
 LITEDRAM_DEPS := $(LITEDRAM_RTL) $(LITEDRAM_VALID_STAMP)
 FIRMWARE_DEPS := src/firmware/Makefile \
-				 src/firmware/boot_stage0.cpp \
-				 src/firmware/start.S \
-				 src/firmware/link.ld \
+				 src/bootloader/boot_stage0.cpp \
+				 src/bootloader/start.S \
+				 src/bootloader/link.ld \
 				 src/firmware/lib/flash/flash.cpp \
 				 src/firmware/lib/flash/flash.h \
 				 $(wildcard src/firmware/include/*.h)
@@ -65,18 +66,27 @@ SOURCES += $(LITEDRAM_RTL)
 SOURCES := $(sort $(SOURCES))
 
 
-.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw-check-image flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only litedram-gen
+.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw-check-image flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only litedram-gen litedram-copy litedram-refresh
 
 all: firmware-build $(BUILD)/$(TOP).bit
 
 litedram-gen:
 	$(PYTHON) tools/generate_litedram_core.py --config $(LITEDRAM_CONFIG) --output-dir $(LITEDRAM_BUILD_DIR) --name $(LITEDRAM_NAME)
 
-$(LITEDRAM_RTL): tools/generate_litedram_core.py $(LITEDRAM_CONFIG)
+
+$(LITEDRAM_GENERATED_RTL): tools/generate_litedram_core.py $(LITEDRAM_CONFIG)
 	@mkdir -p $(LITEDRAM_BUILD_DIR)
 	$(PYTHON) tools/generate_litedram_core.py --config $(LITEDRAM_CONFIG) --output-dir $(LITEDRAM_BUILD_DIR) --name $(LITEDRAM_NAME)
-	@test -s $(LITEDRAM_RTL) || (echo "[LITEDRAM][ERROR] Generated RTL is empty: $(LITEDRAM_RTL)"; rm -f $(LITEDRAM_RTL); exit 1)
-	@grep -Eq "^[[:space:]]*module[[:space:]]+$(LITEDRAM_NAME)[[:space:]#(]" $(LITEDRAM_RTL) || (echo "[LITEDRAM][ERROR] Top module $(LITEDRAM_NAME) not found in $(LITEDRAM_RTL)"; rm -f $(LITEDRAM_RTL); exit 1)
+	@test -s $(LITEDRAM_GENERATED_RTL) || (echo "[LITEDRAM][ERROR] Generated RTL is empty: $(LITEDRAM_GENERATED_RTL)"; rm -f $(LITEDRAM_GENERATED_RTL); exit 1)
+	@grep -Eq "^[[:space:]]*module[[:space:]]+$(LITEDRAM_NAME)[[:space:]#(]" $(LITEDRAM_GENERATED_RTL) || (echo "[LITEDRAM][ERROR] Top module $(LITEDRAM_NAME) not found in $(LITEDRAM_GENERATED_RTL)"; rm -f $(LITEDRAM_GENERATED_RTL); exit 1)
+
+
+litedram-copy: $(LITEDRAM_GENERATED_RTL)
+	@mkdir -p src/sdram
+	cp $(LITEDRAM_GENERATED_RTL) $(LITEDRAM_RTL)
+	@echo "[LITEDRAM] Copied $(LITEDRAM_GENERATED_RTL) -> $(LITEDRAM_RTL)"
+
+litedram-refresh: litedram-gen litedram-copy
 
 $(LITEDRAM_VALID_STAMP): $(LITEDRAM_RTL)
 	@test -s $(LITEDRAM_RTL) || (echo "[LITEDRAM][ERROR] RTL is empty: $(LITEDRAM_RTL)"; rm -f $(LITEDRAM_RTL); exit 1)
