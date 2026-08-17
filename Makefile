@@ -57,6 +57,7 @@ FIRMWARE_DEPS := src/firmware/Makefile \
 # and does not accidentally pull in testbenches or any legacy i2c directory.
 SOURCES := src/top.sv \
            $(wildcard src/wbDevices/*.sv) \
+		   $(wildcard src/sdram/*.sv) \
            src/picorv32/picorv32.v \
            $(wildcard src/uart/*.v) \
            $(wildcard src/verilog-i2c/rtl/*.v)
