@@ -149,9 +149,9 @@ ram_bytes[0x402] = 0x42;  // Write single byte at offset 0x402
 
 **Memory Layout** (from linker script):
 ```
-0x00010000  .text (code, from ROM copy)
-0x00010XXX  .data (initialized data)
-0x00020000  .bss (uninitialized globals, stack grows down)
+0x00010000  runtime RAM base
+0x00010XXX  initialized data / small runtime state
+0x0001FFFF  stack top (grows down)
 ```
 
 **Notes**:
@@ -160,9 +160,9 @@ ram_bytes[0x402] = 0x42;  // Write single byte at offset 0x402
 
 ---
 
-### 3. `wb_rom.sv` – 64 KiB Boot ROM
+### 3. `wb_rom.sv` – 64 KiB Stage0 Boot ROM
 
-**Purpose**: Immutable boot code storage, loaded from synthesis-time hex file.
+**Purpose**: Immutable stage0 bootloader storage, loaded from synthesis-time hex file.
 
 **Address**: `0x00000000–0x0000FFFF` (64 KiB, fixed)
 
@@ -180,7 +180,7 @@ parameter ADDR = 32'h0000_0000;
 - Read-only (writes ignored, no error signaling)
 - Single-cycle read latency
 - Initialized at synthesis from `.hex` file
-- Typically contains bootstrap code + linker script .text section
+- Contains the ROM-resident `boot_stage0` image that validates the SPI-flash application image and jumps to SDRAM execution
 
 **Hex File Format** (Intel HEX or Verilog):
 ```
@@ -190,13 +190,13 @@ parameter ADDR = 32'h0000_0000;
 
 **Usage**:
 - PicoRV32 CPU boots from `pc=0x00000000`
-- First instruction must be in this ROM
+- First instruction of `boot_stage0` must be in this ROM
 - No runtime modification (for reliability)
 
 **Current Implementation**:
-- Firmware built to `src/firmware/build/blink.hex`
+- Stage0 ROM image built to `src/firmware/build/boot_stage0.hex`
 - Referenced in [wb_rom.sv](wb_rom.sv) at synthesis time
-- Firmware includes boot code (linker script `.text` section)
+- Contains the stage0 boot path only; the main runtime application is packaged separately in SPI flash and executes from SDRAM
 
 ---
 
@@ -307,9 +307,14 @@ parameter BLINK_CYCLES = 32'd2500000; // 100 ms @ 25 MHz
 
 ---
 
-### 7. `wb_sdram.sv` – 8 MB External SDRAM Controller
+### 7. `wb_sdram_litedram.sv` – 8 MB External SDRAM Window via LiteDRAM
 
-**Purpose**: Full-featured SDRAM controller for the M12L64322A chip on Colorlight i9, exposing 8 MB of external DRAM to the CPU via Wishbone B.4.
+**Purpose**: Wishbone-facing SDRAM wrapper for the M12L64322A chip on Colorlight i9, exposing 8 MB of external DRAM to the CPU through the generated LiteDRAM core.
+
+**Current role in the boot flow**:
+- Stage0 copies the packaged application image from SPI flash into this SDRAM window.
+- After the copy and CRC checks, the CPU jumps to the application entry point in SDRAM.
+- Runtime `SDRAM_DATA` objects and SDRAM self-tests share this same window, so destructive tests must stay inside reserved scratch space.
 
 **Address**: `0x20000000–0x207FFFFF` (8 MB)
 
@@ -319,7 +324,7 @@ parameter BLINK_CYCLES = 32'd2500000; // 100 ms @ 25 MHz
 > - `CKE` → VCC (clock always enabled)
 > - `DQM[3:0]` → GND (byte masking permanently disabled)
 >
-> **Consequence**: the SDRAM chip itself always sees full 32-bit accesses. The Wishbone wrapper now compensates for sub-word CPU writes with an internal read-modify-write sequence when `wb_sel_i != 4'b1111`.
+> **Consequence**: the SDRAM chip itself always sees full 32-bit accesses. The LiteDRAM-facing wrapper compensates for sub-word CPU writes with an internal read-modify-write sequence when `wb_sel_i != 4'b1111`.
 
 **SDRAM Organization**:
 | Parameter | Value |
@@ -380,27 +385,31 @@ parameter        T_REF_US     = 7;    // Refresh interval (< 7.8 µs)
 
 volatile uint32_t *sdram = (volatile uint32_t *)SDRAM_BASE;
 
-// Write 32-bit word at offset 0 (bank 0, row 0, col 0)
-sdram[0] = 0xDEADBEEF;
+// Warning: the runtime application itself executes from this SDRAM window.
+// Direct raw accesses are only safe when you control placement.
+
+// Safe pattern: use linker-placed buffers or a reserved scratch area.
+extern volatile uint32_t g_sdram_test_scratch_words[];
+g_sdram_test_scratch_words[0] = 0xDEADBEEF;
 
 // Read it back
-uint32_t val = sdram[0];  // Returns 0xDEADBEEF
+uint32_t val = g_sdram_test_scratch_words[0];
 
-// Basic memory test
+// Basic scratch-area memory test
 void sdram_test(void) {
     uint32_t i, errors = 0;
     // Write pattern
-    for (i = 0; i < 1024; i++) sdram[i] = i ^ 0xA5A5A5A5;
+    for (i = 0; i < 1024; i++) g_sdram_test_scratch_words[i] = i ^ 0xA5A5A5A5;
     // Verify
     for (i = 0; i < 1024; i++) {
-        if (sdram[i] != (i ^ 0xA5A5A5A5)) errors++;
+        if (g_sdram_test_scratch_words[i] != (i ^ 0xA5A5A5A5)) errors++;
     }
-    // errors == 0 → SDRAM working correctly
+    // errors == 0 -> scratch area is behaving correctly without corrupting the runtime image
 }
 ```
 
 **Limitations**:
-- **No native SDRAM byte masking**: `DQM=GND` on PCB, so sub-word writes are emulated in `wb_sdram` with read-modify-write cycles instead of true masked writes
+- **No native SDRAM byte masking**: `DQM=GND` on PCB, so sub-word writes are emulated in `wb_sdram_litedram` with read-modify-write cycles instead of true masked writes
 - **Single-word bursts**: BL=1; no burst transfers (can be extended by changing MODE_REG)
 - **Auto-precharge**: row closes after every access; no open-row optimization
 
