@@ -18,8 +18,8 @@ wire clkfb;
 // 90-degree offset  => 11 +  6 = 17
 // Tested phase sweep from 0 to 360 degrees in 15-degree increments (CPHASE=22 to 27):
 // CPHASE=22 (165°)
-// CPHASE=23 (180°) référence actuelle
-// CPHASE=24 (195°)
+// CPHASE=23 (180°) reference baseline
+// CPHASE=24 (195°) current probe
 // CPHASE=25 (210°)
 // CPHASE=26 (225°)
 // CPHASE=27 (240°)
@@ -28,7 +28,7 @@ wire clkfb;
 `ifdef SDRAM_CLKOS_CPHASE
 localparam integer CLKOS_CPHASE_TUNED = `SDRAM_CLKOS_CPHASE;
 `else
-localparam integer CLKOS_CPHASE_TUNED = 23;
+localparam integer CLKOS_CPHASE_TUNED = 24;
 `endif
 
 (* FREQUENCY_PIN_CLKI="25" *)

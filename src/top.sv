@@ -143,6 +143,8 @@ module top (
     reg        sdram_timeout_seen = 1'b0;
     reg        sdram_ctrl_done_seen = 1'b0;
     reg        sdram_ctrl_err_seen = 1'b0;
+    reg        sdram_req_is_ifetch = 1'b0;
+    reg        sdram_req_had_ack = 1'b0;
     localparam [23:0] WB_STALL_LIMIT = 24'd12500000; // ~500 ms @ 25 MHz
 
     wire wb_rom_sel;
@@ -265,17 +267,19 @@ module top (
     assign led_g18 = nodenet_rx_led_out;
     assign led_h18 = nodenet_tx_led_out;
     
-    // Keep status LEDs driven only by wb_led so firmware diagnostics remain
-    // unambiguous during boot investigations.
+    // During a live SDRAM wait, repurpose the status LEDs to expose the
+    // currently stalled transfer instead of sticky historical flags.
     assign sdram_cpu_wait_live = wb_cyc && wb_stb && wb_sdram_sel && !wb_ack;
-    assign led_e18 = sdram_cpu_wait_live ? (sdram_dbg_cpu_req_seen ? 1'b0 : 1'b1) : led0_out;
-    assign led_e16 = sdram_cpu_wait_live ? (sdram_dbg_cpu_resp_seen ? 1'b0 : 1'b1) : led1_out;
+    assign led_e18 = sdram_cpu_wait_live ? (sdram_req_is_ifetch ? 1'b0 : 1'b1) : led0_out;
+    assign led_e16 = sdram_cpu_wait_live ? (sdram_req_had_ack ? 1'b1 : 1'b0) : led1_out;
 
     always @(posedge sys_clk) begin
         if (reset) begin
             wb_stall_ctr <= 24'd0;
             wb_stall_latched <= 1'b0;
             sdram_ifetch_seen <= 1'b0;
+            sdram_req_is_ifetch <= 1'b0;
+            sdram_req_had_ack <= 1'b0;
         end else begin
             // Firmware can clear sticky debug bits by writing STATUS_ADDR.
             if (wb_status_sel && wb_we && wb_dat_o[0])
@@ -292,6 +296,16 @@ module top (
                 sdram_ctrl_err_seen <= 1'b0;
             if (wb_status_sel && wb_we && wb_dat_o[9])
                 sdram_ctrl_done_seen <= 1'b0;
+
+            if (wb_cyc && wb_stb && wb_sdram_sel && !wb_ack && (wb_stall_ctr == 24'd0)) begin
+                sdram_req_is_ifetch <= cpu_mem_instr;
+                sdram_req_had_ack <= 1'b0;
+            end else if (wb_cyc && wb_stb && wb_sdram_sel && wb_ack) begin
+                sdram_req_had_ack <= 1'b1;
+            end else if (!(wb_cyc && wb_stb && wb_sdram_sel)) begin
+                sdram_req_is_ifetch <= 1'b0;
+                sdram_req_had_ack <= 1'b0;
+            end
 
             // Ignore early, expected backpressure before SDRAM init is complete.
             if (!sdram_init_done) begin

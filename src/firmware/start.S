@@ -22,6 +22,17 @@
     app_spin_delay 420000
 .endm
 
+.macro app_d2_heartbeat
+    li   t0, 0x10000000
+.Lapp_d2_heartbeat_\@:
+    li   t1, 1
+    sw   t1, 0(t0)
+    app_spin_delay 260000
+    sw   zero, 0(t0)
+    app_spin_delay 260000
+    j    .Lapp_d2_heartbeat_\@
+.endm
+
 _start:
 
     # App checkpoint 1: entered _start after bootloader handoff.
@@ -33,7 +44,7 @@ _start:
     # on initialized globals or constructors before entering main().
     # 0 = normal startup sequence.
     .set BOOT_FAST_ENTRY, 1
-    .set BOOT_LOCAL_HEARTBEAT, 1
+    .set BOOT_LOCAL_HEARTBEAT, 0
 
     .option push
     .option norelax
@@ -50,8 +61,8 @@ _start:
     app_d2_checkpoint 3
 
     .if BOOT_LOCAL_HEARTBEAT
-2:
-    j    2b
+    # Test 1: pure-assembly heartbeat from SDRAM, with no C runtime and no main.
+    app_d2_heartbeat
     .endif
 
     call main
