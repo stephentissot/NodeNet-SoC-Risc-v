@@ -1,10 +1,11 @@
 # LiteDRAM Integration Notes for Colorlight i9 v7.2
 
-This repository now has a reversible SDRAM implementation split:
+This repository now uses a single active SDRAM integration path:
 
-- `wb_sdram_port.sv` is the selection layer instantiated by `top.sv`.
-- Legacy path remains `wb_sdram.sv`.
-- LiteDRAM path is `wb_sdram_litedram.sv`, enabled with `USE_LITEDRAM=1`.
+- `top.sv` instantiates `wb_sdram_litedram.sv` directly.
+- `wb_sdram_litedram.sv` bridges the SoC Wishbone bus to the generated LiteDRAM Wishbone user port.
+- The generated LiteDRAM core is tracked in `src/sdram/litedram_core.v`.
+- The runtime firmware image is loaded by stage0 into SDRAM and executes from that SDRAM window.
 
 ## Confirmed anchors
 
@@ -18,6 +19,13 @@ This repository now has a reversible SDRAM implementation split:
 The generated LiteDRAM standalone core is kept at `25 MHz` for the first pass.
 That keeps PicoRV32 and the LiteDRAM Wishbone user port in the same clock domain,
 so there is no CDC work in the first integration.
+
+Current validated behavior:
+
+- Stage0 can copy the application image from SPI flash into SDRAM and jump to it.
+- The application startup and full `main()` execution from SDRAM are validated on hardware.
+- Full-word CPU accesses now follow the generated LiteDRAM Wishbone frontend closely.
+- Sub-word CPU writes are handled locally in `wb_sdram_litedram.sv` through read-modify-write because DQM is not used on this board.
 
 The adapter currently keeps the legacy SDRAM clock forwarding rule:
 
@@ -37,9 +45,9 @@ generator does not itself create the forwarded SDRAM clock for this board.
 
    `make litedram-copy`
 
-4. Build with LiteDRAM selected:
+4. Build the SoC:
 
-   `make USE_LITEDRAM=1 all`
+   `make all`
 
 Generated RTL is produced at:
 
@@ -52,5 +60,5 @@ Tracked RTL used by the HDL build is:
 ## Next expected work
 
 1. Validate the tracked `src/sdram/litedram_core.v` port names against `wb_sdram_litedram.sv` after each refresh.
-2. If LiteDRAM works at `25 MHz`, move to a PLL-backed system clock and explicit SDRAM clock-forwarding block, following the LiteX Colorlight ECP5 target strategy.
-3. Retune timer/UART prescalers if the SoC system clock is raised above `25 MHz`.
+2. Revisit SDRAM clock phase margin with focused stress tests if instability reappears; lock alone is not sufficient proof of timing margin.
+3. If the SoC system clock is raised above `25 MHz`, retune timer/UART prescalers and re-validate the LiteDRAM timing path.

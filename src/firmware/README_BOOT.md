@@ -1,13 +1,21 @@
-# Stage0 Flash Boot Format
+# Stage0 Flash Boot Flow and Image Format
 
 This document defines the stage0 image format used by `src/bootloader/boot_stage0.cpp`.
+
+## Current Architecture
+
+1. `boot_stage0` is stored in SoC ROM and starts executing at `0x00000000` after FPGA configuration.
+2. Stage0 reads a packaged application image from SPI flash offset `0x244000`.
+3. The image header defines the SDRAM load address and entry address, currently both `0x20000000`.
+4. Stage0 validates the header and payload CRC, copies the payload to SDRAM, and jumps to the application entry point.
+5. The runtime firmware then executes fully from SDRAM.
 
 ## Flash Layout (current)
 
 - `0x000000-0x1FFFFF`: FPGA configuration area (reserved)
 - `0x200000-0x203FFF`: parameter area
 - `0x204000-0x243FFF`: FlashDB KV area
-- `0x244000-...`: stage0 firmware payload area
+- `0x244000-...`: stage0 application image slot (64-byte header + SDRAM payload)
 
 Stage0 currently reads the image header from `0x244000`.
 
@@ -42,6 +50,14 @@ make firmware-image APP_LOAD_ADDR=0x20000000 APP_ENTRY_ADDR=0x20000000
 
 `firmware-image` runs `tools/pack_firmware.py` and generates `build/nodenet_riscv_app.img`.
 
+From the project root, the usual sequence is:
+
+```bash
+make firmware-bootloader  # rebuild ROM stage0 image
+make firmware-image       # rebuild packaged SDRAM app image
+make flash-fw             # write app image to SPI flash slot 0x244000
+```
+
 From project root, firmware-only flash update flow is:
 
 ```bash
@@ -55,6 +71,8 @@ make flash-fw-run     # flash-fw + FPGA RAM reload (stage0 restart)
 - Stage0 validates: magic, version, header size, bounds in SDRAM range, header CRC, payload CRC.
 - On validation failure, stage0 enters a LED blink fault loop.
 - Running firmware from SDRAM requires the application to be linked for SDRAM addresses.
+- Runtime SDRAM self-tests must avoid destructive writes at `SDRAM_BASE`; the current firmware uses a dedicated scratch area for that.
+- Current hardware status: stage0 handoff and full `main()` execution from SDRAM are validated.
 
 ## Stage0 Blink Codes
 

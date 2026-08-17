@@ -1,10 +1,9 @@
 /**
  * sdram.h — SDRAM access helpers for Colorlight i9 SoC
  *
- * The M12L64322A SDRAM (8 MB at 0x20000000) is controlled by the wb_sdram
- * Wishbone peripheral. After FPGA reset, the controller runs a ~200 µs
- * initialization sequence (power-on hold + precharge + refresh + mode load)
- * before the SDRAM is accessible.
+ * The M12L64322A SDRAM (8 MB at 0x20000000) is controlled by the LiteDRAM
+ * Wishbone peripheral. After FPGA reset, the controller runs a ~200 us
+ * initialization sequence before the SDRAM is accessible.
  *
  * SDRAM Allocation:
  *   0x20000000–0x207FFFFF (8 MB) — Available for application (SDRAM_DATA variables)
@@ -21,6 +20,8 @@
  * Variables are placed in order of declaration across translation units.
  *
  * NOTE: Do NOT access SDRAM_DATA variables before calling sdram_wait_ready().
+ * When the application itself executes from SDRAM, destructive self-tests
+ * must stay inside a reserved scratch area and must not write at SDRAM_BASE.
  */
 
 #ifndef SDRAM_H
@@ -59,6 +60,20 @@ extern char _sdram_end;
 #define SOC_STATUS_BUS_STALL_BIT   (1UL << 0)
 #define SOC_STATUS_SDRAM_READY_BIT (1UL << 1)
 
+/* Dedicated destructive test area in SDRAM, reserved outside code/data use. */
+#define SDRAM_TEST_SCRATCH_WORDS 4096u
+extern SDRAM_DATA volatile uint32_t g_sdram_test_scratch_words[SDRAM_TEST_SCRATCH_WORDS];
+
+static inline volatile uint32_t* sdram_test_scratch_words(void)
+{
+    return g_sdram_test_scratch_words;
+}
+
+static inline volatile uint8_t* sdram_test_scratch_bytes(void)
+{
+    return (volatile uint8_t*)g_sdram_test_scratch_words;
+}
+
 /* ── Initialization wait ─────────────────────────────────────────────────── */
 
 /**
@@ -85,7 +100,7 @@ static inline bool sdram_wait_ready_timeout(uint32_t max_poll_loops)
 
 /**
  * sdram_wait_ready() — compatibility helper that waits with a bounded timeout,
- * then performs one write/read probe to confirm accesses are live.
+ * then performs one scratch-area write/read probe to confirm accesses are live.
  *
  * Returns true when ready, false on timeout/stall.
  *
@@ -98,7 +113,7 @@ static inline bool sdram_wait_ready(void)
         return false;
     }
 
-    volatile uint32_t *p = (volatile uint32_t *)SDRAM_BASE;
+    volatile uint32_t *p = sdram_test_scratch_words();
 
     /* Write a known pattern; the Wishbone stall mechanism ensures this
      * completes only once the SDRAM controller has finished its init. */
@@ -111,7 +126,8 @@ static inline bool sdram_wait_ready(void)
 }
 
 /**
- * sdram_test() — basic write/read-back pattern test over the first N words.
+ * sdram_test() — basic write/read-back pattern test over the reserved SDRAM
+ * scratch area.
  * Returns 0 on success, or the number of mismatches found.
  *
  * Example:
@@ -119,8 +135,12 @@ static inline bool sdram_wait_ready(void)
  */
 static inline uint32_t sdram_test(uint32_t num_words)
 {
-    volatile uint32_t *p = (volatile uint32_t *)SDRAM_BASE;
+    volatile uint32_t *p = sdram_test_scratch_words();
     uint32_t i, errors = 0;
+
+    if (num_words > SDRAM_TEST_SCRATCH_WORDS) {
+        num_words = SDRAM_TEST_SCRATCH_WORDS;
+    }
 
     for (i = 0; i < num_words; i++)
         p[i] = i ^ 0xA5A5A5A5UL;
@@ -137,7 +157,7 @@ typedef void (*sdram_status_cb_t)(uint8_t line, const char *text);
 
 static inline uint32_t sdram_test_region(uint32_t byte_offset, uint32_t num_words, uint32_t salt)
 {
-    volatile uint32_t *p = (volatile uint32_t *)(SDRAM_BASE + byte_offset);
+    volatile uint32_t *p = (volatile uint32_t *)(sdram_test_scratch_bytes() + byte_offset);
     uint32_t i;
     uint32_t errors = 0;
 
@@ -162,7 +182,7 @@ static inline uint32_t sdram_test_byte_pattern(uint32_t byte_offset)
         0x11, 0x22, 0x44, 0x88, 0xFE, 0xEF, 0x7D, 0xB6,
         0x09, 0x90, 0x24, 0x42, 0x66, 0x99, 0xDE, 0xAD
     };
-    volatile uint8_t *p = (volatile uint8_t *)(SDRAM_BASE + byte_offset);
+    volatile uint8_t *p = sdram_test_scratch_bytes() + byte_offset;
     uint32_t errors = 0;
 
     for (uint32_t i = 0; i < sizeof(expected); i++) {
@@ -231,8 +251,9 @@ static inline bool sdramTest(sdram_status_cb_t status_cb)
 {
     const uint32_t words_per_region = 1024; /* 4 KB per region */
     const uint32_t test_span_bytes = words_per_region * sizeof(uint32_t);
-    const uint32_t mid_offset = SDRAM_SIZE / 2;
-    const uint32_t tail_offset = SDRAM_SIZE - test_span_bytes;
+    const uint32_t mid_offset = test_span_bytes;
+    const uint32_t tail_offset = 2u * test_span_bytes;
+    const uint32_t byte_offset = 3u * test_span_bytes;
     uint32_t errors = 0;
 
     if (status_cb != 0) status_cb(2, "[BOOT] SDRAM init...");
@@ -241,21 +262,21 @@ static inline bool sdramTest(sdram_status_cb_t status_cb)
         return false;
     }
 
-    if (status_cb != 0) status_cb(2, "[BOOT] SDRAM T1 base");
+    if (status_cb != 0) status_cb(2, "[BOOT] SDRAM T1 s0  ");
     {
         const uint32_t step_errors = sdram_test_region(0, words_per_region, 0xA5A5A5A5UL);
         errors += step_errors;
         if (step_errors != 0 && status_cb != 0) status_cb(2, "[BOOT] T1 FAIL");
     }
 
-    if (status_cb != 0) status_cb(2, "[BOOT] SDRAM T2 mid ");
+    if (status_cb != 0) status_cb(2, "[BOOT] SDRAM T2 s1  ");
     {
         const uint32_t step_errors = sdram_test_region(mid_offset, words_per_region, 0x5A5A5A5AUL);
         errors += step_errors;
         if (step_errors != 0 && status_cb != 0) status_cb(2, "[BOOT] T2 FAIL");
     }
 
-    if (status_cb != 0) status_cb(2, "[BOOT] SDRAM T3 tail");
+    if (status_cb != 0) status_cb(2, "[BOOT] SDRAM T3 s2  ");
     {
         const uint32_t step_errors = sdram_test_region(tail_offset, words_per_region, 0x3C3CC3C3UL);
         errors += step_errors;
@@ -264,7 +285,7 @@ static inline bool sdramTest(sdram_status_cb_t status_cb)
 
     if (status_cb != 0) status_cb(2, "[BOOT] SDRAM T4 byte");
     {
-        const uint32_t step_errors = sdram_test_byte_pattern(0x1000UL);
+        const uint32_t step_errors = sdram_test_byte_pattern(byte_offset);
         errors += step_errors;
         if (step_errors != 0 && status_cb != 0) status_cb(2, "[BOOT] T4 FAIL");
     }
