@@ -88,7 +88,11 @@ Stage0 reports boot errors on D2 LED with pulse-count patterns:
 - 8 pulses: invalid entry address range
 - 9 pulses: payload read failure during copy
 - 10 pulses: payload CRC mismatch
-- 11 pulses: unexpected return from application entry
+- 11 pulses: copy range exceeds allowed SDRAM image window
+- 12 pulses: unexpected return from application entry
+- 13 pulses: application entry address is not 4-byte aligned
+
+Higher diagnostic codes are also used for SDRAM validation failures inside stage0; refer to `BootFault` in `src/bootloader/boot_stage0.cpp` for the authoritative mapping.
 
 ## Hardware Robustness Checklist
 

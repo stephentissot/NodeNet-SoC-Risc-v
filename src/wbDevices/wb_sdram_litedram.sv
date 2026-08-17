@@ -10,7 +10,6 @@ module wb_sdram_litedram #(
     parameter [31:0] ADDR         = 32'h2000_0000,
     parameter        CLK_FREQ_MHZ = 25,
     parameter        SELFTEST_AUTO_START = 1'b0,
-    parameter        BYPASS_REQ_CDC = 1'b1,
     parameter [23:0] WB_POST_ENABLE_GUARD_CYCLES = 24'd12500000,
     parameter [23:0] WB_TIMEOUT_CYCLES = 24'd2000000
 )(
@@ -872,8 +871,6 @@ module wb_sdram_litedram #(
                     end else begin
                         if (rmw_is_selftest) begin
                             selftest_running <= 1'b0;
-                            selftest_done <= 1'b1;
-                            selftest_fail <= 1'b1;
                             selftest_done <= 1'b1;
                             selftest_fail <= 1'b1;
                             selftest_timeout <= 1'b1;

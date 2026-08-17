@@ -72,7 +72,8 @@ EHXPLLL #(
     .PHASESTEP(1'b1),
     .PHASELOADREG(1'b1),
     .PLLWAKESYNC(1'b0),
-    .ENCLKOP(1'b0),
+    .ENCLKOP(1'b1),
+    .ENCLKOS(1'b1),
     .LOCK(locked_o)
 );
 
