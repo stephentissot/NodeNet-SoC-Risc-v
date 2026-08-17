@@ -107,8 +107,6 @@ enum class BootFault : uint8_t {
     SdramHardTestCoreErr = 65,
     SdramHardTestCoreTimeoutNoAck = 66,
     SdramHardTestCtrlNotReady = 67,
-    // Reserved legacy value kept out of active use to detect stale stage0 images.
-    SdramFetch = 30,
     SdramPartial = 17,
     BusStall = 18,
     SdramTimeout = 19,
