@@ -1,8 +1,11 @@
 #include <cstdint>
 
+#include "led.h"
+
 namespace {
 
-static volatile uint32_t* const kLedD2 = reinterpret_cast<volatile uint32_t*>(0x10000000u);
+constexpr uint32_t kLedGreenBase = 0x10000004u;
+constexpr uint32_t kLedYellowBase = 0x10000008u;
 
 static inline void raw_delay(uint32_t cycles)
 {
@@ -15,11 +18,19 @@ static inline void raw_delay(uint32_t cycles)
 
 extern "C" int main(void)
 {
+    WbLed ledGreen(kLedGreenBase);
+    WbLed ledYellow(kLedYellowBase);
+
+    ledGreen.off();
+    ledYellow.off();
+
     while (true) {
-        *kLedD2 = 1u;
+        ledGreen.on();
+        ledYellow.off();
         raw_delay(1500000u);
 
-        *kLedD2 = 0u;
+        ledGreen.off();
+        ledYellow.on();
         raw_delay(1500000u);
     }
 }

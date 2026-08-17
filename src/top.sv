@@ -267,11 +267,9 @@ module top (
     assign led_g18 = nodenet_rx_led_out;
     assign led_h18 = nodenet_tx_led_out;
     
-    // During a live SDRAM wait, repurpose the status LEDs to expose the
-    // currently stalled transfer instead of sticky historical flags.
     assign sdram_cpu_wait_live = wb_cyc && wb_stb && wb_sdram_sel && !wb_ack;
-    assign led_e18 = sdram_cpu_wait_live ? (sdram_req_is_ifetch ? 1'b0 : 1'b1) : led0_out;
-    assign led_e16 = sdram_cpu_wait_live ? (sdram_req_had_ack ? 1'b1 : 1'b0) : led1_out;
+    assign led_e18 = led0_out;
+    assign led_e16 = led1_out;
 
     always @(posedge sys_clk) begin
         if (reset) begin

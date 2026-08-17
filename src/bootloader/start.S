@@ -3,12 +3,6 @@
 
 _start:
 
-    # Post-jump checkpoint A: D2 ON.
-    # Keep only one MMIO target here to avoid false stalls during diagnosis.
-    li   t0, 0x10000000
-    li   t1, 1
-    sw   t1, 0(t0)
-
     # Temporary bring-up switch:
     # 1 = skip .data/.bss/.init_array and jump directly to main for diagnosis.
     # 0 = normal startup sequence.
@@ -22,9 +16,6 @@ _start:
     la sp, _stack_top
 
     .if BOOT_FAST_ENTRY
-    # Checkpoint FAST: D2 OFF just before entering C main.
-    li   t0, 0x10000000
-    sw   zero, 0(t0)
     call main
 1:  j 1b
     .endif
@@ -66,11 +57,6 @@ _start:
     addi a0, a0, 4
     j    .Lctor_loop
 .Lctor_done:
-
-    # Post-jump checkpoint B: D2 OFF.
-    # Means startup reached just before calling C main().
-    li   t0, 0x10000000
-    sw   zero, 0(t0)
 
     call main
 

@@ -919,8 +919,10 @@ static void boot_progress_pulse(uint8_t count)
 
 static void boot_flash_checkpoint(uint8_t count)
 {
-    // Always emit these markers, even in minimal LED mode, because they are
-    // used to distinguish a clean flash read failure from a hard lockup.
+    if (kMinimalLedTrace) {
+        return;
+    }
+
     static constexpr uint32_t kCheckpointOnCycles = 260000u;
     static constexpr uint32_t kCheckpointOffCycles = 220000u;
     static constexpr uint32_t kCheckpointGapCycles = 420000u;
@@ -944,6 +946,10 @@ static void boot_validation_checkpoint(uint8_t id)
 
 static void boot_jump_marker(void)
 {
+    if (kMinimalLedTrace) {
+        return;
+    }
+
     // Short unique marker right before handoff.
     // Keep this visually distinct from app-side long signatures.
     *kLedD2 = 1u;
