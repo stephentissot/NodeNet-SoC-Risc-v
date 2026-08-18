@@ -9,7 +9,7 @@
 #include "version.h"
 #include "sdram.h"
 #include "nodenet.h"
-#include "Serial.h"
+#include "ModbusMaster.h"
 #include "flash.h"
 #include "flashdb_port.h"
 
@@ -18,11 +18,10 @@ static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x
 #define LED0_BASE  0x10000004UL
 #define LED1_BASE  0x10000008UL
 #define I2C0_BASE  0x10005000UL
-#define SERIAL1_BASE 0x10004000u
+#define MODBUS1_BASE 0x10004000u
 #define FLASH_BASE 0x10007000u
 static constexpr uint32_t NODENET0_BASE = 0x10006000u;
-
-#define SERIAL1_BUFFER_LENGTH 32
+static constexpr uint8_t MODBUS1_SLAVE_ADDR_DEFAULT = 0x01u;
 
 // ════════════════════════════════════════════════════════════════════════════
 // OLED Display (U8G2)
@@ -174,8 +173,9 @@ int main(void)
     // Harware definition
     WbLed  ledGreen(LED0_BASE);
     WbLed  ledYellow(LED1_BASE);
-    Serial Serial1(SERIAL1_BASE);
-    Serial1.begin(115200u);
+    ModbusMaster modbus1(MODBUS1_BASE);
+    modbus1.begin(9600u, 500u, 2u);
+    modbus1.setInterframeCharsQ1(14u);
     Flash myFlash(FLASH_BASE);
 
     static constexpr uint32_t kBlinkPeriodMs = 2000u;
@@ -194,10 +194,9 @@ int main(void)
     oled_write("[BOOT] Running tests");
     oled_write(nodenet_ok ? "[NN] Self-test PASS" : "[NN] Self-test FAIL");
 
-    // Serial definition and initialization
-
-    char serial1rxBuffer[SERIAL1_BUFFER_LENGTH] = {};
-    uint8_t serial1rxCount = 0;
+    uint8_t modbus_channel = 1u;
+    uint8_t modbus_slave_addr = MODBUS1_SLAVE_ADDR_DEFAULT;
+    bool modbus_channel_state[8] = {false, false, false, false, false, false, false, false};
 
     const bool sdram_ok = sdramTest(oled_boot_status);
     oled_write(sdram_ok ? "[BOOT] System ready" : "[BOOT] Degraded mode");
@@ -216,22 +215,49 @@ int main(void)
         (void)flashdb_boot_counter_test(oled_boot_status);
     }
 
-    while (1) {
-
-        // Check serial1 input and echo back any received characters
-        while (Serial1.available()) {
-            uint8_t c = Serial1.read();
-            if (static_cast<char>(c) == '\n') {
-                oled_write("[RX1] Received:");
-                oled_write(serial1rxBuffer);
-                serial1rxCount = 0;
-                serial1rxBuffer[0] = '\0';
+    // Probe Waveshare serial settings using slave=0 discovery command.
+    bool modbus_found = false;
+    uint16_t device_addr_reg = 0u;
+    static const uint32_t kProbeBaud[] = {9600u, 4800u, 19200u, 38400u, 57600u, 115200u, 128000u, 256000u};
+    for (uint32_t baud : kProbeBaud) {
+        modbus1.begin(baud, 200u, 0u);
+        modbus1.setInterframeCharsQ1(14u);
+        // Waveshare extension: slave 0 query for 0x4000 returns actual device address.
+        if (modbus1.readHoldingRegisters(0u, 0x4000u, 1u, &device_addr_reg)) {
+            uint8_t detected = static_cast<uint8_t>(device_addr_reg & 0x00FFu);
+            if (detected == 0u) {
+                detected = MODBUS1_SLAVE_ADDR_DEFAULT;
             }
-            else if (serial1rxCount < SERIAL1_BUFFER_LENGTH - 1) {
-                serial1rxBuffer[serial1rxCount++] = static_cast<char>(c);
-                serial1rxBuffer[serial1rxCount] = '\0';
+            modbus_slave_addr = detected;
+            modbus_found = true;
+            oled_print("[MB] link @%lu", static_cast<unsigned long>(baud));
+            oled_print("[MB] slave=%u", static_cast<unsigned>(modbus_slave_addr));
+            break;
+        }
+    }
+
+    // Fallback: small direct slave scan on the default baud.
+    if (!modbus_found) {
+        modbus1.begin(9600u, 250u, 1u);
+        modbus1.setInterframeCharsQ1(14u);
+        for (uint8_t slave = 1u; slave <= 16u; ++slave) {
+            if (modbus1.readHoldingRegisters(slave, 0x4000u, 1u, &device_addr_reg)) {
+                modbus_slave_addr = slave;
+                modbus_found = true;
+                oled_print("[MB] fallback @9600");
+                oled_print("[MB] slave=%u", static_cast<unsigned>(modbus_slave_addr));
+                break;
             }
         }
+    }
+
+    if (!modbus_found) {
+        modbus1.begin(9600u, 500u, 2u);
+        modbus1.setInterframeCharsQ1(14u);
+        oled_write("[MB] probe failed");
+    }
+
+    while (1) {
 
         if (myNodeNet.HasMessage()) {
             NodeNetMessage msg = myNodeNet.ReadMessage();
@@ -247,11 +273,28 @@ int main(void)
         }
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
-            Serial1.println("Hello");
+            const uint16_t coil_addr = static_cast<uint16_t>(modbus_channel - 1u);
+            const uint8_t idx = static_cast<uint8_t>(modbus_channel - 1u);
+            modbus_channel_state[idx] = !modbus_channel_state[idx];
+            const bool ok = modbus1.writeSingleCoil(modbus_slave_addr, coil_addr, modbus_channel_state[idx]);
+            if (!ok) {
+                char status_hex[11] = {};
+                hex32_to_str(modbus1.lastHwStatus(), status_hex);
+                oled_print("[MB] CH%u err=%u", modbus_channel, static_cast<unsigned>(modbus1.lastError()));
+                oled_write(status_hex);
+                ledYellow.blink(250u);
+            } else {
+                ledGreen.blink(100u);
+            }
+
+            modbus_channel = static_cast<uint8_t>(modbus_channel + 1u);
+            if (modbus_channel > 8u) {
+                modbus_channel = 1u;
+            }
+
             led_on = !led_on;
             *LED_D2 = led_on ? 0u : 1u;
             next_toggle_ms += kBlinkPeriodMs;
-            ledGreen.blink(100u);
         }
     }
 }

@@ -425,25 +425,27 @@ module top (
         .wb_ack_o(timer_ack)
     );
 
-    wb_uart #(
-        .ADDR(UART1_BASE),
-        .DEFAULT_PRESCALE(16'd27)
+    wb_modbus_master #(
+        .CLOCK_RATE(25_000_000),
+        .DEFAULT_UART_DIVISOR(20'd217),
+        .DEFAULT_TIMEOUT_CYCLES(32'd2_500_000),
+        .DEFAULT_INTERFRAME_CYCLES(32'd8_680)
     ) uart1 (
-        .clk(sys_clk),
-        .rst(reset),
+        .clk_i(sys_clk),
+        .rst_i(reset),
 
-        .wb_adr_i(wb_adr),
-        .wb_dat_i(wb_dat_o),
-        .wb_sel_i(wb_sel),
-        .wb_we_i(wb_we),
-        .wb_cyc_i(wb_uart1_sel),
-        .wb_stb_i(wb_uart1_sel),
+        .adr_i(wb_adr),
+        .dat_i(wb_dat_o),
+        .dat_o(uart1_dat),
+        .we_i(wb_we),
+        .sel_i(wb_sel),
+        .cyc_i(wb_uart1_sel),
+        .stb_i(wb_uart1_sel),
+        .ack_o(uart1_ack),
 
-        .wb_dat_o(uart1_dat),
-        .wb_ack_o(uart1_ack),
-
-        .rxd(rx1),
-        .txd(tx1)
+        .uart_rx_i(rx1),
+        .uart_tx_o(tx1),
+        .uart_de_o()
     );
     
     wb_nodenet #(
