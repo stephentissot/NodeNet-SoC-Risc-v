@@ -6,6 +6,7 @@
 #ifndef FLASH_LIB_FLASH_H
 #define FLASH_LIB_FLASH_H
 
+#include <cstddef>
 #include <cstdint>
 
 class Flash {
@@ -19,6 +20,8 @@ public:
   bool readPage(uint32_t pageBase, uint8_t* out256) const;
   bool writePage(uint32_t pageBase, const uint8_t* in256) const;
   bool eraseSector(uint32_t sectorBase) const;
+  bool readUniqueId(uint8_t uid8[8]) const;
+  bool readUniqueIdAscii(char* out, std::size_t out_size) const;
 
   // Optional helper for cleanup/format of the parameter partition.
   bool clearAll();
@@ -69,6 +72,8 @@ private:
   static constexpr uint32_t kStatTimeoutError = 1u << 2;
   static constexpr uint32_t kStatSpiWaiting = 1u << 3;
   static constexpr uint32_t kStatPageBufferOverflow = 1u << 4;
+
+  static void uniqueIdToAscii(uint64_t uid, char* out, std::size_t out_size);
 
   // MMIO register accessor and safety guard.
   volatile uint32_t& reg(uint32_t offset) const;

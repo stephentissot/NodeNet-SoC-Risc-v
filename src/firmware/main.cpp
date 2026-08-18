@@ -279,6 +279,13 @@ int main(void)
         oled_write(status_hex);
     }
 
+    char device_id[12] = {};
+    if (myFlash.readUniqueIdAscii(device_id, sizeof(device_id))) {
+        oled_print("[FLASH] ID %s", device_id);
+    } else {
+        oled_write("[FLASH] ID read fail");
+    }
+
     while (1) {
 
         if (myNodeNet.HasMessage()) {
