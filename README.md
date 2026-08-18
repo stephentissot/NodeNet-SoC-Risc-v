@@ -8,7 +8,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 - **Processor**: PicoRV32 (32-bit RISC-V, bare-metal)
 - **Clock**: 25 MHz
 - **Memory**: 64 KiB ROM (stage0 bootloader) + 64 KiB RAM (stack/variables) + 8 MB SDRAM (runtime application/external data)
-- **Peripherals**: D2 LED GPIO, RJ45 LED pulse controllers (`wb_led`), UART1 (`wb_uart`), RS485 NodeNet485, I2C master, SDRAM controller
+- **Peripherals**: D2 LED GPIO, RJ45 LED pulse controllers (`wb_led`), UART1 Modbus RTU master (`wb_modbus_master`), RS485 NodeNet485, I2C master, SDRAM controller
 - **Communication**: NodeNet485 @ 1 Mb/s over RS-485 (multi-node capable)
 - **Firmware**: C++17, bare-metal, newlib-nano
 - **Validated boot path**: stage0 in ROM validates an image header in SPI flash, copies the payload to SDRAM, checks CRC, then jumps to the application entry point
@@ -39,7 +39,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - `0x10000000`: D2 LED GPIO (1-bit output)
   - `0x10000004`: RJ45 LED0 (`wb_led` one-shot pulse)
   - `0x10000008`: RJ45 LED1 (`wb_led` one-shot pulse)
-  - `0x10004000`: UART1 (`wb_uart`, RX/TX FIFO MMIO)
+  - `0x10004000`: UART1 Modbus RTU master (`wb_modbus_master`)
   - `0x10005000`: I2C0 master (8 registers @ 4-byte stride)
   - `0x10006000`: NodeNet485 RS-485 mailbox (8 registers, 1 Mb/s)
   - `0x20000000–0x207FFFFF`: 8 MB SDRAM (runtime application image / framebuffer / logs)
@@ -66,10 +66,13 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - Drives SCL/SDA open-drain (external 4.7 kΩ pullup required)
   - Wishbone address: 0x10005000
 
-- **UART1 Module** (`wb_uart.sv`):
-  - Wishbone UART wrapper with RX/TX FIFOs (`DATA`, `STATUS`, `BAUD`)
-  - Uses shared `uart_simple.sv` UART core
-  - Intended for firmware serial console / general UART text I/O
+- **Modbus Master Module** (`src/modbus/wb_modbus_master.sv`):
+  - Wishbone Modbus RTU master transaction engine
+  - Uses shared `uart_simple.sv` UART core for wire-level TX/RX
+  - Hardware-managed CRC16 (TX generation + RX validation)
+  - Hardware-managed RTU frame gap detection (inter-frame silence)
+  - Retries, timeout, and status/error flags exposed through MMIO
+  - Firmware API in `src/firmware/lib/modbus/ModbusMaster.{h,cpp}`
   - Wishbone address: 0x10004000
 
 - **SPI Flash Module** (`wb_flash.sv`, `spi_master.sv`):
@@ -94,6 +97,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 
 - See [src/firmware/README.md](src/firmware/README.md) for full peripheral usage guide.
 - See [src/wbDevices/README_NODENET.md](src/wbDevices/README_NODENET.md) for protocol details.
+- See [src/modbus/README.md](src/modbus/README.md) for Modbus RTU master details.
 
 ## Building
 
@@ -212,7 +216,7 @@ Address Range               Size      Purpose
 0x10000000                4 B      D2 LED GPIO (bit [0] = LED output)
 0x10000004                4 B      RJ45 LED0 (`wb_led` control/status)
 0x10000008                4 B      RJ45 LED1 (`wb_led` control/status)
-0x10004000                32 B     UART1 (`wb_uart` serial MMIO)
+0x10004000                32 B     UART1 Modbus RTU master (`wb_modbus_master`)
 0x10005000                32 B     I2C0 master (8 regs @ 4-byte stride)
 0x10006000–0x1000601F     32 B     NodeNet485 mailbox + LED config (RS485, 1 Mb/s)
 0x10007000                32 B     SPI Flash controller (W25Q64)
@@ -292,24 +296,26 @@ NodeNet RJ45 pinout (both connectors):
 
 See **[src/firmware/README.md](src/firmware/README.md)** for a full guide with code examples for every peripheral.
 
-### Quick-start: UART1 with Serial
+### Quick-start: UART1 Modbus RTU master
 ```cpp
-#include "lib/serial/Serial.h"
+#include "ModbusMaster.h"
 
-constexpr uint32_t UART1_BASE = 0x10004000u;
-Serial Serial1(UART1_BASE);
+constexpr uint32_t MODBUS1_BASE = 0x10004000u;
+constexpr uint8_t MODBUS_SLAVE = 0x01u;
+ModbusMaster modbus1(MODBUS1_BASE);
 
 int main() {
-  Serial1.begin(115200);
-  Serial1.println("UART1 ready");
+  modbus1.begin(9600, 500, 2);
+  modbus1.setInterframeCharsQ1(14);
+
+  uint16_t version = 0;
+  if (modbus1.readHoldingRegisters(MODBUS_SLAVE, 0x8000, 1, &version)) {
+    // 0x0064 => V1.00
+  }
 
   for (;;) {
-    if (Serial1.available() > 0) {
-      int c = Serial1.read();
-      if (c >= 0) {
-        Serial1.write(static_cast<uint8_t>(c));
-      }
-    }
+    // Toggle channel 1 (coil address 0)
+    (void)modbus1.writeSingleCoil(MODBUS_SLAVE, 0x0000, true);
   }
 }
 ```
@@ -388,7 +394,7 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
                            |
       +--------+-----------+---------+--------+----------+-------+
       |        |           |         |        |          |       |
-      wb_rom  wb_ram  wb_uart  wb_nodenet wb_gpio wb_led wb_sdram wb_i2c
+      wb_rom  wb_ram  wb_modbus_master  wb_nodenet wb_gpio wb_led wb_sdram wb_i2c
             |         |
             uart_simple  uart_simple
                  |
@@ -411,6 +417,7 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
    - `wb_ram`: 64 KiB RAM (0x00010000)
   - `wb_sdram_litedram`: 8 MB SDRAM runtime memory window (0x20000000)
   - `wb_flash`: SPI flash control + persistence services (0x10007000)
+  - `wb_modbus_master`: Modbus RTU master transport (0x10004000)
   - `wb_nodenet`: NodeNet485 mailbox transport (0x10006000)
   - `wb_gpio`: D2 GPIO output (0x10000000)
   - `wb_led`: RJ45 LED pulse controllers (0x10000004 / 0x10000008)
@@ -441,7 +448,8 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
 - [ ] Final RJ45 firmware policy (link/activity/status) for production runtime
 - [ ] ESP32 module SPI coprocessor for web API and MQTT bridge
 - [ ] Power option study: use ESP32 module 3.3V rail vs dedicated 12V->3.3V buck
-- [ ] Modbus RTU library (master/slave modes)
+- [x] Modbus RTU master module + firmware driver (`wb_modbus_master` + `ModbusMaster`)
+- [ ] Modbus RTU slave mode
 - [ ] NodeNet JSON protocol wrapper (UART4)
 - [ ] SPI slave interface for ESP32 co-processor
 - [ ] SPI color LCD support (ST7789, 76x284) on Colorlight i9
@@ -502,4 +510,4 @@ https://github.com/stephentissot
 ---
 
 **Status**: Prototype / Active Development  
-**Last Updated**: 2026-07-28
+**Last Updated**: 2026-08-18
