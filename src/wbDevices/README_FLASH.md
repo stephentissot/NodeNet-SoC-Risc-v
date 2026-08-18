@@ -186,12 +186,24 @@ Flash Address Space (8 MB total)
 
 ## Testing
 
-### Test 1: Read Flash ID
+### Test 1: Read Flash UID / Device ID
 
 ```cpp
-// Sends JEDID command (0x9F) and reads 3 manufacturer ID bytes
-// Expected: 0xEF 0x40 0x17 for W25Q64
+// Read the factory-programmed 64-bit UID via 0x4B and convert it to ASCII.
+// The firmware uses a base62 alphabet (a-z A-Z 0-9) and produces a stable
+// 11-character device ID with no W25Q64- prefix.
 ```
+
+### Device ID format
+
+The firmware converts the 8-byte factory UID into an ASCII `deviceId` using a base62 alphabet:
+
+- Alphabet: `a-z`, `A-Z`, `0-9`
+- Length: 11 characters
+- Output: stable per flash chip, suitable for OLED display and board identification
+- Prefix: none
+
+This keeps the identifier human-readable while remaining derived from the unique factory UID.
 
 ### Test 2: Write and Read Back
 

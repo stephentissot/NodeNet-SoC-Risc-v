@@ -2,6 +2,12 @@
 
 namespace {
 
+static constexpr char kBase62Alphabet[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+}  // namespace
+
+namespace {
+
 // waitReady timeout counts MMIO polling iterations, not raw FPGA clock cycles.
 static constexpr uint32_t kTimeoutCycles = 8000000u;
 
@@ -213,4 +219,70 @@ bool Flash::eraseSector(uint32_t sectorBase) const {
   reg(kRegAddress) = sectorBase & 0x00FFFFFFu;
   reg(kRegControl) = kCtrlErase;
   return waitReady();
+}
+
+bool Flash::readUniqueId(uint8_t uid8[8]) const {
+  if (uid8 == nullptr) {
+    return false;
+  }
+
+  if (!waitReady()) {
+    return false;
+  }
+
+  reg(kRegControl) = 0u;
+  reg(kRegControl) = kCtrlUid;
+
+  if (!waitReady()) {
+    return false;
+  }
+
+  for (uint32_t i = 0; i < 8u; ++i) {
+    uid8[i] = static_cast<uint8_t>(reg(kRegData));
+  }
+
+  return true;
+}
+
+void Flash::uniqueIdToAscii(uint64_t uid, char* out, std::size_t out_size) {
+  if (out == nullptr || out_size == 0u) {
+    return;
+  }
+
+  constexpr std::size_t kAsciiLen = 11u;
+  if (out_size < (kAsciiLen + 1u)) {
+    out[0] = '\0';
+    return;
+  }
+
+  char digits[kAsciiLen];
+  for (std::size_t i = 0; i < kAsciiLen; ++i) {
+    digits[kAsciiLen - 1u - i] = kBase62Alphabet[uid % 62u];
+    uid /= 62u;
+  }
+
+  for (std::size_t i = 0; i < kAsciiLen; ++i) {
+    out[i] = digits[i];
+  }
+  out[kAsciiLen] = '\0';
+}
+
+bool Flash::readUniqueIdAscii(char* out, std::size_t out_size) const {
+  if (out == nullptr || out_size == 0u) {
+    return false;
+  }
+
+  uint8_t uid8[8] = {};
+  if (!readUniqueId(uid8)) {
+    out[0] = '\0';
+    return false;
+  }
+
+  uint64_t uid = 0u;
+  for (uint32_t i = 0; i < 8u; ++i) {
+    uid = (uid << 8) | static_cast<uint64_t>(uid8[i]);
+  }
+
+  uniqueIdToAscii(uid, out, out_size);
+  return out[0] != '\0';
 }

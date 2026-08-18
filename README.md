@@ -79,6 +79,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - Wishbone interface to on-board SPI flash (W25Q64, 8 MB)
   - Memory layout: 2 MB boot config (protected) + 16 KB params + 256 KB FlashDB KV + app data
   - C++ firmware uses low-level page/sector API (`Flash`) plus FlashDB wrapper (`flashdb_port`)
+  - Exposes the factory-programmed 64-bit Winbond UID as a stable ASCII device ID
   - Boot region protection: firmware rejects writes/erases to 0x000000–0x1FFFFF
   - Parameter storage at 0x200000–0x203FFF (16 KB, 4 sectors)
   - FlashDB KV partition at 0x204000–0x243FFF (256 KB)
@@ -98,6 +99,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 - See [src/firmware/README.md](src/firmware/README.md) for full peripheral usage guide.
 - See [src/wbDevices/README_NODENET.md](src/wbDevices/README_NODENET.md) for protocol details.
 - See [src/modbus/README.md](src/modbus/README.md) for Modbus RTU master details.
+- See [src/wbDevices/README_FLASH.md](src/wbDevices/README_FLASH.md) for flash UID and device ID details.
 
 ## Building
 

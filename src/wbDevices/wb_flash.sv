@@ -25,6 +25,7 @@ module wb_flash #(
 );
     localparam [7:0] CMD_WREN = 8'h06;
     localparam [7:0] CMD_READ = 8'h03;
+    localparam [7:0] CMD_RDUID = 8'h4B;
     localparam [7:0] CMD_PP   = 8'h02;
     localparam [7:0] CMD_SE   = 8'h20;
     localparam [7:0] CMD_RDSR = 8'h05;
@@ -41,10 +42,11 @@ module wb_flash #(
     localparam [2:0] ST_POLL_WAIT  = 3'd4;
     localparam [2:0] ST_FAULT      = 3'd5;
 
-    localparam [1:0] OP_NONE  = 2'd0;
-    localparam [1:0] OP_READ  = 2'd1;
-    localparam [1:0] OP_WRITE = 2'd2;
-    localparam [1:0] OP_ERASE = 2'd3;
+    localparam [2:0] OP_NONE  = 3'd0;
+    localparam [2:0] OP_READ  = 3'd1;
+    localparam [2:0] OP_WRITE = 3'd2;
+    localparam [2:0] OP_ERASE = 3'd3;
+    localparam [2:0] OP_UID   = 3'd4;
 
     localparam [1:0] PH_IDLE  = 2'd0;
     localparam [1:0] PH_WREN  = 2'd1;
@@ -59,7 +61,7 @@ module wb_flash #(
     wire [3:0] _sel_unused = sel_i;
 
     reg [2:0] state;
-    reg [1:0] op_kind;
+    reg [2:0] op_kind;
     reg [1:0] op_phase;
 
     reg busy;
@@ -177,6 +179,30 @@ module wb_flash #(
                                     send_req <= 1'b1;
                                     send_started <= 1'b0;
                                     state <= ST_SEND;
+                                end else if (dat_i[3]) begin
+                                    // Read 64-bit factory unique ID: 0x4B + 4 dummy bytes + 8 UID bytes
+                                    tx_mem[0] <= CMD_RDUID;
+                                    tx_mem[1] <= 8'h00;
+                                    tx_mem[2] <= 8'h00;
+                                    tx_mem[3] <= 8'h00;
+                                    tx_mem[4] <= 8'h00;
+                                    tx_mem[5] <= 8'h00;
+                                    tx_mem[6] <= 8'h00;
+                                    tx_mem[7] <= 8'h00;
+                                    tx_mem[8] <= 8'h00;
+                                    tx_mem[9] <= 8'h00;
+                                    tx_mem[10] <= 8'h00;
+                                    tx_mem[11] <= 8'h00;
+                                    tx_mem[12] <= 8'h00;
+                                    tx_len <= 9'd13;
+                                    tx_idx <= 9'd0;
+                                    read_sink_count <= 9'd0;
+                                    op_kind <= OP_UID;
+                                    op_phase <= PH_CMD;
+                                    busy <= 1'b1;
+                                    send_req <= 1'b1;
+                                    send_started <= 1'b0;
+                                    state <= ST_SEND;
                                 end else if (dat_i[1]) begin
                                     // WRITE page: WREN, then PP + A23..A0 + 256 data, then poll busy
                                     tx_mem[0] <= CMD_WREN;
@@ -281,6 +307,11 @@ module wb_flash #(
                         page_buffer[read_sink_count - 9'd4] <= rx_byte;
                     end
                     read_sink_count <= read_sink_count + 9'd1;
+                end else if (op_kind == OP_UID) begin
+                    if (read_sink_count >= 9'd5 && read_sink_count < 9'd13) begin
+                        page_buffer[read_sink_count - 9'd5] <= rx_byte;
+                    end
+                    read_sink_count <= read_sink_count + 9'd1;
                 end else if (op_kind == OP_WRITE || op_kind == OP_ERASE) begin
                     // Use nandland RX byte index for robust status sampling during RDSR polling.
                     // rx_count is 0-based on each RX_DV pulse within one CS-low frame.
@@ -308,6 +339,15 @@ module wb_flash #(
                         if (read_sink_count >= 9'd260) begin
                             page_buf_offset <= 8'd0;
                             page_buf_count <= 9'd256;
+                            busy <= 1'b0;
+                            op_kind <= OP_NONE;
+                            op_phase <= PH_IDLE;
+                            state <= ST_IDLE;
+                        end
+                    end else if (op_kind == OP_UID) begin
+                        if (read_sink_count >= 9'd13) begin
+                            page_buf_offset <= 8'd0;
+                            page_buf_count <= 9'd8;
                             busy <= 1'b0;
                             op_kind <= OP_NONE;
                             op_phase <= PH_IDLE;
