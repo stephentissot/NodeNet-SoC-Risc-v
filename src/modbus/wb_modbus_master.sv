@@ -132,8 +132,6 @@ module wb_modbus_master #(
   wire uart_rx_valid;
   wire uart_rx_frame_error;
 
-  reg [7:0] frame_fn;
-
   wire busy = (state != ST_IDLE) && (state != ST_DONE);
 
   uart_simple #(
@@ -375,12 +373,10 @@ module wb_modbus_master #(
           REG_TX_DATA: begin
             dat_o <= {24'd0, tx_write_idx};
             if (we_i && sel_i[0] && !busy) begin
-              if (tx_write_idx < MAX_DATA_BYTES[7:0]) begin
+              if ((tx_write_idx < tx_data_len) && (tx_write_idx < MAX_DATA_BYTES[7:0])) begin
                 tx_payload[tx_write_idx] <= dat_i[7:0];
-                if (tx_write_idx < tx_data_len) begin
-                  tx_crc_accum <= crc16_step(tx_crc_accum, dat_i[7:0]);
-                  tx_write_idx <= tx_write_idx + 8'd1;
-                end
+                tx_crc_accum <= crc16_step(tx_crc_accum, dat_i[7:0]);
+                tx_write_idx <= tx_write_idx + 8'd1;
               end
             end
           end
@@ -512,14 +508,13 @@ module wb_modbus_master #(
             end else if ((slave_addr != 8'h00) && (rx_frame[0] != slave_addr)) begin
               start_retry_or_finish(1'b0, 1'b0, 1'b1);
             end else begin
-              frame_fn = rx_frame[1];
-              if (frame_fn == (function_code | 8'h80)) begin
+              if (rx_frame[1] == (function_code | 8'h80)) begin
                 status_done <= 1'b1;
                 status_success <= 1'b0;
                 status_exception <= 1'b1;
                 status_retrying <= 1'b0;
                 state <= ST_DONE;
-              end else if (frame_fn != function_code) begin
+              end else if (rx_frame[1] != function_code) begin
                 start_retry_or_finish(1'b0, 1'b0, 1'b1);
               end else begin
                 status_done <= 1'b1;

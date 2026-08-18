@@ -368,7 +368,7 @@ uint32_t ModbusMaster::computeTimeoutCycles(uint32_t timeout_ms) const {
 }
 
 uint32_t ModbusMaster::computeInterframeCycles(uint32_t baudrate) const {
-    return computeInterframeCyclesCharsQ1(baudrate, 7u);
+    return computeInterframeCyclesCharsQ1(baudrate, 14u);
 }
 
 uint32_t ModbusMaster::computeInterframeCyclesCharsQ1(uint32_t baudrate, uint8_t chars_q1) const {
