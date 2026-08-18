@@ -3,12 +3,22 @@
 
 _start:
 
+    # Temporary bring-up switch:
+    # 1 = skip .data/.bss/.init_array and jump directly to main for diagnosis.
+    # 0 = normal startup sequence.
+    .set BOOT_FAST_ENTRY, 0
+
     .option push
     .option norelax
     la gp, __global_pointer$
     .option pop
 
     la sp, _stack_top
+
+    .if BOOT_FAST_ENTRY
+    call main
+1:  j 1b
+    .endif
 
     # Copy .data section from ROM (LMA) to RAM (VMA).
     # Required for global objects initialized with compile-time constants

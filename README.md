@@ -7,11 +7,12 @@ A complete RISC-V System-on-Chip (SoC) design for the Colorlight i9 FPGA board, 
 This project demonstrates a scalable embedded systems design on a cost-effective FPGA:
 - **Processor**: PicoRV32 (32-bit RISC-V, bare-metal)
 - **Clock**: 25 MHz
-- **Memory**: 64 KiB ROM (boot code) + 64 KiB RAM (stack/variables) + 8 MB SDRAM (application/external data)
+- **Memory**: 64 KiB ROM (stage0 bootloader) + 64 KiB RAM (stack/variables) + 8 MB SDRAM (runtime application/external data)
 - **Peripherals**: D2 LED GPIO, RJ45 LED pulse controllers (`wb_led`), UART1 (`wb_uart`), RS485 NodeNet485, I2C master, SDRAM controller
 - **Communication**: NodeNet485 @ 1 Mb/s over RS-485 (multi-node capable)
 - **Firmware**: C++17, bare-metal, newlib-nano
-- **Validated SDRAM path**: boot-time init, 32-bit accesses, partial Wishbone writes, and linker-placed `SDRAM_DATA` variables
+- **Validated boot path**: stage0 in ROM validates an image header in SPI flash, copies the payload to SDRAM, checks CRC, then jumps to the application entry point
+- **Validated SDRAM path**: full firmware execution from SDRAM, 32-bit accesses, partial Wishbone writes, linker-placed `SDRAM_DATA` variables, and scratch-area self-tests
 
 ## Features
 
@@ -33,7 +34,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 - **Wishbone B.4 Bus** interconnect with 32-bit data, 32-bit address
 - **PicoRV32 Core**: Open-source RISC-V ISA, ~6K LUT footprint
 - **Memory Map**:
-  - `0x00000000–0x0000FFFF`: 64 KiB boot ROM
+  - `0x00000000–0x0000FFFF`: 64 KiB boot ROM (stage0 bootloader)
   - `0x00010000–0x0001FFFF`: 64 KiB RAM (stack, BSS, heap)
   - `0x10000000`: D2 LED GPIO (1-bit output)
   - `0x10000004`: RJ45 LED0 (`wb_led` one-shot pulse)
@@ -41,7 +42,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - `0x10004000`: UART1 (`wb_uart`, RX/TX FIFO MMIO)
   - `0x10005000`: I2C0 master (8 registers @ 4-byte stride)
   - `0x10006000`: NodeNet485 RS-485 mailbox (8 registers, 1 Mb/s)
-  - `0x20000000–0x207FFFFF`: 8 MB SDRAM (application / framebuffer / logs)
+  - `0x20000000–0x207FFFFF`: 8 MB SDRAM (runtime application image / framebuffer / logs)
 
 ### Peripherals
 - **NodeNet485 Module** (`wb_nodenet.sv`):
@@ -86,6 +87,8 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - `newlib-nano` provides `memcpy`/`strlen`/etc.
   - Dead code elimination (`-ffunction-sections -Wl,--gc-sections`)
   - Global C++ constructors called in `start.S` via `.init_array`
+  - Final runtime image is linked for SDRAM via `link_app_sdram.ld`
+  - Loaded by ROM-resident `boot_stage0` from SPI flash offset `0x244000`
   - **NodeNet485 echo loop**: Listens for messages, echoes responses
   - D2 activity heartbeat: non-blocking software toggle every 500 ms
 
@@ -112,17 +115,37 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 # Full build (firmware + FPGA)
 make all
 
-# Firmware only
+# Stage0 bootloader only (ROM image)
+make firmware-bootloader
+
+# Alias: same stage0 ROM build as above
 make firmware-build
+
+# Build stage0 application image (SDRAM payload + header in SPI flash format)
+make firmware-image
+
+# SDRAM application ELF only
+make -C src/firmware firmware-app-build
+
+# Program firmware payload only in SPI flash (no FPGA rebuild)
+make flash-fw
+
+# Optional: enforce openFPGALoader verify as fatal
+make FW_STRICT_VERIFY=1 flash-fw
+
+# Generate boot robustness test images (missing/size/crc fault injections)
+make firmware-image-tests
+
+# Run boot robustness fault scenarios
+make flash-fw-test-missing
+make flash-fw-test-crc
+make flash-fw-test-size
 
 # Firmware-only FPGA RAM update (ecpbram patch, fallback to make ram if needed)
 make ram-fw
 
-# Firmware test build (uses src/firmware/test_main.cpp)
-make firmware-test
-
-# Full bring-up build (test firmware + FPGA bitstream)
-make bringup
+# Boot fault campaign checklist and expected blink codes
+# See TEST.md
 
 # FPGA synthesis only (requires pre-built firmware)
 make
@@ -141,7 +164,7 @@ make unlock-flash
 make lock-flash
 ```
 
-`make firmware-build` prints firmware size telemetry on each build:
+`make firmware-build` / `make firmware-bootloader` print stage0 ROM size telemetry on each build:
 - ELF text/data/bss
 - RAM usage (`.data + .bss`)
 - HEX file size and payload bytes
@@ -173,7 +196,8 @@ targets in `Makefile` to ecpdap. Reference commands:
 ```
 
 **Output**:
-- `src/firmware/build/nodenet_riscv.hex` – Firmware binary (loaded into ROM)
+- `src/firmware/build/boot_stage0.hex` – Stage0 bootloader image (loaded into ROM)
+- `src/firmware/build/nodenet_riscv_app.img` – SDRAM app payload with stage0 header (written in SPI flash at `0x244000`)
 - `build/top.bit` – FPGA bitstream (~300 KB)
 - `build/top.json` – Netlist (debug/inspection)
 
@@ -182,7 +206,7 @@ targets in `Makefile` to ecpdap. Reference commands:
 ```
 Address Range               Size      Purpose
 ────────────────────────────────────────────────────────────
-0x00000000–0x0000FFFF     64 KiB   Boot ROM (firmware binary)
+0x00000000–0x0000FFFF     64 KiB   Boot ROM (stage0 bootloader)
 0x00010000–0x0001FFFF     64 KiB   RAM (stack, BSS, heap)
 ────────────────────────────────────────────────────────────
 0x10000000                4 B      D2 LED GPIO (bit [0] = LED output)
@@ -193,13 +217,21 @@ Address Range               Size      Purpose
 0x10006000–0x1000601F     32 B     NodeNet485 mailbox + LED config (RS485, 1 Mb/s)
 0x10007000                32 B     SPI Flash controller (W25Q64)
 ────────────────────────────────────────────────────────────
-0x20000000–0x207FFFFF     8 MB     SDRAM — Fully available to firmware (app/buffers/logs)
+0x20000000–0x207FFFFF     8 MB     SDRAM — Runtime app image + large buffers/logs
 ────────────────────────────────────────────────────────────
 0x00000000–0x1FFFFF       2 MB     SPI Flash — FPGA boot config (PROTECTED)
 0x200000–0x203FFF         16 KB    SPI Flash — Parameter storage
 0x204000–0x243FFF         256 KB   SPI Flash — FlashDB KV partition
-0x244000–0x7FFFFF         5.73 MB  SPI Flash — Application data
+0x244000–0x7FFFFF         5.73 MB  SPI Flash — Stage0 application image slot
 ```
+
+## Boot Flow
+
+1. FPGA configuration loads the SoC bitstream and the `wb_rom` contents containing `boot_stage0`.
+2. Stage0 starts from `0x00000000`, initializes required peripherals, and reads the application header from SPI flash offset `0x244000`.
+3. Stage0 validates header fields and CRCs, copies the application payload into SDRAM at `0x20000000`, then jumps to the image entry point.
+4. The runtime firmware executes entirely from SDRAM, while SPI flash remains available for parameter storage, FlashDB, and firmware updates.
+5. SDRAM self-tests used by the runtime stay inside a reserved scratch area so they do not overwrite the executing image.
 
 ## Device Pinout
 
@@ -240,7 +272,7 @@ NodeNet RJ45 pinout (both connectors):
 - Active-low wiring policy: GPIO high = LED OFF, GPIO low = LED ON.
 - LPF enables pull-up on these pins for deterministic OFF level during startup.
 - Write command bit0 triggers a non-blocking pulse (duration can be overridden by firmware).
-- Main firmware currently keeps RJ45 LEDs for dedicated test firmware (`test_main.cpp`).
+- RJ45 LEDs are available through `wb_led` and can be used by application firmware when needed.
 
 ### NodeNet Activity LEDs (100% hardware)
 - **RX activity LED (E5, green)**: default ON, pulses OFF when a valid frame is received.
@@ -361,7 +393,7 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
             uart_simple  uart_simple
                  |
                NodeNet framing
-        LED D2   RJ45 LEDs   M12L64322A  SSD1306
+        LED D2   RJ45 LEDs   M12L64322A  SSD1306   W25Q64
               |                    (8MB SDRAM) OLED
             RS485 Transceiver
                            |
@@ -371,24 +403,26 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
 ```
 
 **Data Flow**:
-1. **CPU** (PicoRV32): 32-bit RISC-V, 25 MHz clock
-2. **Wishbone B.4 Bus**: 32-bit address, 32-bit data, address decoder for peripherals
-3. **Memory & I/O**:
-   - `wb_rom`: 64 KiB boot ROM (0x00000000)
+1. **Power-up / stage0**: `wb_rom` exposes the 64 KiB ROM image containing `boot_stage0`, which loads and validates the SDRAM application stored in SPI flash.
+2. **Runtime CPU** (PicoRV32): 32-bit RISC-V, 25 MHz clock, executing the main firmware from SDRAM after stage0 handoff.
+3. **Wishbone B.4 Bus**: 32-bit address, 32-bit data, address decoder for memories and peripherals.
+4. **Memory & I/O**:
+  - `wb_rom`: 64 KiB boot ROM for stage0 only (0x00000000)
    - `wb_ram`: 64 KiB RAM (0x00010000)
-   - `wb_sdram`: 8 MB SDRAM (0x20000000)
+  - `wb_sdram_litedram`: 8 MB SDRAM runtime memory window (0x20000000)
+  - `wb_flash`: SPI flash control + persistence services (0x10007000)
   - `wb_nodenet`: NodeNet485 mailbox transport (0x10006000)
   - `wb_gpio`: D2 GPIO output (0x10000000)
   - `wb_led`: RJ45 LED pulse controllers (0x10000004 / 0x10000008)
    - `wb_i2c`: I2C master with FIFOs (0x10005000)
-4. **NodeNet Transport**: Mailbox-driven TX/RX framing, decode, and heartbeat scheduling
-5. **I2C Core**: Wraps Alex Forencich's `i2c_master_wbs_16` with Wishbone interface
-6. **RS485 Physical**: Transceiver converts CMOS ↔ RS485 differential signaling
-7. **Field Wiring**: Each RS485 channel is exposed as direct A/B/GND connections
+5. **NodeNet Transport**: Mailbox-driven TX/RX framing, decode, and heartbeat scheduling.
+6. **I2C Core**: Wraps Alex Forencich's `i2c_master_wbs_16` with Wishbone interface.
+7. **RS485 Physical**: Transceiver converts CMOS <-> RS485 differential signaling.
+8. **Field Wiring**: Each RS485 channel is exposed as direct A/B/GND connections.
 
 ## Planned Enhancements
 
-- [x] 8 MB SDRAM controller (`wb_sdram.sv`) with auto-refresh and auto-precharge
+- [x] 8 MB SDRAM controller (`wb_sdram_litedram.sv`) with LiteDRAM-generated core and runtime execution from SDRAM
 - [x] I2C master (`wb_i2c.sv`) — Wishbone wrapper around verilog-i2c
 - [x] u8g2 OLED display support (SSD1306 128×64 over I2C)
 - [x] C++17 firmware with newlib-nano and dead-code elimination

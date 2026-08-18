@@ -10,8 +10,25 @@ LPF=constraints/colorlight_i9.lpf
 OPENOCD_SCRIPTS ?= D:/oss-cad-suite/share/openocd/scripts
 # CMSIS-DAP v1 probes are often unstable above 100 kHz on ECP5 JTAG chains.
 ECPDAP_FREQ ?= 100k
+PYTHON ?= python
+ifneq ($(wildcard .venv/Scripts/python.exe),)
+PYTHON := .venv/Scripts/python.exe
+else ifneq ($(wildcard .venv/bin/python),)
+PYTHON := .venv/bin/python
+endif
+FW_STRICT_VERIFY ?= 0
 
-FIRMWARE_HEX=src/firmware/build/nodenet_riscv.hex
+FIRMWARE_HEX=src/firmware/build/boot_stage0.hex
+FIRMWARE_IMAGE=src/firmware/build/nodenet_riscv_app.img
+FIRMWARE_IMAGE_BAD_CRC=src/firmware/build/nodenet_riscv_app.bad_crc.img
+FIRMWARE_IMAGE_BAD_SIZE=src/firmware/build/nodenet_riscv_app.bad_size.img
+FIRMWARE_IMAGE_MISSING=src/firmware/build/nodenet_riscv_app.missing.img
+FW_IMAGE_FLASH_OFFSET=0x244000
+FW_IMAGE_MIN_OFFSET=0x244000
+FLASH_TOTAL_BYTES=0x800000
+FW_IMAGE_SLOT_BYTES=0x5BC000
+FW_IMAGE_VERIFY_TOOL=src/firmware/tools/verify_firmware_image.py
+FW_IMAGE_TEST_TOOL=src/firmware/tools/make_boot_test_images.py
 FIRMWARE_PREV_HEX=$(BUILD)/nodenet_riscv.prev.hex
 FIRMWARE_PADDED_HEX=$(BUILD)/nodenet_riscv.padded.hex
 FIRMWARE_PREV_PADDED_HEX=$(BUILD)/nodenet_riscv.prev_padded.hex
@@ -19,22 +36,63 @@ FW_PATCH_CONFIG=$(BUILD)/$(TOP)_fw.config
 FW_PATCH_BIT=$(BUILD)/$(TOP)_fw.bit
 FLASH_BOOT_IMAGE=$(BUILD)/$(TOP)_flash.bit
 ROM_BYTES=65536
+LITEDRAM_BUILD_DIR ?= $(BUILD)/litedram
+LITEDRAM_CONFIG ?= tools/litedram/colorlight_i9.yml
+LITEDRAM_NAME ?= litedram_core
+LITEDRAM_GENERATED_RTL ?= $(LITEDRAM_BUILD_DIR)/gateware/$(LITEDRAM_NAME).v
+LITEDRAM_RTL ?= src/sdram/$(LITEDRAM_NAME).v
+LITEDRAM_VALID_STAMP ?= $(BUILD)/.litedram_rtl_valid.stamp
+YOSYS_DEFINES :=
+LITEDRAM_DEPS := $(LITEDRAM_RTL) $(LITEDRAM_VALID_STAMP)
+FIRMWARE_DEPS := src/firmware/Makefile \
+				 src/bootloader/boot_stage0.cpp \
+				 src/bootloader/start.S \
+				 src/bootloader/link.ld \
+				 src/firmware/lib/flash/flash.cpp \
+				 src/firmware/lib/flash/flash.h \
+				 $(wildcard src/firmware/include/*.h)
 
 # Synthesis sources.
 # Keep this explicit so the build uses the Alex Forencich RTL from src/verilog-i2c/rtl
 # and does not accidentally pull in testbenches or any legacy i2c directory.
 SOURCES := src/top.sv \
            $(wildcard src/wbDevices/*.sv) \
+		   $(wildcard src/sdram/*.sv) \
            src/picorv32/picorv32.v \
            $(wildcard src/uart/*.v) \
            $(wildcard src/verilog-i2c/rtl/*.v)
 
+SOURCES += $(LITEDRAM_RTL)
+
 SOURCES := $(sort $(SOURCES))
 
 
-.PHONY: all firmware-build firmware-test bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only
+.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw-check-image flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only litedram-gen litedram-copy litedram-refresh
 
 all: firmware-build $(BUILD)/$(TOP).bit
+
+litedram-gen:
+	$(PYTHON) tools/generate_litedram_core.py --config $(LITEDRAM_CONFIG) --output-dir $(LITEDRAM_BUILD_DIR) --name $(LITEDRAM_NAME)
+
+
+$(LITEDRAM_GENERATED_RTL): tools/generate_litedram_core.py $(LITEDRAM_CONFIG)
+	@mkdir -p $(LITEDRAM_BUILD_DIR)
+	$(PYTHON) tools/generate_litedram_core.py --config $(LITEDRAM_CONFIG) --output-dir $(LITEDRAM_BUILD_DIR) --name $(LITEDRAM_NAME)
+	@test -s $(LITEDRAM_GENERATED_RTL) || (echo "[LITEDRAM][ERROR] Generated RTL is empty: $(LITEDRAM_GENERATED_RTL)"; rm -f $(LITEDRAM_GENERATED_RTL); exit 1)
+	@grep -Eq "^[[:space:]]*module[[:space:]]+$(LITEDRAM_NAME)[[:space:]#(]" $(LITEDRAM_GENERATED_RTL) || (echo "[LITEDRAM][ERROR] Top module $(LITEDRAM_NAME) not found in $(LITEDRAM_GENERATED_RTL)"; rm -f $(LITEDRAM_GENERATED_RTL); exit 1)
+
+
+litedram-copy: $(LITEDRAM_GENERATED_RTL)
+	@mkdir -p src/sdram
+	cp $(LITEDRAM_GENERATED_RTL) $(LITEDRAM_RTL)
+	@echo "[LITEDRAM] Copied $(LITEDRAM_GENERATED_RTL) -> $(LITEDRAM_RTL)"
+
+litedram-refresh: litedram-gen litedram-copy
+
+$(LITEDRAM_VALID_STAMP): $(LITEDRAM_RTL)
+	@test -s $(LITEDRAM_RTL) || (echo "[LITEDRAM][ERROR] RTL is empty: $(LITEDRAM_RTL)"; rm -f $(LITEDRAM_RTL); exit 1)
+	@grep -Eq "^[[:space:]]*module[[:space:]]+$(LITEDRAM_NAME)[[:space:]#(]" $(LITEDRAM_RTL) || (echo "[LITEDRAM][ERROR] Top module $(LITEDRAM_NAME) not found in $(LITEDRAM_RTL)"; rm -f $(LITEDRAM_RTL); exit 1)
+	@touch $(LITEDRAM_VALID_STAMP)
 
 fw firmware-only: firmware-build
 
@@ -79,18 +137,102 @@ lab-fw: lab
 
 # Default firmware build uses src/firmware/main.cpp.
 firmware-build:
-	$(MAKE) -C src/firmware ROM_CAPACITY_BYTES=$(ROM_BYTES)
+	$(MAKE) -C src/firmware bootloader-build ROM_CAPACITY_BYTES=$(ROM_BYTES)
+
+firmware-image:
+	$(MAKE) -C src/firmware firmware-image ROM_CAPACITY_BYTES=$(ROM_BYTES)
+
+firmware-image-tests: firmware-image
+	$(PYTHON) $(FW_IMAGE_TEST_TOOL) \
+		--input $(FIRMWARE_IMAGE) \
+		--out-dir src/firmware/build \
+		--prefix nodenet_riscv_app
+
+firmware-bootloader:
+	$(MAKE) -C src/firmware bootloader-build ROM_CAPACITY_BYTES=$(ROM_BYTES)
+
+# Program only the stage0 application image into SPI flash at fixed partition offset.
+# This avoids FPGA synthesis/P&R when firmware changes and stage0 stays unchanged.
+flash-fw-check: firmware-image
+	$(MAKE) flash-fw-check-image
+
+flash-fw-check-image:
+	@if [ ! -f $(FIRMWARE_IMAGE) ]; then \
+		echo "[FWIMG][ERROR] Missing image: $(FIRMWARE_IMAGE)"; \
+		exit 2; \
+	fi
+	@img_size=$$(wc -c < $(FIRMWARE_IMAGE)); \
+	offset=$$(( $(FW_IMAGE_FLASH_OFFSET) )); \
+	min_off=$$(( $(FW_IMAGE_MIN_OFFSET) )); \
+	flash_total=$$(( $(FLASH_TOTAL_BYTES) )); \
+	slot_size=$$(( $(FW_IMAGE_SLOT_BYTES) )); \
+	if [ $$offset -lt $$min_off ]; then \
+		echo "[FWIMG][ERROR] FW_IMAGE_FLASH_OFFSET is below allowed minimum"; \
+		exit 2; \
+	fi; \
+	if [ $$img_size -gt $$slot_size ]; then \
+		echo "[FWIMG][ERROR] image too large for slot: $$img_size > $$slot_size"; \
+		exit 2; \
+	fi; \
+	end_off=$$((offset + img_size)); \
+	if [ $$end_off -gt $$flash_total ]; then \
+		echo "[FWIMG][ERROR] image exceeds flash range: end=$$end_off total=$$flash_total"; \
+		exit 2; \
+	fi; \
+	$(PYTHON) $(FW_IMAGE_VERIFY_TOOL) --input $(FIRMWARE_IMAGE)
+
+flash-fw: flash-fw-check
+	$(MAKE) IMAGE_TO_FLASH=$(FIRMWARE_IMAGE) flash-fw-write-image
+
+flash-fw-write-image:
+	@if [ -z "$(IMAGE_TO_FLASH)" ]; then \
+		echo "[FWIMG][ERROR] IMAGE_TO_FLASH is empty"; \
+		exit 2; \
+	fi
+	@if [ ! -f $(IMAGE_TO_FLASH) ]; then \
+		echo "[FWIMG][ERROR] Missing image: $(IMAGE_TO_FLASH)"; \
+		exit 2; \
+	fi
+	@img_size=$$(wc -c < $(IMAGE_TO_FLASH)); \
+	if [ $$img_size -gt $$(( $(FW_IMAGE_SLOT_BYTES) )) ]; then \
+		echo "[FWIMG][ERROR] IMAGE_TO_FLASH larger than slot"; \
+		exit 2; \
+	fi
+	@ofl_verify=""; \
+	if [ "$(FW_STRICT_VERIFY)" = "1" ]; then \
+		ofl_verify="--verify"; \
+	fi; \
+	echo "[FWIMG] openFPGALoader write offset=$(FW_IMAGE_FLASH_OFFSET) strict=$(FW_STRICT_VERIFY)"; \
+	openFPGALoader -b colorlight-i9 -f --skip-reset --unprotect-flash $$ofl_verify -o $(FW_IMAGE_FLASH_OFFSET) $(IMAGE_TO_FLASH)
+
+# End-to-end firmware-only cycle: build+verify image, program flash partition, then
+# reload the current bitstream in SRAM to restart stage0 without synthesis/P&R.
+flash-fw-run: flash-fw
+	$(MAKE) ram-fast
+
+flash-fw-test-missing: firmware-image-tests
+	$(MAKE) IMAGE_TO_FLASH=$(FIRMWARE_IMAGE_MISSING) flash-fw-write-image
+
+flash-fw-test-size: firmware-image-tests
+	$(MAKE) IMAGE_TO_FLASH=$(FIRMWARE_IMAGE_BAD_SIZE) flash-fw-write-image
+
+flash-fw-test-crc: firmware-image-tests
+	$(MAKE) IMAGE_TO_FLASH=$(FIRMWARE_IMAGE_BAD_CRC) flash-fw-write-image
 
 
-# Ensure firmware is rebuilt before any target that consumes the hex.
-$(FIRMWARE_HEX): firmware-build
+# Ensure bootloader hex tracks firmware source changes, but avoid forcing
+# synthesis when nothing changed.
+$(FIRMWARE_HEX): $(FIRMWARE_DEPS)
+	$(MAKE) -C src/firmware bootloader-build ROM_CAPACITY_BYTES=$(ROM_BYTES)
 	@test -f $@ || (echo "Missing $@ after firmware-build" && exit 1)
 
-# Build test firmware (src/firmware/test_main.cpp) without manual MAIN_SRC override.
+# Legacy test firmware target kept as an explicit guidance error.
 firmware-test:
-	$(MAKE) -C src/firmware MAIN_SRC=test_main.cpp ROM_CAPACITY_BYTES=$(ROM_BYTES)
+	@echo "[TEST][ERROR] Legacy test firmware target is not maintained with current APIs."; \
+	echo "[TEST][ERROR] Use boot robustness flow in TEST.md (firmware-image-tests + flash-fw-test-*)."; \
+	exit 2
 
-# Build complete bring-up image (test firmware + FPGA bitstream).
+# Legacy bringup alias now intentionally triggers firmware-test guidance.
 bringup: firmware-test $(BUILD)/$(TOP).bit
 
 clean-firmware:
@@ -105,9 +247,9 @@ $(BUILD):
 
 
 # Synthesis
-$(BUILD)/$(TOP).json: $(SOURCES) $(FIRMWARE_HEX) | $(BUILD)
+$(BUILD)/$(TOP).json: $(SOURCES) $(FIRMWARE_HEX) $(LITEDRAM_DEPS) | $(BUILD)
 	yosys \
-		-p "read_verilog -sv $(SOURCES); \
+		-p "read_verilog -sv $(YOSYS_DEFINES) $(SOURCES); \
 		    synth_ecp5 -top $(TOP) -json $@"
 
 # 	yosys \
@@ -141,9 +283,9 @@ $(BUILD)/$(TOP).svf: $(BUILD)/$(TOP).bit
 		$<
 
 
-# Program FPGA configuration RAM (default: openFPGALoader)
-ram: $(BUILD)/$(TOP).bit
-	openFPGALoader -b colorlight-i9 $<
+# Program FPGA configuration RAM without rebuilding.
+# Use 'make all' first if the bitstream is missing.
+ram: ram-fast
 
 
 # Program FPGA RAM with the last built bitstream without triggering rebuilds.

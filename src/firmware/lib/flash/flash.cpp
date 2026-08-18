@@ -19,8 +19,8 @@ bool Flash::clearAll() {
 }
 
 bool Flash::lowLevelTest(StatusCallback callback) {
-  // Keep low-level scratch tests outside preferences storage area.
-  static constexpr uint32_t kTestSectorBase = kParamBase + kParamSize;
+  // Keep low-level scratch tests in the dedicated runtime test sector.
+  static constexpr uint32_t kTestSectorBase = kRuntimeTestSectorBase;
   static constexpr uint32_t kTestPageBase = kTestSectorBase;
 
   // Keep large test buffers out of the stack to avoid boot-time stack pressure.
@@ -129,8 +129,16 @@ volatile uint32_t& Flash::reg(uint32_t offset) const {
   return *reinterpret_cast<volatile uint32_t*>(base_ + offset);
 }
 
+bool Flash::isSafeReadAddress(uint32_t flashOffset) const {
+#ifdef FLASH_ALLOW_RESERVED_READS
+  return flashOffset < kFlashSize;
+#else
+  return flashOffset >= kRuntimeDataBase && flashOffset < kRuntimeDataEnd;
+#endif
+}
+
 bool Flash::isSafeWriteAddress(uint32_t flashOffset) const {
-  return flashOffset >= (kBootBase + kBootSize) && flashOffset < kFlashSize;
+  return flashOffset >= kRuntimeDataBase && flashOffset < kRuntimeDataEnd;
 }
 
 bool Flash::waitReady() const {
@@ -151,7 +159,7 @@ bool Flash::waitReady() const {
 }
 
 bool Flash::readPage(uint32_t pageBase, uint8_t* out256) const {
-  if (out256 == nullptr || (pageBase % kPageSize) != 0u || pageBase >= kFlashSize) {
+  if (out256 == nullptr || (pageBase % kPageSize) != 0u || !isSafeReadAddress(pageBase)) {
     return false;
   }
 

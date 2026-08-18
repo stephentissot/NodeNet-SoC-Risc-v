@@ -13,6 +13,20 @@ GIT_HASH := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 # You can still override manually: make MAIN_SRC=test_main.cpp
 MAIN_SRC ?= main.cpp
 MAIN_OBJ = $(BUILD)/$(basename $(notdir $(MAIN_SRC))).o
+BOOTLOADER_DIR ?= ../bootloader
+APP_START_SRC = start.S
+APP_START_OBJ = $(BUILD)/app_start.o
+BOOT_START_SRC = $(BOOTLOADER_DIR)/start.S
+BOOT_START_OBJ = $(BUILD)/boot_start.o
+BOOT_SRC = $(BOOTLOADER_DIR)/boot_stage0.cpp
+BOOT_OBJ = $(BUILD)/$(basename $(notdir $(BOOT_SRC))).o
+
+PYTHON ?= python
+IMG_TOOL = tools/pack_firmware.py
+APP_LOAD_ADDR ?= 0x20000000
+APP_ENTRY_ADDR ?= 0x20000000
+APP_TARGET ?= nodenet_riscv_app
+APP_LINKER ?= link_app_sdram.ld
 
 # Persistent cache root for third-party library objects/archives.
 # Reuse this pattern if more vendored libraries need expensive rebuilds later.
@@ -35,6 +49,7 @@ SERIAL_OBJ=$(BUILD)/Serial.o
 FLASH_DIR=lib/flash
 FLASH_SRC=$(FLASH_DIR)/flash.cpp
 FLASH_OBJ=$(BUILD)/flash.o
+BOOT_FLASH_OBJ=$(BUILD)/flash_boot.o
 FLASHDB_DIR=lib/FlashDB-2.2.0
 FLASHDB_INC=$(FLASHDB_DIR)/inc
 FLASHDB_SRC_DIR=$(FLASHDB_DIR)/src
@@ -45,7 +60,7 @@ FLASHDB_CORE_OBJS=$(BUILD)/fdb.o $(BUILD)/fdb_kvdb.o $(BUILD)/fdb_utils.o
 SDRAM_TEST_SRC=sdram.cpp
 SDRAM_TEST_OBJ=$(BUILD)/sdram.o
 
-DEPS=$(BUILD)/start.d $(MAIN_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(BUILD)/Serial.d $(BUILD)/flash.d $(BUILD)/flashdb_port.d $(BUILD)/sdram.d $(BUILD)/fdb.d $(BUILD)/fdb_kvdb.d $(BUILD)/fdb_utils.d $(U8G2_OBJS:.o=.d)
+DEPS=$(BUILD)/start.d $(BUILD)/app_start.d $(BUILD)/boot_start.d $(MAIN_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(BUILD)/Serial.d $(BUILD)/flash.d $(BUILD)/flashdb_port.d $(BUILD)/sdram.d $(BUILD)/fdb.d $(BUILD)/fdb_kvdb.d $(BUILD)/fdb_utils.d $(U8G2_OBJS:.o=.d)
 
 CFLAGS=-march=rv32im -mabi=ilp32 \
        -Wall \
@@ -85,10 +100,27 @@ LDFLAGS=-march=rv32im -mabi=ilp32 -T link.ld \
         --specs=nano.specs \
         --specs=nosys.specs
 
+BOOT_LDFLAGS=-march=rv32im -mabi=ilp32 -T $(BOOTLOADER_DIR)/link.ld \
+	     -nostartfiles \
+	     -Wl,--gc-sections \
+	     --specs=nano.specs \
+	     --specs=nosys.specs
+
 BUILD=build
 ROM_CAPACITY_BYTES ?= 65536
 
+FW_BIN = $(BUILD)/$(TARGET).bin
+FW_IMG = $(BUILD)/$(TARGET).img
+BOOT_TARGET = boot_stage0
+BOOT_ELF = $(BUILD)/$(BOOT_TARGET).elf
+BOOT_HEX = $(BUILD)/$(BOOT_TARGET).hex
+APP_ELF = $(BUILD)/$(APP_TARGET).elf
+APP_BIN = $(BUILD)/$(APP_TARGET).bin
+APP_IMG = $(BUILD)/$(APP_TARGET).img
+
 all: $(BUILD)/$(TARGET).hex firmware-stats
+
+.PHONY: bootloader-build firmware-app-build firmware-image
 
 .PHONY: firmware-stats
 
@@ -105,7 +137,7 @@ $(BUILD)/start.o: start.S | $(BUILD)
 	$(CROSS)gcc $(CFLAGS) -c $< -o $@
 
 $(MAIN_OBJ): $(MAIN_SRC) | $(BUILD)
-	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
+	$(CROSS)g++ -x c++ $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/u8g2_hal.o: lib/u8g2_hal/u8g2_hal.cpp | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
@@ -118,6 +150,9 @@ $(SERIAL_OBJ): $(SERIAL_SRC) | $(BUILD)
 
 $(FLASH_OBJ): $(FLASH_SRC) | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
+
+$(BOOT_FLASH_OBJ): $(FLASH_SRC) | $(BUILD)
+	$(CROSS)g++ $(CXXFLAGS) -DFLASH_ALLOW_RESERVED_READS -c $< -o $@
 
 $(FLASHDB_PORT_OBJ): $(FLASHDB_PORT_SRC) | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
@@ -147,6 +182,54 @@ $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 		-O verilog \
 		$< \
 		$@
+
+$(FW_BIN): $(BUILD)/$(TARGET).elf
+	$(CROSS)objcopy -O binary $< $@
+
+$(APP_ELF): $(APP_START_OBJ) $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_TEST_OBJ) $(U8G2_LIB) | $(BUILD)
+	$(CROSS)g++ -march=rv32im -mabi=ilp32 -T $(APP_LINKER) -nostartfiles -Wl,--gc-sections --specs=nano.specs --specs=nosys.specs $^ -o $@
+
+$(APP_START_OBJ): $(APP_START_SRC) | $(BUILD)
+	$(CROSS)gcc $(CFLAGS) -c $< -o $@
+
+$(APP_BIN): $(APP_ELF)
+	$(CROSS)objcopy -O binary $< $@
+
+$(APP_IMG): $(APP_BIN) $(IMG_TOOL)
+	$(PYTHON) $(IMG_TOOL) \
+		--input $(APP_BIN) \
+		--output $(APP_IMG) \
+		--load-addr $(APP_LOAD_ADDR) \
+		--entry-addr $(APP_ENTRY_ADDR)
+
+firmware-app-build: $(APP_ELF)
+
+firmware-image: $(APP_IMG)
+
+$(BOOT_OBJ): $(BOOT_SRC) | $(BUILD)
+	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
+
+$(BOOT_START_OBJ): $(BOOT_START_SRC) | $(BUILD)
+	$(CROSS)gcc $(CFLAGS) -c $< -o $@
+
+$(BOOT_ELF): $(BOOT_START_OBJ) $(BOOT_OBJ) $(BOOT_FLASH_OBJ) | $(BUILD)
+	$(CROSS)g++ $(BOOT_LDFLAGS) $^ -o $@
+
+$(BOOT_HEX): $(BOOT_ELF)
+	$(CROSS)objcopy -O verilog $< $@
+
+bootloader-build: $(BOOT_HEX)
+	@set -- $$($(CROSS)size $(BOOT_ELF) | tail -n 1); \
+	text=$$1; data=$$2; bss=$$3; \
+	echo "[BOOT] ELF text/data/bss: $$text/$$data/$$bss bytes"; \
+	hex_used_bytes=$$(awk 'BEGIN{addr=0;max=0} {for(i=1;i<=NF;i++){tok=toupper($$i); if(tok ~ /^@/){addr=strtonum("0x" substr(tok,2));} else {addr++; if(addr>max) max=addr;}}} END{print max+0}' $(BOOT_HEX)); \
+	rom_cap=$(ROM_CAPACITY_BYTES); \
+	rom_pct=$$(awk "BEGIN { printf \"%.2f\", ($$hex_used_bytes*100)/$$rom_cap }"); \
+	echo "[BOOT] ROM usage: $$hex_used_bytes / $$rom_cap bytes ($$rom_pct%)"; \
+	if [ $$hex_used_bytes -gt $$rom_cap ]; then \
+		echo "[BOOT][ERROR] Bootloader payload exceeds wb_rom capacity by $$((hex_used_bytes-rom_cap)) bytes"; \
+		exit 2; \
+	fi
 
 firmware-stats: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).hex
 	@set -- $$($(CROSS)size $(BUILD)/$(TARGET).elf | tail -n 1); \

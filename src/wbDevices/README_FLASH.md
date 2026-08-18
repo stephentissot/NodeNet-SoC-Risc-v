@@ -8,6 +8,11 @@ Current firmware integration has two layers:
 - **Low-level layer**: `Flash` class (`src/firmware/lib/flash/flash.h`) for page read/write and sector erase.
 - **KV layer**: FlashDB (`flashdb_port.cpp`) on top of a dedicated FAL partition.
 
+Current boot/runtime split:
+- `0x000000–0x1FFFFF`: FPGA configuration region, protected from firmware writes.
+- `0x244000–0x7FFFFF`: stage0 application image slot used by the ROM bootloader.
+- Runtime firmware executes from SDRAM after stage0 validates and copies that image.
+
 ### Specifications
 
 | Parameter | Value |
@@ -44,8 +49,8 @@ Current firmware integration has two layers:
 
 ## Wishbone Interface
 
-**Module**: `wb_flash.sv`  
-**Address**: `0x10007000` (proposed)  
+**Module**: `wb_flash.sv`
+**Address**: `0x10007000`
 **Registers**:
 
 | Offset | Name | R/W | Bits | Description |
@@ -84,8 +89,8 @@ for (int i = 0; i < 256; i++) {
 #### Write a page (256 bytes)
 
 ```c
-// Set address (must be page-aligned)
-*addr = 0x2000;
+// Set address (must be page-aligned and outside the protected boot region)
+*addr = 0x200000;
 
 // Fill buffer
 for (int i = 0; i < 256; i++) {
@@ -102,8 +107,8 @@ while (*status & 1) {}
 #### Erase a sector (4 KB)
 
 ```c
-// Set address (any byte in the 4 KB sector)
-*addr = 0x4000;
+// Set address (any byte in the 4 KB sector, outside the protected boot region)
+*addr = 0x200000;
 
 // Trigger erase
 *ctrl = (1 << 2);  // CTRL[2] = 1 → erase
@@ -168,7 +173,7 @@ Flash Address Space (8 MB total)
 │  ├─ Sector 130 (0x202000–0x202FFF)
 │  └─ Sector 131 (0x203000–0x203FFF)
 ├─ 0x204000–0x243FFF (256 KB)    ← FlashDB KV partition (`nodenet_kv`)
-└─ 0x244000–0x7FFFFF (~5.73 MB)  ← Application data
+└─ 0x244000–0x7FFFFF (~5.73 MB)  ← Stage0 application image slot
 ```
 
 ## Integration Checklist
@@ -194,9 +199,9 @@ Flash Address Space (8 MB total)
 uint8_t test_buf[256];
 for (int i = 0; i < 256; i++) test_buf[i] = i & 0xFF;
 
-flash_erase_sector(4);  // Erase sector 4 (0x4000)
-flash_write_page(0x4000, test_buf);
-flash_read_page(0x4000, test_buf);
+flash.eraseSector(0x200000u);
+flash.writePage(0x200000u, test_buf);
+flash.readPage(0x200000u, test_buf);
 
 // Verify all bytes match
 bool ok = true;

@@ -31,9 +31,23 @@ public:
   static constexpr uint32_t kPageSize = 256UL;
   static constexpr uint32_t kSectorSize = 4096UL;
 
+  // Reserved by FPGA image + boot flow, must never be modified by runtime.
   static constexpr uint32_t kBootBase = 0x000000UL;
   static constexpr uint32_t kBootSize = 2UL * 1024UL * 1024UL;
 
+  // Stage0 app image slot (header + payload), written only by host tooling.
+  static constexpr uint32_t kFirmwareSlotBase = 0x244000UL;
+  static constexpr uint32_t kFirmwareSlotEnd = kFlashSize;
+
+  // Runtime-writable data window (firmware/FlashDB/tests only).
+  static constexpr uint32_t kRuntimeDataBase = kBootBase + kBootSize;      // 0x200000
+  static constexpr uint32_t kRuntimeDataEnd = kFirmwareSlotBase;           // 0x244000
+  static constexpr uint32_t kRuntimeDataSize = kRuntimeDataEnd - kRuntimeDataBase;
+
+  // Dedicated sector for low-level flash self-test scratch.
+  static constexpr uint32_t kRuntimeTestSectorBase = kRuntimeDataEnd - kSectorSize;
+
+  // Legacy parameter area kept for compatibility with older layouts.
   static constexpr uint32_t kParamBase = 0x200000UL;
   static constexpr uint32_t kParamSize = 16UL * 1024UL;
   static constexpr uint32_t kParamEnd = kParamBase + kParamSize;
@@ -58,6 +72,7 @@ private:
 
   // MMIO register accessor and safety guard.
   volatile uint32_t& reg(uint32_t offset) const;
+  bool isSafeReadAddress(uint32_t flashOffset) const;
   bool isSafeWriteAddress(uint32_t flashOffset) const;
 };
 

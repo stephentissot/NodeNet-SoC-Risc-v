@@ -13,8 +13,10 @@ static Flash* g_flash = nullptr;
 static fdb_kvdb g_kvdb;
 static bool g_kvdb_ready = false;
 
-static constexpr uint32_t kFlashDbOffset = Flash::kParamEnd + Flash::kSectorSize;
-static constexpr uint32_t kFlashDbSize = 256u * 1024u;
+// Keep FlashDB strictly inside firmware runtime data window and reserve
+// one sector for low-level flash self-test scratch.
+static constexpr uint32_t kFlashDbOffset = Flash::kRuntimeDataBase;
+static constexpr uint32_t kFlashDbSize = Flash::kRuntimeDataSize - Flash::kSectorSize;
 static constexpr const char* kFlashDbPartitionName = "nodenet_kv";
 
 static bool read_span_raw(uint32_t flash_offset, uint8_t* out, size_t len) {

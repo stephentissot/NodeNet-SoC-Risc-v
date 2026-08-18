@@ -6,9 +6,15 @@ Firmware for the Colorlight i9 RISC-V SoC. Written in C++17, compiled with `risc
 
 ```bash
 # From the project root
-make firmware-build    # firmware only
-make all               # firmware + FPGA bitstream
-make clean             # remove all build artifacts
+make firmware-build       # stage0 bootloader (same as firmware-bootloader)
+make firmware-bootloader  # explicit stage0 bootloader target
+make firmware-image       # package SDRAM payload with stage0 header
+make flash-fw             # program application image at 0x244000 in SPI flash
+make all                  # firmware + FPGA bitstream
+make clean                # remove all build artifacts
+
+# From src/firmware
+make firmware-app-build   # SDRAM application ELF only
 ```
 
 `make firmware-build` also prints a compact size report:
@@ -41,12 +47,13 @@ git submodule update --init
 
 ```
 src/firmware/
-├── start.S          Startup: stack init + .init_array (C++ global ctors) + call main
-├── link.ld          Linker script: ROM 0x0, RAM 0x10000, SDRAM 0x20000000
-├── main.cpp         Application entry point
+├── start.S              SDRAM application startup: gp/sp init + .data/.bss + .init_array + call main
+├── link.ld              Legacy ROM-linked firmware linker script
+├── link_app_sdram.ld    Runtime application linker script for execution from SDRAM
+├── main.cpp             Application entry point executed after stage0 handoff
 ├── i2c.h            I2C MMIO driver (wb_i2c peripheral)
-├── sdram.h          SDRAM helpers (SDRAM_DATA macro, sdram_wait_ready)
-├── sdram.cpp        Single-TU SDRAM test probe storage for self-tests
+├── sdram.h              SDRAM helpers (`SDRAM_DATA`, readiness wait, scratch-area self-tests)
+├── sdram.cpp            Single-TU SDRAM probe and scratch storage for self-tests
 └── lib/
     ├── serial/      UART1 MMIO helper (Arduino-style API)
     │   ├── Serial.h
@@ -58,13 +65,30 @@ src/firmware/
         └── u8g2_hal.cpp I2C callback + delay callback
 ```
 
+Related bootloader sources live in `src/bootloader/`:
+
+```text
+src/bootloader/
+├── start.S          Stage0 ROM startup
+├── link.ld          Stage0 ROM linker script
+└── boot_stage0.cpp  SPI flash image validation, SDRAM copy, CRC, jump to app
+```
+
+## Runtime Boot Architecture
+
+1. `boot_stage0` executes from ROM at `0x00000000`.
+2. Stage0 reads the firmware image header from SPI flash offset `0x244000`.
+3. After header and payload CRC validation, stage0 copies the application into SDRAM at `0x20000000` and jumps to the entry point.
+4. `start.S` runs from SDRAM, initializes `.data`/`.bss`, calls global constructors, then enters `main()`.
+5. Runtime SDRAM self-tests use a dedicated scratch area and must not overwrite the image currently executing from SDRAM.
+
 ---
 
 ## Memory Map
 
 | Address Range | Size | Description |
 |--------------|------|-------------|
-| `0x00000000–0x0000FFFF` | 64 KiB | **Boot ROM** — firmware binary |
+| `0x00000000–0x0000FFFF` | 64 KiB | **Boot ROM** — stage0 bootloader only |
 | `0x00010000–0x0001FFFF` | 64 KiB | **RAM** — stack, BSS, initialized data |
 | `0x10000000` | 4 B | **D2 LED GPIO** (`wb_gpio`) |
 | `0x10000004` | 4 B | **RJ45 LED0** (`wb_led`) |
@@ -73,7 +97,7 @@ src/firmware/
 | `0x10005000` | 32 B | **I2C0** |
 | `0x10006000` | 32 B | **NodeNet485** (RS-485 @ 1 Mb/s, includes LED pulse config) |
 | `0x10007000` | 32 B | **SPI Flash** (`wb_flash`, W25Q64 via USRMCLK) |
-| `0x20000000–0x207FFFFF` | 8 MB | **SDRAM** (external, available after ~200 µs) |
+| `0x20000000–0x207FFFFF` | 8 MB | **SDRAM** — runtime app image, `SDRAM_DATA`, large buffers |
 
 ---
 
@@ -115,7 +139,7 @@ led1.On();         // set default state ON
 led1.Off();        // set default state OFF
 ```
 
-`test_main.cpp` currently uses these two addresses for RJ45 LED validation.
+These two addresses remain available for diagnostics or visual activity signaling.
 
 ---
 
@@ -362,8 +386,9 @@ Detailed register-level documentation is available in [../wbDevices/README_FLASH
 **Important**: the SDRAM controller performs a ~200 µs initialization at power-on. Do not access SDRAM before `sdram_wait_ready()` returns.
 
 **Current validation status**:
-- `sdramTest()` runs at boot and checks base/middle/tail regions plus a byte-pattern test.
+- `sdramTest()` runs at boot and checks several reserved scratch regions plus a byte-pattern test.
 - A dedicated `SDRAM_DATA` probe object is linked from a single translation unit and verified at runtime.
+- Full firmware execution from SDRAM is validated.
 - Sub-word CPU stores now work through the Wishbone SDRAM wrapper via read-modify-write.
 
 ```cpp
@@ -381,15 +406,16 @@ int main() {
     // Zero-initialize (SDRAM content is undefined at power-on)
     __builtin_memset(frame_buffer, 0, sizeof(frame_buffer));
 
-    // Direct pointer access (full SDRAM region)
-    volatile uint32_t *sdram = (volatile uint32_t *)SDRAM_BASE;
-    sdram[0] = 0xDEADBEEF;
+    // Use linker-placed SDRAM objects directly
+    modbus_log[0] = 0xDEADBEEF;
 
-    // Memory test (application region)
-    uint32_t errors = sdram_test(1024);  // Test first 4 KB
+    // Memory test (reserved scratch area, safe while code executes from SDRAM)
+    uint32_t errors = sdram_test(1024);  // Test 4 KB inside scratch space
     if (errors == 0) uart_puts("SDRAM OK\n");
 }
 ```
+
+Avoid destructive writes to `SDRAM_BASE` unless you control the placement and know you are outside the currently executing app image.
 
 For the integrated boot self-test path used by `main.cpp`:
 
@@ -404,6 +430,7 @@ if (sdramTest(oled_boot_status)) {
 **Allocating large buffers dynamically** (pointer arithmetic):
 ```cpp
 // Manual allocator from SDRAM base
+// Coordinate this with the linker map so allocations do not overlap the app image.
 static uintptr_t sdram_ptr = SDRAM_BASE;
 
 void* sdram_alloc(size_t bytes) {
@@ -419,10 +446,11 @@ void* sdram_alloc(size_t bytes) {
 **SDRAM Regions (Memory Map)**:
 ```
 Hardware: 8 MB total (M12L64322A SDRAM on Colorlight i9)
-└─ 0x20000000 ─ 0x207FFFFF (8 MB)  ← Application region (PicoRV32)
-    ├─ SDRAM_DATA variables (placed by linker)
-   ├─ Heap (manual allocation)
-   └─ Free space
+└─ 0x20000000 ─ 0x207FFFFF (8 MB)  ← Runtime image + application SDRAM region
+    ├─ `.text` / `.rodata` / `.data` / `.bss` for the SDRAM-linked app
+    ├─ `SDRAM_DATA` variables (placed by linker)
+    ├─ Reserved scratch space for `sdramTest()`
+    └─ Remaining free space / manual allocation if coordinated with the linker map
 ```
 
 **Constants in `sdram.h`**:

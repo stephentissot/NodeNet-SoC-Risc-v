@@ -185,7 +185,7 @@ int main(void)
     oled_init(0x3C);
     oled_write("  NodeNet SoC RISC-V");
     oled_write("v" FIRMWARE_VERSION);
-    
+
     // NodeNet definition and initialization
     NodeNet myNodeNet(NODENET0_BASE, 0x41, 1000000, NODENET_PRIORITY_NORMAL, 200);
     const bool nodenet_ok = myNodeNet.test(oled_boot_status);
@@ -195,7 +195,7 @@ int main(void)
     oled_write(nodenet_ok ? "[NN] Self-test PASS" : "[NN] Self-test FAIL");
 
     // Serial definition and initialization
-    
+
     char serial1rxBuffer[SERIAL1_BUFFER_LENGTH] = {};
     uint8_t serial1rxCount = 0;
 
@@ -215,7 +215,7 @@ int main(void)
     if (flashdb_ok) {
         (void)flashdb_boot_counter_test(oled_boot_status);
     }
-    
+
     while (1) {
 
         // Check serial1 input and echo back any received characters
@@ -239,10 +239,10 @@ int main(void)
             //     oled_print_rx_header(msg.src_addr, msg.len);
             //     oled_write_payload_safe(msg.data, msg.len);
             //     ledYellow.blink(300u);
-            //     // Send a reply to the sender, then release RX buffer.            
+            //     // Send a reply to the sender, then release RX buffer.
             //     myNodeNet.Send(msg.src_addr, "Hello from NodeNet!");
             // }
-            
+
             NodeNet::FreeMessage(msg);
         }
         uint32_t now_ms = millis();
@@ -251,7 +251,7 @@ int main(void)
             led_on = !led_on;
             *LED_D2 = led_on ? 0u : 1u;
             next_toggle_ms += kBlinkPeriodMs;
-            ledGreen.blink(100u);            
+            ledGreen.blink(100u);
         }
     }
 }

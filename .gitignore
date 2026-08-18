@@ -4,6 +4,7 @@ xpacks/
 node_modules/
 src/firmware/build/
 src/firmware/.cache/
+.venv311/
 
 # Fichiers de build
 *.o
