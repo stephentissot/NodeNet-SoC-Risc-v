@@ -110,6 +110,7 @@ Flash persistence status snapshot (current `main.cpp` boot flow):
 - `[FLASH] LowLevel PASS`
 - `[FDB] Ready`
 - `[FDB] boot cnt updated`
+- The flash driver also exposes a stable ASCII `deviceId` derived from the W25Q64 factory UID and shown on the OLED at boot.
 
 ### D2 LED GPIO (`0x10000000`)
 
@@ -365,7 +366,7 @@ For full protocol documentation including frame format, CRC, and encoding detail
 ### SPI Flash (`0x10007000`) — Low-Level Access + FlashDB KV Storage
 
 The onboard W25Q64 (8 MB) is exposed through the `wb_flash` peripheral.
-`flash.h` provides low-level page/sector operations, and `flashdb_port.h` provides typed key-value helpers.
+`flash.h` provides low-level page/sector operations, a factory UID reader, and a stable ASCII `deviceId` helper; `flashdb_port.h` provides typed key-value helpers.
 
 ```cpp
 #include "flash.h"
@@ -377,12 +378,16 @@ flashdb_init(&flash, nullptr);
 flashdb_set_str("device_name", "nodenet-01");
 char name[32] = {};
 flashdb_get_str("device_name", name, sizeof(name));
+
+char device_id[12] = {};
+flash.readUniqueIdAscii(device_id, sizeof(device_id));
 ```
 
 Implementation notes:
 - SPI SCK uses the ECP5 dedicated USRMCLK path (not a normal GPIO pin).
 - Firmware-side protection keeps writes/erases out of the boot region.
 - FlashDB uses partition `nodenet_kv` at `0x204000–0x243FFF`.
+- The ASCII `deviceId` is derived from the 64-bit factory UID and contains only `a-z`, `A-Z`, and `0-9`.
 
 Detailed register-level documentation is available in [../wbDevices/README_FLASH.md](../wbDevices/README_FLASH.md).
 
