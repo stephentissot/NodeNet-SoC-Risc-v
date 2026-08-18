@@ -79,6 +79,25 @@ enum class BootFault : uint8_t {
     EntryAlign = 13,
     SdramAtomic = 14,
     SdramBulk = 15,
+    SdramPartial = 17,
+    BusStall = 18,
+    SdramTimeout = 19,
+    SdramInitError = 20,
+    SdramFetchStride = 21,
+    SdramFetchRandom = 22,
+    SdramFetchErr = 23,
+    SdramFetchUnstable = 24,
+    SdramFetchAlias = 25,
+    SdramPartialByte1 = 26,
+    SdramPartialByte3 = 27,
+    SdramPartialHword0 = 28,
+    SdramPartialHword1 = 29,
+    SdramTailMerge = 30,
+    SdramPartialByte1NoEffect = 31,
+    SdramPartialByte1Lane0 = 32,
+    SdramPartialByte1Lane2 = 33,
+    SdramPartialByte1Lane3 = 34,
+    SdramPartialByte1Other = 35,    
     SdramAtomicWriteTimeout = 40,
     SdramAtomicWriteNoEffect = 41,
     SdramAtomicReadTimeout = 42,
@@ -106,26 +125,7 @@ enum class BootFault : uint8_t {
     SdramHardTestCoreTimeout = 64,
     SdramHardTestCoreErr = 65,
     SdramHardTestCoreTimeoutNoAck = 66,
-    SdramHardTestCtrlNotReady = 67,
-    SdramPartial = 17,
-    BusStall = 18,
-    SdramTimeout = 19,
-    SdramInitError = 20,
-    SdramFetchStride = 21,
-    SdramFetchRandom = 22,
-    SdramFetchErr = 23,
-    SdramFetchUnstable = 24,
-    SdramFetchAlias = 25,
-    SdramPartialByte1 = 26,
-    SdramPartialByte3 = 27,
-    SdramPartialHword0 = 28,
-    SdramPartialHword1 = 29,
-    SdramTailMerge = 30,
-    SdramPartialByte1NoEffect = 31,
-    SdramPartialByte1Lane0 = 32,
-    SdramPartialByte1Lane2 = 33,
-    SdramPartialByte1Lane3 = 34,
-    SdramPartialByte1Other = 35
+    SdramHardTestCtrlNotReady = 67
 };
 
 static WbLed boot_green_led(void);
@@ -769,15 +769,8 @@ static void boot_fault_hex_word(uint32_t value,
 [[noreturn]] static void boot_fault_loop(BootFault fault)
 {
     const uint8_t code = static_cast<uint8_t>(fault);
-    const bool compact_boot_fault_diag = (code >= 1u) && (code <= 13u);
-    const bool short_partial_diag = (code >= static_cast<uint8_t>(BootFault::SdramPartialByte1NoEffect)) &&
-                                    (code <= static_cast<uint8_t>(BootFault::SdramPartialByte1Other));
-    const bool hardtest_stable_mismatch_diag = (code >= 224u) && (code <= 239u);
-    const uint8_t tens = short_partial_diag ? 1u : static_cast<uint8_t>(code / 10u);
-    const uint8_t units = short_partial_diag ? static_cast<uint8_t>(code - static_cast<uint8_t>(BootFault::SdramPartialByte1NoEffect) + 1u)
-                                             : static_cast<uint8_t>(code % 10u);
-    static constexpr uint32_t kSyncOnCycles = 1200000u;
-    static constexpr uint32_t kSyncOffCycles = 500000u;
+    const uint8_t tens = static_cast<uint8_t>(code / 10u);
+    const uint8_t units = static_cast<uint8_t>(code % 10u);
     static constexpr uint32_t kDigitOnCycles = 500000u;
     static constexpr uint32_t kDigitOffCycles = 420000u;
     static constexpr uint32_t kBetweenDigitsCycles = 900000u;
@@ -788,109 +781,23 @@ static void boot_fault_hex_word(uint32_t value,
     green.off();
     yellow.off();
 
+    /*
+     * Legacy debug diagnostics disabled on purpose:
+     * - compact early-boot mode (green preamble + D2 code for faults 1..13)
+     * - partial-write detailed dump (D2 sync + hex word on green/yellow)
+     * - tail-merge detailed dump (D2 sync + expected/observed/stage)
+     * - hard-test stable mismatch dump (D2 sync + expected/observed/diag)
+     *
+     * Goal: keep a single, stable error language for field debugging:
+     *   tens  -> green LED pulses
+     *   units -> yellow LED pulses
+     */
+
     while (true) {
-        if (compact_boot_fault_diag) {
-            // Dedicated early-boot fault encoding for codes 1..13:
-            // 1 green pulse marks "compact boot fault mode", then D2 pulses
-            // directly encode the fault number. This avoids any invisible 0 digit.
-            status_led_pulse_count(green, 1u, kDigitOnCycles, kDigitOffCycles);
-            spin_delay(kBetweenDigitsCycles);
-            d2_pulse_count(code, kDigitOnCycles, kDigitOffCycles);
-            green.off();
-            yellow.off();
-            spin_delay(kCycleGapCycles);
-            continue;
-        }
-
-        if (fault == BootFault::SdramPartialByte1Other) {
-            // Dedicated partial-write diagnostic:
-            // 1 sync pulse => RMW source word read by the wrapper.
-            // 2 sync pulses => merged full-word write payload issued by the wrapper.
-            // For each byte: green = high nibble, yellow = low nibble.
-            d2_pulse(kSyncOnCycles, kSyncOffCycles);
-            boot_fault_hex_word(g_sdram_partial_byte1_rmw_read,
-                                kSyncOnCycles,
-                                kSyncOffCycles,
-                                kDigitOnCycles,
-                                kDigitOffCycles,
-                                kBetweenDigitsCycles);
-            d2_pulse_count(2u, kSyncOnCycles, kSyncOffCycles);
-            boot_fault_hex_word(g_sdram_partial_byte1_rmw_write,
-                                kSyncOnCycles,
-                                kSyncOffCycles,
-                                kDigitOnCycles,
-                                kDigitOffCycles,
-                                kBetweenDigitsCycles);
-            spin_delay(kCycleGapCycles);
-            continue;
-        }
-
-        if (fault == BootFault::SdramTailMerge) {
-            // Dedicated tail-merge diagnostic for code 30:
-            // 1 sync pulse => expected merged word.
-            // 2 sync pulses => observed word after writeback.
-            // 3 sync pulses => stage index (1/2/3) in low byte.
-            d2_pulse(kSyncOnCycles, kSyncOffCycles);
-            boot_fault_hex_word(g_sdram_tailmerge_expected,
-                                kSyncOnCycles,
-                                kSyncOffCycles,
-                                kDigitOnCycles,
-                                kDigitOffCycles,
-                                kBetweenDigitsCycles);
-            d2_pulse_count(2u, kSyncOnCycles, kSyncOffCycles);
-            boot_fault_hex_word(g_sdram_tailmerge_observed,
-                                kSyncOnCycles,
-                                kSyncOffCycles,
-                                kDigitOnCycles,
-                                kDigitOffCycles,
-                                kBetweenDigitsCycles);
-            d2_pulse_count(3u, kSyncOnCycles, kSyncOffCycles);
-            boot_fault_hex_word(g_sdram_tailmerge_stage,
-                                kSyncOnCycles,
-                                kSyncOffCycles,
-                                kDigitOnCycles,
-                                kDigitOffCycles,
-                                kBetweenDigitsCycles);
-            spin_delay(kCycleGapCycles);
-            continue;
-        }
-
-        if (hardtest_stable_mismatch_diag) {
-            // Dedicated hard-test mismatch diagnostic for 224..239:
-            // 1 sync pulse => expected word.
-            // 2 sync pulses => observed word.
-            // 3 sync pulses => self-test diag bits.
-            d2_pulse(kSyncOnCycles, kSyncOffCycles);
-            boot_fault_hex_word(g_sdram_hardtest_expected,
-                                kSyncOnCycles,
-                                kSyncOffCycles,
-                                kDigitOnCycles,
-                                kDigitOffCycles,
-                                kBetweenDigitsCycles);
-            d2_pulse_count(2u, kSyncOnCycles, kSyncOffCycles);
-            boot_fault_hex_word(g_sdram_hardtest_observed,
-                                kSyncOnCycles,
-                                kSyncOffCycles,
-                                kDigitOnCycles,
-                                kDigitOffCycles,
-                                kBetweenDigitsCycles);
-            d2_pulse_count(3u, kSyncOnCycles, kSyncOffCycles);
-            boot_fault_hex_word(g_sdram_hardtest_diag,
-                                kSyncOnCycles,
-                                kSyncOffCycles,
-                                kDigitOnCycles,
-                                kDigitOffCycles,
-                                kBetweenDigitsCycles);
-            spin_delay(kCycleGapCycles);
-            continue;
-        }
-
-        // Human-readable fault encoding:
-        // - D2: one long sync pulse at cycle start.
+        // Human-readable fault encoding only:
         // - Green LED: decimal tens digit (0 => no pulse).
         // - Yellow LED: decimal units digit (0 => no pulse).
         // Example: code 16 => Green x1, Yellow x6.
-        d2_pulse(kSyncOnCycles, kSyncOffCycles);
         status_led_pulse_count(green, tens, kDigitOnCycles, kDigitOffCycles);
         spin_delay(kBetweenDigitsCycles);
         status_led_pulse_count(yellow, units, kDigitOnCycles, kDigitOffCycles);
