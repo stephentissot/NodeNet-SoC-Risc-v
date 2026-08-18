@@ -132,6 +132,17 @@ static void oled_print_rx_header(uint8_t src, uint16_t len)
     oled_write(line);
 }
 
+static void format_version_hundredths(uint16_t raw_value, char* out, std::size_t out_size)
+{
+    if (out == nullptr || out_size == 0u) {
+        return;
+    }
+
+    const unsigned major = static_cast<unsigned>(raw_value / 100u);
+    const unsigned minor = static_cast<unsigned>(raw_value % 100u);
+    (void)snprintf(out, out_size, "V%u.%02u", major, minor);
+}
+
 static void oled_write_payload_safe(const uint8_t* data, uint16_t len)
 {
     if (data == nullptr) {
@@ -218,6 +229,7 @@ int main(void)
     // Probe Waveshare serial settings using slave=0 discovery command.
     bool modbus_found = false;
     uint16_t device_addr_reg = 0u;
+    uint16_t version_reg = 0u;
     static const uint32_t kProbeBaud[] = {9600u, 4800u, 19200u, 38400u, 57600u, 115200u, 128000u, 256000u};
     for (uint32_t baud : kProbeBaud) {
         modbus1.begin(baud, 200u, 0u);
@@ -255,6 +267,16 @@ int main(void)
         modbus1.begin(9600u, 500u, 2u);
         modbus1.setInterframeCharsQ1(14u);
         oled_write("[MB] probe failed");
+    } else if (modbus1.readHoldingRegisters(modbus_slave_addr, 0x8000u, 1u, &version_reg)) {
+        char version_text[16] = {};
+        format_version_hundredths(version_reg, version_text, sizeof(version_text));
+        oled_print("[MB] ver=0x%04X", static_cast<unsigned>(version_reg));
+        oled_write(version_text);
+    } else {
+        char status_hex[11] = {};
+        hex32_to_str(modbus1.lastHwStatus(), status_hex);
+        oled_write("[MB] ver read fail");
+        oled_write(status_hex);
     }
 
     while (1) {
