@@ -55,6 +55,9 @@ src/firmware/
 ├── sdram.h              SDRAM helpers (`SDRAM_DATA`, readiness wait, scratch-area self-tests)
 ├── sdram.cpp            Single-TU SDRAM probe and scratch storage for self-tests
 └── lib/
+    ├── modbus/      Modbus RTU master MMIO driver for wb_modbus_master
+    │   ├── ModbusMaster.h
+    │   └── ModbusMaster.cpp
     ├── serial/      UART1 MMIO helper (Arduino-style API)
     │   ├── Serial.h
     │   └── Serial.cpp
@@ -93,7 +96,7 @@ src/bootloader/
 | `0x10000000` | 4 B | **D2 LED GPIO** (`wb_gpio`) |
 | `0x10000004` | 4 B | **RJ45 LED0** (`wb_led`) |
 | `0x10000008` | 4 B | **RJ45 LED1** (`wb_led`) |
-| `0x10004000` | 32 B | **UART1** (`wb_uart`) |
+| `0x10004000` | 32 B | **UART1 Modbus master** (`wb_modbus_master`) |
 | `0x10005000` | 32 B | **I2C0** |
 | `0x10006000` | 32 B | **NodeNet485** (RS-485 @ 1 Mb/s, includes LED pulse config) |
 | `0x10007000` | 32 B | **SPI Flash** (`wb_flash`, W25Q64 via USRMCLK) |
@@ -143,40 +146,47 @@ These two addresses remain available for diagnostics or visual activity signalin
 
 ---
 
-### UART1 (`wb_uart`: `0x10004000`) — Serial Text I/O
+### UART1 (`wb_modbus_master`: `0x10004000`) — Modbus RTU Master
 
-The firmware includes an Arduino-style serial helper in `lib/serial/Serial.h` and `lib/serial/Serial.cpp`.
+The firmware includes a Modbus RTU master helper in `lib/modbus/ModbusMaster.h` and `lib/modbus/ModbusMaster.cpp`.
 
-`wb_uart` is a Wishbone wrapper with RX/TX FIFOs. It now uses the shared `uart_simple` serial core internally, so NodeNet and UART1 rely on the same UART engine while keeping separate wrappers and registers.
+`wb_modbus_master` is a Wishbone wrapper around `uart_simple` with hardware-managed:
+- RTU transaction timing
+- CRC16 TX generation and RX validation
+- timeout / retry / status flags
 
 Minimal usage example:
 
 ```cpp
-#include "lib/serial/Serial.h"
+#include "ModbusMaster.h"
 
-constexpr uint32_t UART1_BASE = 0x10004000u;
-Serial Serial1(UART1_BASE);
+constexpr uint32_t MODBUS1_BASE = 0x10004000u;
+constexpr uint8_t MODBUS_SLAVE = 0x01u;
+ModbusMaster modbus1(MODBUS1_BASE);
 
 int main() {
-    Serial1.begin(115200);
-    Serial1.println("Hello from UART1");
+    modbus1.begin(9600, 500, 2);   // baud, timeout_ms, retries
+    modbus1.setInterframeCharsQ1(14);
+
+    uint16_t version = 0;
+    if (modbus1.readHoldingRegisters(MODBUS_SLAVE, 0x8000, 1, &version)) {
+        // Waveshare encoding: 0x0064 => V1.00
+    }
 
     for (;;) {
-        if (Serial1.available() > 0) {
-            int c = Serial1.read();
-            if (c >= 0) {
-                Serial1.write(static_cast<uint8_t>(c));  // echo
-            }
-        }
+        (void)modbus1.writeSingleCoil(MODBUS_SLAVE, 0x0000, true);
     }
 }
 ```
 
 Useful methods:
-- `begin(baud)`
-- `available()`, `read()`, `peek()`
-- `write()`, `print()`, `println()`, `flush()`
-- `hasOverrunError()`, `hasFrameError()`, `clearErrors()`
+- `begin(baud, timeout_ms, retries)`
+- `setInterframeCharsQ1(chars_q1)`
+- `readCoils`, `readDiscreteInputs`, `readHoldingRegisters`, `readInputRegisters`
+- `writeSingleCoil`, `writeMultipleCoils`, `writeSingleRegister`, `writeMultipleRegisters`
+- `lastError()`, `lastExceptionCode()`, `lastHwStatus()`
+
+Legacy note: `lib/serial/Serial` remains available as a standalone utility class but UART1 hardware is now mapped to Modbus RTU master in the default top-level SoC.
 
 ---
 

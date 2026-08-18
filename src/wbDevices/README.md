@@ -10,6 +10,10 @@ All modules follow the Wishbone B.4 standard with:
 - Single-cycle read/write (in most cases)
 - Byte-enable support (`wb_sel_i`)
 
+Current top-level mapping note:
+- UART1 MMIO at `0x10004000` is now provided by `src/modbus/wb_modbus_master.sv`.
+- `wb_uart.sv` remains available in this directory for standalone UART/FIFO use.
+
 ## Modules
 
 ### 1. `wb_uart.sv` – Wishbone UART Wrapper + FIFOs

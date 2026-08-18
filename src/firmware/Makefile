@@ -46,6 +46,9 @@ I2C_OBJ=$(BUILD)/i2c.o
 SERIAL_DIR=lib/serial
 SERIAL_SRC=$(SERIAL_DIR)/Serial.cpp
 SERIAL_OBJ=$(BUILD)/Serial.o
+MODBUS_DIR=lib/modbus
+MODBUS_SRC=$(MODBUS_DIR)/ModbusMaster.cpp
+MODBUS_OBJ=$(BUILD)/ModbusMaster.o
 FLASH_DIR=lib/flash
 FLASH_SRC=$(FLASH_DIR)/flash.cpp
 FLASH_OBJ=$(BUILD)/flash.o
@@ -60,7 +63,7 @@ FLASHDB_CORE_OBJS=$(BUILD)/fdb.o $(BUILD)/fdb_kvdb.o $(BUILD)/fdb_utils.o
 SDRAM_TEST_SRC=sdram.cpp
 SDRAM_TEST_OBJ=$(BUILD)/sdram.o
 
-DEPS=$(BUILD)/start.d $(BUILD)/app_start.d $(BUILD)/boot_start.d $(MAIN_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(BUILD)/Serial.d $(BUILD)/flash.d $(BUILD)/flashdb_port.d $(BUILD)/sdram.d $(BUILD)/fdb.d $(BUILD)/fdb_kvdb.d $(BUILD)/fdb_utils.d $(U8G2_OBJS:.o=.d)
+DEPS=$(BUILD)/start.d $(BUILD)/app_start.d $(BUILD)/boot_start.d $(MAIN_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(BUILD)/Serial.d $(BUILD)/ModbusMaster.d $(BUILD)/flash.d $(BUILD)/flashdb_port.d $(BUILD)/sdram.d $(BUILD)/fdb.d $(BUILD)/fdb_kvdb.d $(BUILD)/fdb_utils.d $(U8G2_OBJS:.o=.d)
 
 CFLAGS=-march=rv32im -mabi=ilp32 \
        -Wall \
@@ -74,6 +77,7 @@ CFLAGS=-march=rv32im -mabi=ilp32 \
        -I$(I2C_DIR) \
 	-I$(FLASH_DIR) \
         -I$(SERIAL_DIR) \
+	-I$(MODBUS_DIR) \
         -I$(FLASHDB_INC) \
        -Iinclude \
        -DFIRMWARE_VERSION='"$(VERSION)-$(GIT_HASH)"'
@@ -130,7 +134,7 @@ $(BUILD):
 $(U8G2_CACHE):
 	mkdir -p $@
 
-$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_TEST_OBJ) $(U8G2_LIB) | $(BUILD)
+$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(MODBUS_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_TEST_OBJ) $(U8G2_LIB) | $(BUILD)
 	$(CROSS)g++ $(LDFLAGS) $^ -o $@
 
 $(BUILD)/start.o: start.S | $(BUILD)
@@ -146,6 +150,9 @@ $(I2C_OBJ): $(I2C_SRC) | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
 $(SERIAL_OBJ): $(SERIAL_SRC) | $(BUILD)
+	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
+
+$(MODBUS_OBJ): $(MODBUS_SRC) | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
 $(FLASH_OBJ): $(FLASH_SRC) | $(BUILD)
@@ -186,7 +193,7 @@ $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 $(FW_BIN): $(BUILD)/$(TARGET).elf
 	$(CROSS)objcopy -O binary $< $@
 
-$(APP_ELF): $(APP_START_OBJ) $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_TEST_OBJ) $(U8G2_LIB) | $(BUILD)
+$(APP_ELF): $(APP_START_OBJ) $(MAIN_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(MODBUS_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_TEST_OBJ) $(U8G2_LIB) | $(BUILD)
 	$(CROSS)g++ -march=rv32im -mabi=ilp32 -T $(APP_LINKER) -nostartfiles -Wl,--gc-sections --specs=nano.specs --specs=nosys.specs $^ -o $@
 
 $(APP_START_OBJ): $(APP_START_SRC) | $(BUILD)
