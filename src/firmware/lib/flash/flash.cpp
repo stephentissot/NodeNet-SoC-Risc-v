@@ -231,7 +231,7 @@ bool Flash::readUniqueId(uint8_t uid8[8]) const {
   }
 
   reg(kRegControl) = 0u;
-  reg(kRegControl) = 1u << 3;
+  reg(kRegControl) = kCtrlUid;
 
   if (!waitReady()) {
     return false;

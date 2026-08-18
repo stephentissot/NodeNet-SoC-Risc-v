@@ -67,6 +67,7 @@ private:
   static constexpr uint32_t kCtrlRead = 1u << 0;
   static constexpr uint32_t kCtrlWrite = 1u << 1;
   static constexpr uint32_t kCtrlErase = 1u << 2;
+  static constexpr uint32_t kCtrlUid = 1u << 3;
   static constexpr uint32_t kStatBusy = 1u << 0;
   static constexpr uint32_t kStatReady = 1u << 1;
   static constexpr uint32_t kStatTimeoutError = 1u << 2;

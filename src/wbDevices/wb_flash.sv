@@ -186,6 +186,14 @@ module wb_flash #(
                                     tx_mem[2] <= 8'h00;
                                     tx_mem[3] <= 8'h00;
                                     tx_mem[4] <= 8'h00;
+                                    tx_mem[5] <= 8'h00;
+                                    tx_mem[6] <= 8'h00;
+                                    tx_mem[7] <= 8'h00;
+                                    tx_mem[8] <= 8'h00;
+                                    tx_mem[9] <= 8'h00;
+                                    tx_mem[10] <= 8'h00;
+                                    tx_mem[11] <= 8'h00;
+                                    tx_mem[12] <= 8'h00;
                                     tx_len <= 9'd13;
                                     tx_idx <= 9'd0;
                                     read_sink_count <= 9'd0;

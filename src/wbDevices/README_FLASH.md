@@ -186,7 +186,7 @@ Flash Address Space (8 MB total)
 
 ## Testing
 
-### Test 1: Read Flash ID
+### Test 1: Read Flash UID / Device ID
 
 ```cpp
 // Read the factory-programmed 64-bit UID via 0x4B and convert it to ASCII.
