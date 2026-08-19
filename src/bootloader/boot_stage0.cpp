@@ -3,6 +3,8 @@
 #include "firmware_image.h"
 #include "led.h"
 #include "sdram.h"
+#include "u8g2.h"
+#include "u8g2_hal.h"
 
 #define STAGE0_MINIMAL_LED_TRACE 1
 #define STAGE0_SCRUB_VALIDATION_RANGES 1
@@ -35,11 +37,18 @@ static constexpr uint32_t kStatusSdramHardTestWbErrBit = (1u << 16);
 static constexpr bool kValidationTrace = true;
 
 static constexpr uint32_t kSelftestRegBase = SDRAM_BASE + 0x007FF000u;
+static constexpr uint32_t kSelftestCmd = kSelftestRegBase + 0x0u;
+static constexpr uint32_t kSelftestStatus = kSelftestRegBase + 0x4u;
 static constexpr uint32_t kSelftestFailAddr = kSelftestRegBase + 0x8u;
 static constexpr uint32_t kSelftestExpected = kSelftestRegBase + 0xCu;
 static constexpr uint32_t kSelftestObserved = kSelftestRegBase + 0x10u;
 static constexpr uint32_t kSelftestProgress = kSelftestRegBase + 0x14u;
 static constexpr uint32_t kSelftestDiag = kSelftestRegBase + 0x1Cu;
+static constexpr uint32_t kSelftestCmdStartBit = (1u << 0);
+static constexpr uint32_t kSelftestCmdStopBit = (1u << 1);
+static constexpr uint32_t kSelftestCmdResetBit = (1u << 2);
+static constexpr uint32_t kSelftestCmdContinuousBit = (1u << 3);
+static constexpr uint32_t kSelftestCmdAutoStartBit = (1u << 4);
 static constexpr uint32_t kFlashRegStatusOff = 0x00u;
 static constexpr uint32_t kFlashStatBusy = (1u << 0);
 static constexpr uint32_t kFlashStatReady = (1u << 1);
@@ -59,12 +68,23 @@ static constexpr uint32_t kSdramMax = SDRAM_BASE + SDRAM_SIZE;
 
 static volatile uint32_t* const kLedD2 = reinterpret_cast<volatile uint32_t*>(kLedBase);
 static volatile uint32_t* const kStatusReg = reinterpret_cast<volatile uint32_t*>(kStatusBase);
+static u8g2_t g_fault_oled;
+static bool g_fault_oled_ready = false;
 static uint32_t g_sdram_partial_byte1_observed = 0u;
 static uint32_t g_sdram_partial_byte1_rmw_read = 0u;
 static uint32_t g_sdram_partial_byte1_rmw_write = 0u;
+static uint32_t g_sdram_atomic_fail_addr = 0u;
+static uint32_t g_sdram_atomic_expected = 0u;
+static uint32_t g_sdram_atomic_observed = 0u;
+static uint32_t g_sdram_atomic_constant_value = 0u;
+static uint32_t g_sdram_atomic_constant_ra = 0u;
+static uint32_t g_sdram_atomic_constant_rb = 0u;
+static uint32_t g_sdram_atomic_constant_rc = 0u;
+static uint32_t g_sdram_atomic_status_snapshot = 0u;
 static uint32_t g_sdram_hardtest_expected = 0u;
 static uint32_t g_sdram_hardtest_observed = 0u;
 static uint32_t g_sdram_hardtest_diag = 0u;
+static uint32_t g_sdram_hardtest_fail_addr = 0u;
 static uint32_t g_sdram_tailmerge_expected = 0u;
 static uint32_t g_sdram_tailmerge_observed = 0u;
 static uint32_t g_sdram_tailmerge_stage = 0u;
@@ -145,7 +165,16 @@ enum class BootFault : uint8_t {
 static WbLed boot_green_led(void);
 static WbLed boot_yellow_led(void);
 static BootFault sdram_atomic_observed_fault(uint32_t expected, uint32_t observed);
+static BootFault sdram_atomic_constant_read_fault(volatile uint32_t* cell);
 static inline uint32_t mmio_read32(uint32_t addr);
+static bool boot_fault_is_sdram_related(BootFault fault);
+static void oled_hex32_to_cstr(uint32_t value, char* out);
+static void oled_u8_to_dec_cstr(uint8_t value, char* out);
+static void oled_copy_text(char* dst, const char* src, uint8_t max_chars);
+static void oled_make_prefixed_hex_line(char* out, const char* prefix, uint32_t value);
+static void oled_make_fault_line(char* out, BootFault fault);
+static bool oled_fault_init(void);
+static void oled_fault_draw_sdram_details(BootFault fault);
 
 static BootFault header_read_fault_from_flash_status(void)
 {
@@ -211,6 +240,11 @@ static inline uint32_t boot_status(void)
 static inline uint32_t mmio_read32(uint32_t addr)
 {
     return *reinterpret_cast<volatile uint32_t*>(addr);
+}
+
+static inline void mmio_write32(uint32_t addr, uint32_t value)
+{
+    *reinterpret_cast<volatile uint32_t*>(addr) = value;
 }
 
 static uint8_t selftest_index_from_fail_addr(uint32_t addr)
@@ -283,6 +317,7 @@ static BootFault refine_hard_test_fail_fault(void)
     const uint32_t expected = mmio_read32(kSelftestExpected);
     const uint32_t observed = mmio_read32(kSelftestObserved);
     const uint32_t diag = mmio_read32(kSelftestDiag);
+    g_sdram_hardtest_fail_addr = fail_addr;
     g_sdram_hardtest_expected = expected;
     g_sdram_hardtest_observed = observed;
     g_sdram_hardtest_diag = diag;
@@ -317,6 +352,17 @@ static BootFault refine_hard_test_fail_fault(void)
             return static_cast<BootFault>(176u + fail_index);
         }
         if (observed_fault == BootFault::SdramAtomicReadMismatch) {
+            if ((diag & (1u << 1)) != 0u) {
+                // The wrapper only confirms a stable mismatch with one extra
+                // reread. Re-run the stage0 constant-read probe on the same
+                // cell so cold-boot failures can distinguish "same wrong
+                // value regardless of writes" from a generic stable mismatch.
+                volatile uint32_t* const fail_cell = reinterpret_cast<volatile uint32_t*>(fail_addr);
+                const BootFault constant_fault = sdram_atomic_constant_read_fault(fail_cell);
+                if (constant_fault == BootFault::SdramAtomicReadConstant) {
+                    return static_cast<BootFault>(176u + fail_index);
+                }
+            }
             if ((diag & (1u << 1)) != 0u) {
                 // Reserve 224..239 for stable generic mismatch at probe index i.
                 return static_cast<BootFault>(224u + fail_index);
@@ -390,6 +436,36 @@ static BootFault wait_sdram_hard_test_done(uint32_t max_poll_loops)
     }
 
     return BootFault::SdramHardTestTimeout;
+}
+
+static void selftest_write_cmd(uint32_t bits)
+{
+    mmio_write32(kSelftestCmd, bits);
+}
+
+static void selftest_reset_and_start_manual(void)
+{
+    selftest_write_cmd(kSelftestCmdResetBit);
+    selftest_write_cmd(kSelftestCmdStartBit);
+}
+
+static bool wait_sdram_hard_test_started(uint32_t max_poll_loops)
+{
+    for (uint32_t i = 0; i < max_poll_loops; ++i) {
+        const uint32_t status = boot_status();
+        if ((status & kStatusSdramInitErrorBit) != 0u) {
+            return false;
+        }
+
+        const bool running = (status & kStatusSdramHardTestRunningBit) != 0u;
+        const bool done = (status & kStatusSdramHardTestDoneBit) != 0u;
+        const bool fail = (status & kStatusSdramHardTestFailBit) != 0u;
+        if (running || done || fail) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 static void clear_bus_stall_latch(void)
@@ -479,15 +555,23 @@ static BootFault sdram_atomic_constant_read_fault(volatile uint32_t* cell)
     static constexpr uint32_t kProbeB = 0x55667788u;
     static constexpr uint32_t kProbeC = 0xA5C35A3Cu;
 
+    g_sdram_atomic_constant_ra = 0u;
+    g_sdram_atomic_constant_rb = 0u;
+    g_sdram_atomic_constant_rc = 0u;
+    g_sdram_atomic_status_snapshot = 0u;
+
     clear_sdram_atomic_latches();
     *cell = kProbeA;
     BootFault phase_fault = sdram_atomic_phase_fault(true);
     if (phase_fault != BootFault::None) {
+        g_sdram_atomic_status_snapshot = boot_status();
         return phase_fault;
     }
     const uint32_t ra = *cell;
+    g_sdram_atomic_constant_ra = ra;
     phase_fault = sdram_atomic_phase_fault(false);
     if (phase_fault != BootFault::None) {
+        g_sdram_atomic_status_snapshot = boot_status();
         return phase_fault;
     }
 
@@ -495,11 +579,14 @@ static BootFault sdram_atomic_constant_read_fault(volatile uint32_t* cell)
     *cell = kProbeB;
     phase_fault = sdram_atomic_phase_fault(true);
     if (phase_fault != BootFault::None) {
+        g_sdram_atomic_status_snapshot = boot_status();
         return phase_fault;
     }
     const uint32_t rb = *cell;
+    g_sdram_atomic_constant_rb = rb;
     phase_fault = sdram_atomic_phase_fault(false);
     if (phase_fault != BootFault::None) {
+        g_sdram_atomic_status_snapshot = boot_status();
         return phase_fault;
     }
 
@@ -507,19 +594,167 @@ static BootFault sdram_atomic_constant_read_fault(volatile uint32_t* cell)
     *cell = kProbeC;
     phase_fault = sdram_atomic_phase_fault(true);
     if (phase_fault != BootFault::None) {
+        g_sdram_atomic_status_snapshot = boot_status();
         return phase_fault;
     }
     const uint32_t rc = *cell;
+    g_sdram_atomic_constant_rc = rc;
     phase_fault = sdram_atomic_phase_fault(false);
     if (phase_fault != BootFault::None) {
+        g_sdram_atomic_status_snapshot = boot_status();
         return phase_fault;
     }
 
+    g_sdram_atomic_status_snapshot = boot_status();
+
     if ((ra == rb) && (rb == rc) && ((ra != kProbeA) || (rb != kProbeB) || (rc != kProbeC))) {
+        g_sdram_atomic_constant_value = ra;
         return BootFault::SdramAtomicReadConstant;
     }
 
     return BootFault::None;
+}
+
+static bool boot_fault_is_sdram_related(BootFault fault)
+{
+    const uint8_t code = static_cast<uint8_t>(fault);
+    if (code >= static_cast<uint8_t>(BootFault::SdramAtomic) &&
+        code <= static_cast<uint8_t>(BootFault::SdramHardTestCtrlNotReady)) {
+        return true;
+    }
+    return code >= 68u;
+}
+
+static void oled_hex32_to_cstr(uint32_t value, char* out)
+{
+    static const char kHex[] = "0123456789ABCDEF";
+    for (int i = 0; i < 8; ++i) {
+        const uint32_t shift = static_cast<uint32_t>(28 - (i * 4));
+        out[i] = kHex[(value >> shift) & 0xFu];
+    }
+    out[8] = '\0';
+}
+
+static void oled_u8_to_dec_cstr(uint8_t value, char* out)
+{
+    if (value >= 100u) {
+        out[0] = static_cast<char>('0' + (value / 100u));
+        value = static_cast<uint8_t>(value % 100u);
+        out[1] = static_cast<char>('0' + (value / 10u));
+        out[2] = static_cast<char>('0' + (value % 10u));
+        out[3] = '\0';
+        return;
+    }
+    if (value >= 10u) {
+        out[0] = static_cast<char>('0' + (value / 10u));
+        out[1] = static_cast<char>('0' + (value % 10u));
+        out[2] = '\0';
+        return;
+    }
+    out[0] = static_cast<char>('0' + value);
+    out[1] = '\0';
+}
+
+static void oled_copy_text(char* dst, const char* src, uint8_t max_chars)
+{
+    uint8_t i = 0u;
+    while (i < max_chars && src[i] != '\0') {
+        dst[i] = src[i];
+        ++i;
+    }
+    dst[i] = '\0';
+}
+
+static void oled_make_prefixed_hex_line(char* out, const char* prefix, uint32_t value)
+{
+    uint8_t pos = 0u;
+    while (prefix[pos] != '\0') {
+        out[pos] = prefix[pos];
+        ++pos;
+    }
+    oled_hex32_to_cstr(value, out + pos);
+}
+
+static void oled_make_fault_line(char* out, BootFault fault)
+{
+    out[0] = 'F';
+    out[1] = '=';
+    oled_u8_to_dec_cstr(static_cast<uint8_t>(fault), out + 2);
+}
+
+static bool oled_fault_init(void)
+{
+    if (g_fault_oled_ready) {
+        return true;
+    }
+
+    u8g2_Setup_ssd1306_i2c_128x64_noname_f(&g_fault_oled, U8G2_R0, u8x8_byte_i2c_hw, u8x8_gpio_delay_hw);
+    u8g2_SetI2CAddress(&g_fault_oled, static_cast<uint8_t>(0x3Cu << 1));
+    u8g2_InitDisplay(&g_fault_oled);
+    u8g2_SetPowerSave(&g_fault_oled, 0);
+    u8g2_ClearBuffer(&g_fault_oled);
+    u8g2_SendBuffer(&g_fault_oled);
+    g_fault_oled_ready = true;
+    return true;
+}
+
+static void oled_fault_draw_sdram_details(BootFault fault)
+{
+    if (!boot_fault_is_sdram_related(fault)) {
+        return;
+    }
+    if (!oled_fault_init()) {
+        return;
+    }
+
+    char line0[22] = {};
+    char line1[22] = {};
+    char line2[22] = {};
+    char line3[22] = {};
+    char line4[22] = {};
+
+    oled_make_fault_line(line0, fault);
+
+    const uint8_t code = static_cast<uint8_t>(fault);
+    if (fault == BootFault::SdramAtomicReadConstant) {
+        oled_make_prefixed_hex_line(line1, "A=", g_sdram_atomic_fail_addr);
+        oled_make_prefixed_hex_line(line2, "R1=", g_sdram_atomic_constant_ra);
+        oled_make_prefixed_hex_line(line3, "R2=", g_sdram_atomic_constant_rb);
+        oled_make_prefixed_hex_line(line4, "R3=", g_sdram_atomic_constant_rc);
+    } else if (code >= 176u && code <= 239u) {
+        oled_make_prefixed_hex_line(line1, "A=", g_sdram_hardtest_fail_addr);
+        oled_make_prefixed_hex_line(line2, "E=", g_sdram_hardtest_expected);
+        oled_make_prefixed_hex_line(line3, "O=", g_sdram_hardtest_observed);
+        oled_make_prefixed_hex_line(line4, "D=", g_sdram_hardtest_diag);
+    } else if (fault == BootFault::SdramTailMerge) {
+        oled_make_prefixed_hex_line(line1, "E=", g_sdram_tailmerge_expected);
+        oled_make_prefixed_hex_line(line2, "O=", g_sdram_tailmerge_observed);
+        oled_make_prefixed_hex_line(line3, "S=", g_sdram_tailmerge_stage);
+        oled_copy_text(line4, "tail merge", 21u);
+    } else if (fault == BootFault::SdramPartialByte1NoEffect ||
+               fault == BootFault::SdramPartialByte1Lane0 ||
+               fault == BootFault::SdramPartialByte1Lane2 ||
+               fault == BootFault::SdramPartialByte1Lane3 ||
+               fault == BootFault::SdramPartialByte1Other) {
+        oled_make_prefixed_hex_line(line1, "O=", g_sdram_partial_byte1_observed);
+        oled_make_prefixed_hex_line(line2, "RR=", g_sdram_partial_byte1_rmw_read);
+        oled_make_prefixed_hex_line(line3, "RW=", g_sdram_partial_byte1_rmw_write);
+        oled_copy_text(line4, "partial byte1", 21u);
+    } else {
+        oled_make_prefixed_hex_line(line1, "STAT=", boot_status());
+        oled_make_prefixed_hex_line(line2, "A=", g_sdram_atomic_fail_addr);
+        oled_make_prefixed_hex_line(line3, "E=", g_sdram_atomic_expected);
+        oled_make_prefixed_hex_line(line4, "O=", g_sdram_atomic_observed);
+    }
+
+    u8g2_SetFont(&g_fault_oled, u8g2_font_6x12_tf);
+    u8g2_ClearBuffer(&g_fault_oled);
+    u8g2_DrawStr(&g_fault_oled, 0, 10, line0);
+    u8g2_DrawStr(&g_fault_oled, 0, 23, line1);
+    u8g2_DrawStr(&g_fault_oled, 0, 36, line2);
+    u8g2_DrawStr(&g_fault_oled, 0, 49, line3);
+    u8g2_DrawStr(&g_fault_oled, 0, 62, line4);
+    u8g2_SendBuffer(&g_fault_oled);
 }
 
 static BootFault sdram_atomic_alias_fault(volatile uint32_t* cell, uint32_t expected_self)
@@ -857,6 +1092,7 @@ static void boot_fault_hex_word(uint32_t value,
 
     green.off();
     yellow.off();
+    oled_fault_draw_sdram_details(fault);
 
     /*
      * Legacy debug diagnostics disabled on purpose:
@@ -1185,6 +1421,10 @@ static BootFault sdram_atomic_test(void)
         {
             const BootFault observed_fault = sdram_atomic_observed_fault(value, after_a);
             if (observed_fault != BootFault::None) {
+                g_sdram_atomic_fail_addr = reinterpret_cast<uint32_t>(cell);
+                g_sdram_atomic_expected = value;
+                g_sdram_atomic_observed = after_a;
+                g_sdram_atomic_constant_value = 0u;
                 const BootFault constant_fault = sdram_atomic_constant_read_fault(cell);
                 if (constant_fault != BootFault::None) {
                     return constant_fault;
@@ -1226,6 +1466,10 @@ static BootFault sdram_atomic_test(void)
         {
             const BootFault observed_fault = sdram_atomic_observed_fault(value, observed_a);
             if (observed_fault != BootFault::None) {
+                g_sdram_atomic_fail_addr = reinterpret_cast<uint32_t>(cell);
+                g_sdram_atomic_expected = value;
+                g_sdram_atomic_observed = observed_a;
+                g_sdram_atomic_constant_value = 0u;
                 const BootFault constant_fault = sdram_atomic_constant_read_fault(cell);
                 if (constant_fault != BootFault::None) {
                     return constant_fault;
@@ -1666,7 +1910,7 @@ extern "C" int main(void)
     // Build signature pulse: one long D2 pulse at boot.
     // HeaderRead diagnostics use short D2 burst counts later in the loop.
     d2_pulse_count(1u, 700000u, 700000u);
-    spin_delay(300000u);
+    
 
     // Wait until SDRAM controller reports init completion.
     // This avoids issuing a potentially blocking SDRAM access too early.
@@ -1680,19 +1924,24 @@ extern "C" int main(void)
     if ((boot_status() & kStatusSdramInitErrorBit) != 0u) {
         boot_fault_loop(BootFault::SdramInitError);
     }
-
-    if (!kFlashPathDiagOnly) {
-        const BootFault hard_test_fault = wait_sdram_hard_test_done(8000000u);
-        if (hard_test_fault != BootFault::None) {
-            if (hard_test_fault == BootFault::SdramHardTestCoreTimeout) {
-                boot_fault_loop(refine_hard_test_timeout_fault());
-            }
-            if (hard_test_fault == BootFault::SdramHardTestFail) {
-                boot_fault_loop(refine_hard_test_fail_fault());
-            }
-            boot_fault_loop(hard_test_fault);
-        }
-    }
+    spin_delay(300000u);
+    // if (!kFlashPathDiagOnly) {
+    //     selftest_write_cmd(0u);
+    //     selftest_reset_and_start_manual();
+    //     if (!wait_sdram_hard_test_started(2000000u)) {
+    //         boot_fault_loop(BootFault::SdramHardTestTimeout);
+    //     }
+    //     const BootFault hard_test_fault = wait_sdram_hard_test_done(8000000u);
+    //     if (hard_test_fault != BootFault::None) {
+    //         if (hard_test_fault == BootFault::SdramHardTestCoreTimeout) {
+    //             boot_fault_loop(refine_hard_test_timeout_fault());
+    //         }
+    //         if (hard_test_fault == BootFault::SdramHardTestFail) {
+    //             boot_fault_loop(refine_hard_test_fail_fault());
+    //         }
+    //         boot_fault_loop(hard_test_fault);
+    //     }
+    // }
 
     // LiteDRAM bring-up can legitimately cause long early waits before boot
     // starts SDRAM validation. Drop stale latch state before strict checks.

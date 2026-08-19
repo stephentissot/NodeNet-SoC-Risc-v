@@ -533,7 +533,7 @@ module top (
     wb_sdram_litedram #(
         .ADDR(SDRAM_BASE),
         .CLK_FREQ_MHZ(25),
-        .SELFTEST_AUTO_START(1'b1)
+        .SELFTEST_AUTO_START(1'b0)
     ) sdram0 (
         .clk(sys_clk),
         .rst(reset),

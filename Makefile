@@ -36,6 +36,7 @@ FIRMWARE_PREV_PADDED_HEX=$(BUILD)/nodenet_riscv.prev_padded.hex
 FW_PATCH_CONFIG=$(BUILD)/$(TOP)_fw.config
 FW_PATCH_BIT=$(BUILD)/$(TOP)_fw.bit
 FLASH_BOOT_IMAGE=$(BUILD)/$(TOP)_flash.bit
+FLASH_PROGRAM_IMAGE=$(BUILD)/$(TOP).bit
 ROM_BYTES=65536
 LITEDRAM_BUILD_DIR ?= $(BUILD)/litedram
 LITEDRAM_CONFIG ?= tools/litedram/colorlight_i9.yml
@@ -333,7 +334,9 @@ ram-fw:
 	fi
 
 
-# Generate SPI Flash image for cold boot (bootaddr=0)
+# Generate an alternate SPI flash image for experiments.
+# The official Colorlight i9 flows generally program the raw `.bit` file
+# directly into flash rather than a separately repacked boot image.
 flash_image: $(BUILD)/$(TOP).config
 	ecppack \
 		--compress \
@@ -345,17 +348,15 @@ flash_image: $(BUILD)/$(TOP).config
 
 # Program W25Q64 SPI Flash
 #
-# Primary flow uses ecpdap as requested:
-#   ecpdap program <bit>
-#   ecpdap flash erase
-#   ecpdap flash write <bit>
+# Primary flow uses the same high-level Colorlight i9 path found in the
+# official repo: unprotect once, then write the raw compressed `.bit` to flash.
+# Avoid preloading the user design into SRAM before this step: once the design
+# is live, it can own the flash pins and complicate JTAG/sysCONFIG flash access.
 #
 # Falls back to OpenOCD jtagspi, then openFPGALoader.
-flash: flash_image
-	@if ecpdap -f $(ECPDAP_FREQ) program $(BUILD)/$(TOP).bit && \
-		ecpdap -f $(ECPDAP_FREQ) flash unprotect && \
-		ecpdap -f $(ECPDAP_FREQ) flash erase && \
-		ecpdap -f $(ECPDAP_FREQ) flash write $(FLASH_BOOT_IMAGE) && \
+flash: $(FLASH_PROGRAM_IMAGE)
+	@if ecpdap -f $(ECPDAP_FREQ) flash unprotect && \
+		ecpdap -f $(ECPDAP_FREQ) flash write $(FLASH_PROGRAM_IMAGE) && \
 		ecpdap -f $(ECPDAP_FREQ) flash jump write 0x0 --spimode read && \
 		ecpdap -f $(ECPDAP_FREQ) flash jump read; then \
 		echo "ecpdap flash succeeded."; \
@@ -368,12 +369,12 @@ flash: flash_image
 		    source [find cpld/jtagspi.cfg]; \
 		    init; \
 		    jtagspi_init ecp5.pld \"\" -1; \
-		    flash write_image erase unlock $(FLASH_BOOT_IMAGE) 0x0; \
+		    flash write_image erase unlock $(FLASH_PROGRAM_IMAGE) 0x0; \
 		    exit"; then \
 		echo "OpenOCD flash succeeded (fallback)."; \
 	else \
 		echo "ecpdap/OpenOCD failed, retrying with openFPGALoader..."; \
-		openFPGALoader -b colorlight-i9 -f --verify $(FLASH_BOOT_IMAGE); \
+		openFPGALoader -b colorlight-i9 -f --verify $(FLASH_PROGRAM_IMAGE); \
 	fi
 
 
