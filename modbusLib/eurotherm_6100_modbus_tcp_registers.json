@@ -1,0 +1,693 @@
+{
+  "device": "Eurotherm 6100 Paperless Graphic Recorder",
+  "protocol": "Modbus TCP",
+  "model_family": "6100 / 6180",
+  "manual": "HA028910 Issue 18 Nov 2023",
+  "note": "Curated Modbus map for the Eurotherm 6100 based on the user guide Modbus TCP slave section. Unlike simpler devices, the 6100 exposes a large formula-based address space. This file captures the global registers plus the address formulas and field layouts needed to derive per-channel, per-group, maths, totaliser, and counter registers.",
+  "transport_note": "This manual section documents Modbus TCP slave communications over Ethernet. Function codes 03 and 04 are equivalent in this implementation.",
+  "supported_function_codes": [
+    {
+      "code": 3,
+      "name": "Read holding registers",
+      "note": "Identical to function code 04 on this device."
+    },
+    {
+      "code": 4,
+      "name": "Read input registers",
+      "note": "Identical to function code 03 on this device."
+    },
+    {
+      "code": 6,
+      "name": "Preset single register"
+    },
+    {
+      "code": 8,
+      "name": "Diagnostics",
+      "note": "Subfunction 00 returns query data (loopback)."
+    },
+    {
+      "code": 16,
+      "name": "Preset multiple registers"
+    }
+  ],
+  "address_map": [
+    {
+      "start_address": "0x0001",
+      "end_address": "0x007A",
+      "name": "Instrument data"
+    },
+    {
+      "start_address": "0x007B",
+      "end_address": "0xA1D8",
+      "name": "Point configuration data",
+      "note": "Points 1-75=input channels, 76-175=maths, 176-225=totalisers, 226-255=counters."
+    },
+    {
+      "start_address": "0xA1D9",
+      "end_address": "0xA4D5",
+      "name": "Point run-time data"
+    },
+    {
+      "start_address": "0xA4D6",
+      "end_address": "0xCC25",
+      "name": "Group data"
+    },
+    {
+      "start_address": "0xCC26",
+      "end_address": "0xCCE4",
+      "name": "Feature ID table"
+    },
+    {
+      "start_address": "0xCCE5",
+      "end_address": "0xD0E5",
+      "name": "Read-only indirection table"
+    },
+    {
+      "start_address": "0xD0E6",
+      "end_address": "0xD4E6",
+      "name": "Read-write indirection table"
+    },
+    {
+      "start_address": "0xD4E7",
+      "end_address": "0xF8C2",
+      "name": "IEEE region 32-bit configuration data"
+    },
+    {
+      "start_address": "0xF8C3",
+      "end_address": "0xFCBE",
+      "name": "IEEE region 32-bit run-time data"
+    },
+    {
+      "start_address": "0xFFF0",
+      "end_address": "0xFFF4",
+      "name": "Permanent ID table"
+    }
+  ],
+  "registers": [
+    {
+      "address": 1,
+      "name": "Instrument Type",
+      "category": "instrument",
+      "data_type": "uint16",
+      "register_count": 1,
+      "unit": null,
+      "scale": 1,
+      "offset": 0,
+      "access": "read",
+      "esphome_type": "sensor"
+    },
+    {
+      "address": 2,
+      "name": "Instrument Descriptor",
+      "category": "instrument",
+      "data_type": "string",
+      "register_count": 10,
+      "unit": null,
+      "scale": null,
+      "offset": null,
+      "access": "read",
+      "esphome_type": "text_sensor",
+      "note": "Up to 20 characters."
+    },
+    {
+      "address": 22,
+      "name": "Instrument Status",
+      "category": "instrument",
+      "data_type": "bitfield16",
+      "register_count": 1,
+      "unit": null,
+      "scale": null,
+      "offset": null,
+      "access": "read",
+      "esphome_type": "sensor + binary_sensor",
+      "bits": {
+        "3": "SD/Flash card missing",
+        "4": "SD/Flash card full",
+        "9": "Any channel failure"
+      },
+      "note": "Other bits documented as unused or always zero in the user guide."
+    },
+    {
+      "address": 23,
+      "name": "Config Counter",
+      "category": "instrument",
+      "data_type": "uint16",
+      "register_count": 1,
+      "unit": null,
+      "scale": 1,
+      "offset": 0,
+      "access": "read",
+      "esphome_type": "sensor",
+      "note": "Counts configuration changes; powers up at zero and resets to zero at brown-out."
+    },
+    {
+      "address": 24,
+      "name": "Time",
+      "category": "instrument",
+      "data_type": "double",
+      "register_count": 4,
+      "unit": null,
+      "scale": null,
+      "offset": null,
+      "access": "read",
+      "esphome_type": "sensor",
+      "note": "Current instrument time in UTC format."
+    },
+    {
+      "address": 28,
+      "name": "Date",
+      "category": "instrument",
+      "data_type": "double",
+      "register_count": 4,
+      "unit": null,
+      "scale": null,
+      "offset": null,
+      "access": "read",
+      "esphome_type": "sensor",
+      "note": "Current instrument date in UTC format."
+    },
+    {
+      "address": 32,
+      "name": "Global Alarm Acknowledge",
+      "category": "instrument",
+      "data_type": "uint16",
+      "register_count": 1,
+      "unit": null,
+      "scale": 1,
+      "offset": 0,
+      "access": "write",
+      "esphome_type": "button / lambda",
+      "note": "Writing 1 acknowledges all alarms; other values have no effect."
+    },
+    {
+      "address": 107,
+      "name": "Product Version",
+      "category": "instrument",
+      "data_type": "uint16",
+      "register_count": 1,
+      "unit": null,
+      "scale": null,
+      "offset": null,
+      "access": "read",
+      "esphome_type": "sensor + text_sensor",
+      "note": "Returns HHHH (CNOMO). Example 0x0401 means version 4.01."
+    },
+    {
+      "address": 108,
+      "name": "Serial Number",
+      "category": "instrument",
+      "data_type": "uint32",
+      "register_count": 2,
+      "unit": null,
+      "scale": 1,
+      "offset": 0,
+      "access": "read",
+      "esphome_type": "sensor",
+      "note": "Returns the instrument number in decimal."
+    },
+    {
+      "address": 121,
+      "name": "Company ID",
+      "category": "instrument",
+      "data_type": "uint16",
+      "register_count": 1,
+      "unit": null,
+      "scale": 1,
+      "offset": 0,
+      "access": "read",
+      "esphome_type": "sensor",
+      "note": "Returns 0x0500."
+    },
+    {
+      "address": 122,
+      "name": "Product ID",
+      "category": "instrument",
+      "data_type": "uint16",
+      "register_count": 1,
+      "unit": null,
+      "scale": 1,
+      "offset": 0,
+      "access": "read",
+      "esphome_type": "sensor",
+      "note": "Returns the model number in CNOMO hexadecimal form."
+    }
+  ],
+  "addressing_rules": [
+    {
+      "name": "Input Channel Configuration Block",
+      "point_range": "1..75",
+      "block_length_registers": 162,
+      "base_address_formula": "0x007B + 0x00A2 * (channel_index - 1)",
+      "note": "This block contains the 16-bit configuration data for one analogue input channel.",
+      "fields": [
+        {
+          "offset": 0,
+          "name": "Span High",
+          "data_type": "scaled",
+          "access": "read"
+        },
+        {
+          "offset": 1,
+          "name": "Span Low",
+          "data_type": "scaled",
+          "access": "read"
+        },
+        {
+          "offset": 2,
+          "name": "Zone High",
+          "data_type": "scaled",
+          "access": "read",
+          "note": "Two decimal places."
+        },
+        {
+          "offset": 3,
+          "name": "Zone Low",
+          "data_type": "scaled",
+          "access": "read",
+          "note": "Two decimal places."
+        },
+        {
+          "offset": 4,
+          "name": "PV Type",
+          "data_type": "enum16",
+          "access": "read",
+          "enum": {
+            "1": "Analogue input",
+            "2": "Maths",
+            "3": "Totaliser",
+            "4": "Counter"
+          }
+        },
+        {
+          "offset": 5,
+          "name": "Decimal Places",
+          "data_type": "uint16",
+          "access": "read",
+          "note": "0 to 9. Used by scaled parameters except where stated otherwise."
+        },
+        {
+          "offset": 6,
+          "name": "Colour",
+          "data_type": "enum16",
+          "access": "read",
+          "note": "Channel colour 0..55."
+        },
+        {
+          "offset": 7,
+          "name": "Units",
+          "data_type": "string",
+          "register_count": 3,
+          "access": "read",
+          "note": "String_5."
+        },
+        {
+          "offset": 14,
+          "name": "Open String",
+          "data_type": "string",
+          "register_count": 4,
+          "access": "read",
+          "note": "String_8."
+        },
+        {
+          "offset": 22,
+          "name": "Close String",
+          "data_type": "string",
+          "register_count": 4,
+          "access": "read",
+          "note": "String_8."
+        },
+        {
+          "offset": 30,
+          "name": "Descriptor",
+          "data_type": "string",
+          "register_count": 10,
+          "access": "read",
+          "note": "String_20."
+        },
+        {
+          "offset": 50,
+          "name": "Number Of Alarms",
+          "data_type": "uint16",
+          "access": "read"
+        },
+        {
+          "offset": 51,
+          "name": "PV Format",
+          "data_type": "enum16",
+          "access": "read",
+          "enum": {
+            "0": "Numeric",
+            "1": "Digital strings"
+          }
+        },
+        {
+          "offset": 112,
+          "name": "Alarm 1 Enable",
+          "data_type": "enum16",
+          "access": "read",
+          "enum": {
+            "0": "Off",
+            "1": "Unlatched",
+            "2": "Latched",
+            "3": "Trigger"
+          }
+        },
+        {
+          "offset": 113,
+          "name": "Alarm 1 Type",
+          "data_type": "enum16",
+          "access": "read",
+          "enum": {
+            "0": "Absolute low",
+            "1": "Absolute high",
+            "2": "Deviation in",
+            "3": "Deviation out",
+            "4": "Rate of change rise",
+            "5": "Rate of change fall"
+          }
+        },
+        {
+          "offset": 114,
+          "name": "Alarm 1 Setpoint",
+          "data_type": "scaled",
+          "access": "read_write"
+        },
+        {
+          "offset": 125,
+          "name": "Alarm 2 Enable",
+          "data_type": "enum16",
+          "access": "read"
+        },
+        {
+          "offset": 126,
+          "name": "Alarm 2 Type",
+          "data_type": "enum16",
+          "access": "read"
+        },
+        {
+          "offset": 127,
+          "name": "Alarm 2 Setpoint",
+          "data_type": "scaled",
+          "access": "read_write"
+        },
+        {
+          "offset": 138,
+          "name": "Alarm 3 Enable",
+          "data_type": "enum16",
+          "access": "read"
+        },
+        {
+          "offset": 139,
+          "name": "Alarm 3 Type",
+          "data_type": "enum16",
+          "access": "read"
+        },
+        {
+          "offset": 140,
+          "name": "Alarm 3 Setpoint",
+          "data_type": "scaled",
+          "access": "read_write"
+        },
+        {
+          "offset": 151,
+          "name": "Alarm 4 Enable",
+          "data_type": "enum16",
+          "access": "read"
+        },
+        {
+          "offset": 152,
+          "name": "Alarm 4 Type",
+          "data_type": "enum16",
+          "access": "read"
+        },
+        {
+          "offset": 153,
+          "name": "Alarm 4 Setpoint",
+          "data_type": "scaled",
+          "access": "read_write"
+        }
+      ]
+    },
+    {
+      "name": "Input Channel Run-Time Block",
+      "point_range": "1..75",
+      "block_length_registers": 3,
+      "base_address_formula": "0xA1D9 + 3 * (channel_index - 1)",
+      "note": "16-bit scaled run-time PV, status, and alarm/ack bitmap for input channel N.",
+      "fields": [
+        {
+          "offset": 0,
+          "name": "PV Value",
+          "data_type": "scaled",
+          "access": "read_or_write_if_slave_comms"
+        },
+        {
+          "offset": 1,
+          "name": "Status",
+          "data_type": "enum16",
+          "access": "read",
+          "enum": {
+            "0": "Good PV",
+            "1": "Channel off",
+            "2": "Over range",
+            "3": "Under range",
+            "4": "Hardware error",
+            "5": "Ranging error",
+            "6": "Overflow",
+            "7": "Bad PV",
+            "8": "No data"
+          }
+        },
+        {
+          "offset": 2,
+          "name": "Alarms Bitmap",
+          "data_type": "bitfield16",
+          "access": "read_write",
+          "bits": {
+            "0": "Alarm 1 active",
+            "1": "Alarm 1 acknowledge required",
+            "2": "Write 1 to acknowledge alarm 1",
+            "4": "Alarm 2 active",
+            "5": "Alarm 2 acknowledge required",
+            "6": "Write 1 to acknowledge alarm 2",
+            "8": "Alarm 3 active",
+            "9": "Alarm 3 acknowledge required",
+            "10": "Write 1 to acknowledge alarm 3",
+            "12": "Alarm 4 active",
+            "13": "Alarm 4 acknowledge required",
+            "14": "Write 1 to acknowledge alarm 4"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Input Channel IEEE 32-bit Run-Time Block",
+      "point_range": "1..75",
+      "block_length_registers": 4,
+      "base_address_formula": "0xF8C3 + 4 * (channel_index - 1)",
+      "note": "Floating-point run-time access for input channel N in the IEEE region.",
+      "fields": [
+        {
+          "offset": 0,
+          "name": "PV Value",
+          "data_type": "float32",
+          "register_count": 2,
+          "access": "read_or_write_if_slave_comms"
+        },
+        {
+          "offset": 2,
+          "name": "Status",
+          "data_type": "enum16",
+          "access": "read"
+        },
+        {
+          "offset": 3,
+          "name": "Alarms Bitmap",
+          "data_type": "bitfield16",
+          "access": "read_write"
+        }
+      ]
+    },
+    {
+      "name": "Maths Channel Blocks",
+      "point_range": "1..100",
+      "note": "Maths channels are points 76..175 in the recorder. Their dedicated tables use maths-channel numbering 1..100.",
+      "configuration_base_formula": "0x2FF1 + 0x00A2 * (maths_index - 1)",
+      "runtime_base_formula": "0xA2BA + 3 * (maths_index - 1)",
+      "runtime_float_base_formula": "0xF9EF + 4 * (maths_index - 1)",
+      "field_layout": "Same pattern as channel configuration and run-time blocks, with maths-specific point numbering."
+    },
+    {
+      "name": "Totaliser Blocks",
+      "point_range": "1..50",
+      "note": "Totalisers are points 176..225 in the recorder. Their dedicated tables use totaliser numbering 1..50.",
+      "configuration_base_formula": "0x6F39 + 0x00A2 * (totaliser_index - 1)",
+      "runtime_base_formula": "0xA3E6 + 3 * (totaliser_index - 1)",
+      "runtime_float_base_formula": "0xFB7F + 4 * (totaliser_index - 1)",
+      "field_layout": "Same pattern as channel configuration and run-time blocks, with totaliser-specific numbering."
+    },
+    {
+      "name": "Counter Blocks",
+      "point_range": "1..30",
+      "note": "Counters are points 226..255 in the recorder. Their dedicated tables use counter numbering 1..30.",
+      "configuration_base_formula": "0x8EDD + 0x00A2 * (counter_index - 1)",
+      "runtime_base_formula": "0xA47C + 3 * (counter_index - 1)",
+      "runtime_float_base_formula": "0xFC47 + 4 * (counter_index - 1)",
+      "field_layout": "Same pattern as channel configuration and run-time blocks, with counter-specific numbering."
+    },
+    {
+      "name": "Group Data Block",
+      "group_range": "1..12",
+      "block_length_registers": 629,
+      "base_address_formula": "0xA4D6 + 0x0275 * (group_index - 1)",
+      "note": "Group N data includes trend settings, membership, text transfer, and batch control.",
+      "fields": [
+        {
+          "offset": 0,
+          "name": "Trend Type",
+          "data_type": "enum16",
+          "access": "read",
+          "enum": {
+            "0": "Interpolation enabled",
+            "1": "Adaptive recording enabled"
+          }
+        },
+        {
+          "offset": 1,
+          "name": "Trend Rate",
+          "data_type": "uint32",
+          "register_count": 2,
+          "unit": "ms",
+          "access": "read"
+        },
+        {
+          "offset": 3,
+          "name": "Archive Rate",
+          "data_type": "uint32",
+          "register_count": 2,
+          "unit": "ms",
+          "access": "read"
+        },
+        {
+          "offset": 5,
+          "name": "Descriptor",
+          "data_type": "string",
+          "register_count": 10,
+          "access": "read",
+          "note": "String_20."
+        },
+        {
+          "offset": 25,
+          "name": "Channels In Group",
+          "data_type": "bitfield16 x 16",
+          "register_count": 16,
+          "access": "read",
+          "note": "Each register covers 16 points. Register 1 covers points 1..16; register 16 covers points 241..256."
+        },
+        {
+          "offset": 41,
+          "name": "Text Length",
+          "data_type": "uint16",
+          "access": "read_write",
+          "note": "Non-zero means a new message is pending; host should read text then reset length to zero."
+        },
+        {
+          "offset": 42,
+          "name": "Text Time Stamp",
+          "data_type": "double",
+          "register_count": 4,
+          "access": "read",
+          "note": "UTC format."
+        },
+        {
+          "offset": 46,
+          "name": "Read Text",
+          "data_type": "string",
+          "register_count": 30,
+          "access": "read",
+          "note": "String_60. Long messages are delivered as chained chunks."
+        },
+        {
+          "offset": 106,
+          "name": "Write Text",
+          "data_type": "string",
+          "register_count": 30,
+          "access": "write",
+          "note": "String_60 written to the instrument display."
+        },
+        {
+          "offset": 166,
+          "name": "Batch Start",
+          "data_type": "boolean",
+          "register_count": 1,
+          "access": "write",
+          "note": "Write 1 to start a new batch."
+        },
+        {
+          "offset": 167,
+          "name": "Batch Stop",
+          "data_type": "boolean",
+          "register_count": 1,
+          "access": "write",
+          "note": "Write 1 to stop the current batch."
+        },
+        {
+          "offset": 168,
+          "name": "Batch Running",
+          "data_type": "boolean",
+          "register_count": 1,
+          "access": "read",
+          "note": "1 = running, 0 = not running."
+        },
+        {
+          "offset": 169,
+          "name": "Batch Text Field 1",
+          "data_type": "string",
+          "register_count": 30,
+          "access": "read_write",
+          "note": "String_60."
+        },
+        {
+          "offset": 229,
+          "name": "Batch Text Field 2",
+          "data_type": "string",
+          "register_count": 30,
+          "access": "read_write",
+          "note": "String_60."
+        },
+        {
+          "offset": 289,
+          "name": "Batch Text Field 3",
+          "data_type": "string",
+          "register_count": 30,
+          "access": "read_write",
+          "note": "String_60."
+        },
+        {
+          "offset": 349,
+          "name": "Batch Text Field 4",
+          "data_type": "string",
+          "register_count": 30,
+          "access": "read_write",
+          "note": "String_60."
+        },
+        {
+          "offset": 409,
+          "name": "Batch Text Field 5",
+          "data_type": "string",
+          "register_count": 30,
+          "access": "read_write",
+          "note": "String_60."
+        },
+        {
+          "offset": 469,
+          "name": "Batch Text Field 6",
+          "data_type": "string",
+          "register_count": 30,
+          "access": "read_write",
+          "note": "String_60."
+        }
+      ]
+    }
+  ]
+}
