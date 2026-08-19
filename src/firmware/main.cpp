@@ -288,8 +288,10 @@ int main(void)
         oled_write("[FLASH] ID read fail");
     }
 
-    {
-        JsonDocument doc;
+    if (!sdram_json_allocator_init()) {
+        oled_write("[JSON] alloc init fail");
+    } else {
+        JsonDocument doc(&g_sdram_json_allocator);
         doc["test"] = 123;
         char buffer[128] = {};
         const size_t n = serializeJson(doc, buffer, sizeof(buffer));
@@ -298,14 +300,6 @@ int main(void)
         } else {
             oled_write("[JSON] serialize fail");
         }
-    }
-
-    // Temporary isolation point: hold CPU after JSON smoke test so we can
-    // confirm whether resets come from later runtime code (Modbus/NodeNet loop).
-    oled_write("[JSON] hold");
-    while (1) {
-        ledGreen.blink(500u);
-        *LED_D2 = 0u;
     }
 
     while (1) {
