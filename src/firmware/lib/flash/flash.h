@@ -22,6 +22,8 @@ public:
   bool eraseSector(uint32_t sectorBase) const;
   bool readUniqueId(uint8_t uid8[8]) const;
   bool readUniqueIdAscii(char* out, std::size_t out_size) const;
+  uint32_t lastErrorCode() const;
+  uint32_t lastStatusSnapshot() const;
 
   // Optional helper for cleanup/format of the parameter partition.
   bool clearAll();

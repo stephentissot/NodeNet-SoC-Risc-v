@@ -37,14 +37,15 @@ _start:
 .Lbss_done:
 
     # Call global C++ constructors (.init_array)
-    # Required for any global/static objects with constructors (e.g. ArduinoJson)
-    la   a0, __init_array_start
-    la   a1, __init_array_end
+    # Keep loop state in callee-saved registers because constructors are free
+    # to clobber a0-a7/t0-t6 under the RISC-V ABI.
+    la   s0, __init_array_start
+    la   s1, __init_array_end
 .Lctor_loop:
-    beq  a0, a1, .Lctor_done
-    lw   t0, 0(a0)
+    beq  s0, s1, .Lctor_done
+    lw   t0, 0(s0)
+    addi s0, s0, 4
     jalr t0
-    addi a0, a0, 4
     j    .Lctor_loop
 .Lctor_done:
 

@@ -40,12 +40,19 @@ static constexpr uint32_t kSelftestExpected = kSelftestRegBase + 0xCu;
 static constexpr uint32_t kSelftestObserved = kSelftestRegBase + 0x10u;
 static constexpr uint32_t kSelftestProgress = kSelftestRegBase + 0x14u;
 static constexpr uint32_t kSelftestDiag = kSelftestRegBase + 0x1Cu;
+static constexpr uint32_t kFlashRegStatusOff = 0x00u;
+static constexpr uint32_t kFlashStatBusy = (1u << 0);
+static constexpr uint32_t kFlashStatReady = (1u << 1);
+static constexpr uint32_t kFlashStatTimeoutError = (1u << 2);
+static constexpr uint32_t kFlashStatSpiWaiting = (1u << 3);
+static constexpr uint32_t kFlashStatPageBufferOverflow = (1u << 4);
 
 // Keep stage0 image outside FPGA config + parameter/KV regions.
 static constexpr uint32_t kImageFlashBase = 0x00244000u;
 // Debug probe: patch SDRAM entry with a tiny known-good RV32 stub before jump.
 // This only modifies SDRAM runtime image (flash image is untouched).
 static constexpr bool kPatchEntryProbe = false;
+static constexpr bool kFlashPathDiagOnly = false;
 
 static constexpr uint32_t kSdramMin = SDRAM_BASE;
 static constexpr uint32_t kSdramMax = SDRAM_BASE + SDRAM_SIZE;
@@ -61,6 +68,9 @@ static uint32_t g_sdram_hardtest_diag = 0u;
 static uint32_t g_sdram_tailmerge_expected = 0u;
 static uint32_t g_sdram_tailmerge_observed = 0u;
 static uint32_t g_sdram_tailmerge_stage = 0u;
+static uint8_t g_header_read_d2_diag = 0u;
+static uint32_t g_header_read_driver_err = 0u;
+static uint32_t g_header_read_driver_status = 0u;
 
 enum class BootFault : uint8_t {
     None = 0,
@@ -97,7 +107,11 @@ enum class BootFault : uint8_t {
     SdramPartialByte1Lane0 = 32,
     SdramPartialByte1Lane2 = 33,
     SdramPartialByte1Lane3 = 34,
-    SdramPartialByte1Other = 35,    
+    SdramPartialByte1Other = 35,
+    HeaderReadTimeout = 36,
+    HeaderReadOverflow = 37,
+    HeaderReadBusyStuck = 38,
+    HeaderReadSpiWait = 39,
     SdramAtomicWriteTimeout = 40,
     SdramAtomicWriteNoEffect = 41,
     SdramAtomicReadTimeout = 42,
@@ -131,6 +145,60 @@ enum class BootFault : uint8_t {
 static WbLed boot_green_led(void);
 static WbLed boot_yellow_led(void);
 static BootFault sdram_atomic_observed_fault(uint32_t expected, uint32_t observed);
+static inline uint32_t mmio_read32(uint32_t addr);
+
+static BootFault header_read_fault_from_flash_status(void)
+{
+    if (g_header_read_driver_err == 1u) {
+        g_header_read_d2_diag = 7u;
+        return BootFault::HeaderRead;
+    }
+    if (g_header_read_driver_err == 2u) {
+        g_header_read_d2_diag = 8u;
+        return BootFault::HeaderRead;
+    }
+    if (g_header_read_driver_err == 3u) {
+        if ((g_header_read_driver_status & kFlashStatTimeoutError) != 0u) {
+            g_header_read_d2_diag = 2u;
+            return BootFault::HeaderReadTimeout;
+        }
+        if ((g_header_read_driver_status & kFlashStatPageBufferOverflow) != 0u) {
+            g_header_read_d2_diag = 3u;
+            return BootFault::HeaderReadOverflow;
+        }
+        if ((g_header_read_driver_status & kFlashStatBusy) != 0u &&
+            (g_header_read_driver_status & kFlashStatReady) == 0u) {
+            g_header_read_d2_diag = 4u;
+            return BootFault::HeaderReadBusyStuck;
+        }
+        if ((g_header_read_driver_status & kFlashStatSpiWaiting) != 0u) {
+            g_header_read_d2_diag = 5u;
+            return BootFault::HeaderReadSpiWait;
+        }
+        g_header_read_d2_diag = 9u;
+        return BootFault::HeaderRead;
+    }
+
+    const uint32_t st = mmio_read32(kFlashBase + kFlashRegStatusOff);
+    if ((st & kFlashStatTimeoutError) != 0u) {
+        g_header_read_d2_diag = 2u;
+        return BootFault::HeaderReadTimeout;
+    }
+    if ((st & kFlashStatPageBufferOverflow) != 0u) {
+        g_header_read_d2_diag = 3u;
+        return BootFault::HeaderReadOverflow;
+    }
+    if ((st & kFlashStatBusy) != 0u && (st & kFlashStatReady) == 0u) {
+        g_header_read_d2_diag = 4u;
+        return BootFault::HeaderReadBusyStuck;
+    }
+    if ((st & kFlashStatSpiWaiting) != 0u) {
+        g_header_read_d2_diag = 5u;
+        return BootFault::HeaderReadSpiWait;
+    }
+    g_header_read_d2_diag = 6u;
+    return BootFault::HeaderRead;
+}
 
 static constexpr bool kMinimalLedTrace = (STAGE0_MINIMAL_LED_TRACE != 0);
 static constexpr bool kScrubValidationRanges = (STAGE0_SCRUB_VALIDATION_RANGES != 0);
@@ -558,12 +626,21 @@ private:
         if (cache_valid_ && page_base == cached_page_base_) {
             return true;
         }
-        if (!flash_.readPage(page_base, page_cache_)) {
-            return false;
+        // Some boards expose occasional transient read failures right after
+        // early boot/reset; retry a few times before raising HeaderRead.
+        for (uint8_t attempt = 0; attempt < 4u; ++attempt) {
+            if (flash_.readPage(page_base, page_cache_)) {
+                cached_page_base_ = page_base;
+                cache_valid_ = true;
+                return true;
+            }
+            g_header_read_driver_err = flash_.lastErrorCode();
+            g_header_read_driver_status = flash_.lastStatusSnapshot();
+            for (volatile uint32_t i = 0; i < 20000u; ++i) {
+                // brief backoff between retries
+            }
         }
-        cached_page_base_ = page_base;
-        cache_valid_ = true;
-        return true;
+        return false;
     }
 
     Flash flash_;
@@ -794,6 +871,32 @@ static void boot_fault_hex_word(uint32_t value,
      */
 
     while (true) {
+        const bool is_header_fault = (fault == BootFault::HeaderRead ||
+                                      fault == BootFault::HeaderReadTimeout ||
+                                      fault == BootFault::HeaderReadOverflow ||
+                                      fault == BootFault::HeaderReadBusyStuck ||
+                                      fault == BootFault::HeaderReadSpiWait);
+
+        // For HeaderRead family, use D2-only diagnostic pulses to avoid
+        // ambiguity with board-specific yellow LED visibility/behavior.
+        if (is_header_fault) {
+            const uint8_t code_d2 = (g_header_read_d2_diag != 0u) ? g_header_read_d2_diag : 1u;
+            d2_pulse_count(code_d2, 320000u, 260000u);
+            spin_delay(1200000u);
+            continue;
+        }
+
+        // D2-only universal fault encoding (decimal): tens, then units.
+        // This is the primary field diagnostic when green LED visibility is poor.
+        if (tens != 0u) {
+            d2_pulse_count(tens, 220000u, 180000u);
+        }
+        spin_delay(500000u);
+        if (units != 0u) {
+            d2_pulse_count(units, 220000u, 180000u);
+        }
+        spin_delay(900000u);
+
         // Human-readable fault encoding only:
         // - Green LED: decimal tens digit (0 => no pulse).
         // - Yellow LED: decimal units digit (0 => no pulse).
@@ -1542,13 +1645,13 @@ static void install_entry_probe(uint32_t entry_addr)
 {
     // RV32I stub:
     //   lui  t0, 0x10000      ; t0 = 0x10000000 (LED MMIO)
-    //   addi t1, x0, 1
-    //   sw   t1, 0(t0)        ; LED ON
+    //   addi t1, x0, 6
+    //   sw   t1, 0(t0)        ; force LED default ON
     //   lui  t0, 0x00010      ; t0 = 0x00010000 (internal SRAM probe)
     //   jalr x0, t0, 0        ; leave SDRAM and loop from SRAM
     volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(entry_addr);
     p[0] = 0x100002B7u;
-    p[1] = 0x00100313u;
+    p[1] = 0x00600313u;
     p[2] = 0x0062A023u;
     p[3] = 0x000102B7u;
     p[4] = 0x00028067u;
@@ -1560,9 +1663,9 @@ extern "C" int main(void)
 {
     boot_set_validation_state(false, false);
 
-    // Build signature pulse train: if you still observe the old single pulse,
-    // the programmed bitstream/ROM is stale.
-    d2_pulse_count(3u, 180000u, 180000u);
+    // Build signature pulse: one long D2 pulse at boot.
+    // HeaderRead diagnostics use short D2 burst counts later in the loop.
+    d2_pulse_count(1u, 700000u, 700000u);
     spin_delay(300000u);
 
     // Wait until SDRAM controller reports init completion.
@@ -1578,7 +1681,7 @@ extern "C" int main(void)
         boot_fault_loop(BootFault::SdramInitError);
     }
 
-    {
+    if (!kFlashPathDiagOnly) {
         const BootFault hard_test_fault = wait_sdram_hard_test_done(8000000u);
         if (hard_test_fault != BootFault::None) {
             if (hard_test_fault == BootFault::SdramHardTestCoreTimeout) {
@@ -1602,16 +1705,20 @@ extern "C" int main(void)
         }
     }
 
-    boot_set_validation_state(true, false);
-    sdram_scrub_validation_regions();
+    if (!kFlashPathDiagOnly) {
+        boot_set_validation_state(true, false);
+        sdram_scrub_validation_regions();
 
-    const BootFault sdram_fault = run_sdram_validation();
-    if (sdram_fault != BootFault::None) {
-        boot_fault_loop(sdram_fault);
+        const BootFault sdram_fault = run_sdram_validation();
+        if (sdram_fault != BootFault::None) {
+            boot_fault_loop(sdram_fault);
+        }
+
+        boot_set_validation_state(false, true);
+        boot_progress_pulse(2);
+    } else {
+        boot_set_validation_state(false, true);
     }
-
-    boot_set_validation_state(false, true);
-    boot_progress_pulse(2);
 
     boot_set_copy_state();
 
@@ -1620,7 +1727,7 @@ extern "C" int main(void)
     fw_image_header_t hdr = {};
     boot_flash_checkpoint(1u);
     if (!reader.readBytes(kImageFlashBase, reinterpret_cast<uint8_t*>(&hdr), sizeof(hdr))) {
-        boot_fault_loop(BootFault::HeaderRead);
+        boot_fault_loop(header_read_fault_from_flash_status());
     }
     boot_flash_checkpoint(2u);
 
@@ -1628,6 +1735,15 @@ extern "C" int main(void)
     if (hdr_fault != BootFault::None) {
         boot_fault_loop(hdr_fault);
     }
+
+    if (kFlashPathDiagOnly) {
+        // Header path verified: emit 4 short D2 pulses then hold.
+        while (true) {
+            d2_pulse_count(4u, 180000u, 180000u);
+            spin_delay(800000u);
+        }
+    }
+
     boot_flash_checkpoint(3u);
 
     // Header parsed and validated.

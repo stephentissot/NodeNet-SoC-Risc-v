@@ -10,6 +10,8 @@ namespace {
 
 // waitReady timeout counts MMIO polling iterations, not raw FPGA clock cycles.
 static constexpr uint32_t kTimeoutCycles = 8000000u;
+static volatile uint32_t g_last_error_code = 0u;
+static volatile uint32_t g_last_status_snapshot = 0u;
 
 }  // namespace
 
@@ -148,28 +150,42 @@ bool Flash::isSafeWriteAddress(uint32_t flashOffset) const {
 }
 
 bool Flash::waitReady() const {
-  uint32_t timeout = kTimeoutCycles;
-  while (timeout-- != 0u) {
-    const uint32_t status = reg(kRegStatus);
-    if ((status & kStatTimeoutError) != 0u) {
-      return false;
-    }
-    if ((status & kStatPageBufferOverflow) != 0u) {
-      return false;
-    }
-    if ((status & kStatBusy) == 0u) {
-      return true;
+  // wb_flash exposes sticky error bits; clear them once if seen while idle.
+  for (uint8_t recover = 0; recover < 2u; ++recover) {
+    uint32_t timeout = kTimeoutCycles;
+    while (timeout-- != 0u) {
+      const uint32_t status = reg(kRegStatus);
+      const bool busy = (status & kStatBusy) != 0u;
+      const bool had_error = (status & (kStatTimeoutError | kStatPageBufferOverflow)) != 0u;
+
+      if (!had_error && !busy) {
+        return true;
+      }
+
+      if (had_error && !busy) {
+        // Any write to control when idle clears timeout/overflow in wb_flash.
+        reg(kRegControl) = 0u;
+        break;
+      }
     }
   }
+
   return false;
 }
 
 bool Flash::readPage(uint32_t pageBase, uint8_t* out256) const {
+  g_last_error_code = 0u;
+  g_last_status_snapshot = reg(kRegStatus);
+
   if (out256 == nullptr || (pageBase % kPageSize) != 0u || !isSafeReadAddress(pageBase)) {
+    g_last_error_code = 1u; // precondition failure
+    g_last_status_snapshot = reg(kRegStatus);
     return false;
   }
 
   if (!waitReady()) {
+    g_last_error_code = 2u; // controller not ready before READ command
+    g_last_status_snapshot = reg(kRegStatus);
     return false;
   }
 
@@ -177,6 +193,8 @@ bool Flash::readPage(uint32_t pageBase, uint8_t* out256) const {
   reg(kRegControl) = kCtrlRead;
 
   if (!waitReady()) {
+    g_last_error_code = 3u; // READ command did not complete
+    g_last_status_snapshot = reg(kRegStatus);
     return false;
   }
 
@@ -185,6 +203,14 @@ bool Flash::readPage(uint32_t pageBase, uint8_t* out256) const {
   }
 
   return true;
+}
+
+uint32_t Flash::lastErrorCode() const {
+  return g_last_error_code;
+}
+
+uint32_t Flash::lastStatusSnapshot() const {
+  return g_last_status_snapshot;
 }
 
 bool Flash::writePage(uint32_t pageBase, const uint8_t* in256) const {

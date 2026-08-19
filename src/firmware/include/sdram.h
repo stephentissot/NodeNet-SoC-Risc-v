@@ -14,7 +14,7 @@
  *
  *   SDRAM_DATA uint8_t  large_buffer[512 * 1024];  // Placed at 0x20000000+
  *   SDRAM_DATA uint32_t modbus_log[4096];
- *   SDRAM_DATA StaticJsonDocument<65536> json_doc;  // C++ only
+ *   JsonDocument json_doc(&g_sdram_json_allocator); // C++ only
  *
  * The linker assigns exact addresses automatically (starts at 0x20000000).
  * Variables are placed in order of declaration across translation units.
@@ -28,6 +28,17 @@
 #define SDRAM_H
 
 #include <stdint.h>
+
+#ifdef __cplusplus
+#include <stddef.h>
+#include <cstdlib>
+extern "C" {
+void* malloc(size_t);
+void free(void*);
+void* realloc(void*, size_t);
+}
+#include <ArduinoJson/Memory/Allocator.hpp>
+#endif
 
 /* ── Placement macro ──────────────────────────────────────────────────────── */
 
@@ -63,6 +74,53 @@ extern char _sdram_end;
 /* Dedicated destructive test area in SDRAM, reserved outside code/data use. */
 #define SDRAM_TEST_SCRATCH_WORDS 4096u
 extern SDRAM_DATA volatile uint32_t g_sdram_test_scratch_words[SDRAM_TEST_SCRATCH_WORDS];
+
+#ifdef __cplusplus
+
+/* ArduinoJson SDRAM allocator pool (default 256 KiB). */
+#define SDRAM_JSON_POOL_SIZE (256UL * 1024UL)
+
+class SdramJsonAllocator : public ArduinoJson::Allocator {
+public:
+    SdramJsonAllocator();
+
+    void init(void* pool, size_t pool_size);
+    bool isInitialized() const;
+
+    void* allocate(size_t size) override;
+    void deallocate(void* ptr) override;
+    void* reallocate(void* ptr, size_t new_size) override;
+
+private:
+    struct BlockHeader {
+        size_t size;
+        BlockHeader* next;
+        BlockHeader* prev;
+        uint32_t used;
+    };
+
+    static constexpr uint32_t kUsedTag = 0x51A7A110u;
+    static constexpr uint32_t kFreeTag = 0xFEEE0000u;
+
+    void* pool_base_;
+    size_t pool_size_;
+    BlockHeader* head_;
+    bool initialized_;
+
+    static size_t alignUp(size_t value, size_t alignment);
+    static BlockHeader* blockFromPayload(void* payload);
+    static void* payloadFromBlock(BlockHeader* block);
+    void splitBlock(BlockHeader* block, size_t wanted_size);
+    void coalesce(BlockHeader* block);
+};
+
+extern SDRAM_DATA alignas(8) uint8_t g_sdram_json_pool[SDRAM_JSON_POOL_SIZE];
+extern SdramJsonAllocator g_sdram_json_allocator;
+
+/* Must be called after sdram_wait_ready() and before first JsonDocument use. */
+bool sdram_json_allocator_init(void);
+
+#endif
 
 static inline volatile uint32_t* sdram_test_scratch_words(void)
 {

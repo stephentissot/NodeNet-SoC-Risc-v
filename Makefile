@@ -29,6 +29,7 @@ FLASH_TOTAL_BYTES=0x800000
 FW_IMAGE_SLOT_BYTES=0x5BC000
 FW_IMAGE_VERIFY_TOOL=src/firmware/tools/verify_firmware_image.py
 FW_IMAGE_TEST_TOOL=src/firmware/tools/make_boot_test_images.py
+FW_SKIP_RESET ?= 0
 FIRMWARE_PREV_HEX=$(BUILD)/nodenet_riscv.prev.hex
 FIRMWARE_PADDED_HEX=$(BUILD)/nodenet_riscv.padded.hex
 FIRMWARE_PREV_PADDED_HEX=$(BUILD)/nodenet_riscv.prev_padded.hex
@@ -200,11 +201,15 @@ flash-fw-write-image:
 		exit 2; \
 	fi
 	@ofl_verify=""; \
+	ofl_reset=""; \
 	if [ "$(FW_STRICT_VERIFY)" = "1" ]; then \
 		ofl_verify="--verify"; \
 	fi; \
-	echo "[FWIMG] openFPGALoader write offset=$(FW_IMAGE_FLASH_OFFSET) strict=$(FW_STRICT_VERIFY)"; \
-	openFPGALoader -b colorlight-i9 -f --skip-reset --unprotect-flash $$ofl_verify -o $(FW_IMAGE_FLASH_OFFSET) $(IMAGE_TO_FLASH)
+	if [ "$(FW_SKIP_RESET)" = "1" ]; then \
+		ofl_reset="--skip-reset"; \
+	fi; \
+	echo "[FWIMG] openFPGALoader write offset=$(FW_IMAGE_FLASH_OFFSET) strict=$(FW_STRICT_VERIFY) skip_reset=$(FW_SKIP_RESET)"; \
+	openFPGALoader -b colorlight-i9 -f $$ofl_reset --unprotect-flash $$ofl_verify -o $(FW_IMAGE_FLASH_OFFSET) $(IMAGE_TO_FLASH)
 
 # End-to-end firmware-only cycle: build+verify image, program flash partition, then
 # reload the current bitstream in SRAM to restart stage0 without synthesis/P&R.
@@ -322,8 +327,9 @@ ram-fw:
 		ecppack --compress $(FW_PATCH_CONFIG) $(FW_PATCH_BIT); then \
 		openFPGALoader -b colorlight-i9 $(FW_PATCH_BIT); \
 	else \
-		echo "ecpbram patch failed, fallback to full rebuild/program (make ram)."; \
-		$(MAKE) ram; \
+		echo "ecpbram patch failed, fallback to full bitstream rebuild/program (make all + make ram-fast)."; \
+		$(MAKE) all; \
+		$(MAKE) ram-fast; \
 	fi
 
 

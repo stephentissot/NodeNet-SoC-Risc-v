@@ -53,6 +53,8 @@ FLASH_DIR=lib/flash
 FLASH_SRC=$(FLASH_DIR)/flash.cpp
 FLASH_OBJ=$(BUILD)/flash.o
 BOOT_FLASH_OBJ=$(BUILD)/flash_boot.o
+ARDUINOJSON_DIR=lib/ArduinoJson
+ARDUINOJSON_INC=$(ARDUINOJSON_DIR)/src
 FLASHDB_DIR=lib/FlashDB-2.2.0
 FLASHDB_INC=$(FLASHDB_DIR)/inc
 FLASHDB_SRC_DIR=$(FLASHDB_DIR)/src
@@ -78,8 +80,12 @@ CFLAGS=-march=rv32im -mabi=ilp32 \
 	-I$(FLASH_DIR) \
         -I$(SERIAL_DIR) \
 	-I$(MODBUS_DIR) \
+	-I$(ARDUINOJSON_INC) \
         -I$(FLASHDB_INC) \
        -Iinclude \
+	-DARDUINOJSON_ENABLE_STD_STREAM=0 \
+	-DARDUINOJSON_ENABLE_STD_STRING=0 \
+	-DARDUINOJSON_ENABLE_STRING_VIEW=0 \
        -DFIRMWARE_VERSION='"$(VERSION)-$(GIT_HASH)"'
 
 # C++ flags: no exceptions, no RTTI (keeps code small on bare-metal)

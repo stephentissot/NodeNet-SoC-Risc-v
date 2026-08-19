@@ -4,3 +4,6 @@
 [submodule "src/verilog-i2c"]
 	path = src/verilog-i2c
 	url = https://github.com/stephentissot/verilog-i2c.git
+[submodule "src/firmware/lib/ArduinoJson"]
+	path = src/firmware/lib/ArduinoJson
+	url = https://github.com/bblanchon/ArduinoJson.git

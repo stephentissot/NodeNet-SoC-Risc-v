@@ -1,13 +1,15 @@
 #include <cstdint>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
+#include "sdram.h"
+#include <ArduinoJson.h>
 #include "bigsister.h"
 #include "led.h"
 #include "i2c.h"
 #include "u8g2.h"
 #include "u8g2_hal.h"
 #include "version.h"
-#include "sdram.h"
 #include "nodenet.h"
 #include "ModbusMaster.h"
 #include "flash.h"
@@ -284,6 +286,26 @@ int main(void)
         oled_print("[FLASH] ID %s", device_id);
     } else {
         oled_write("[FLASH] ID read fail");
+    }
+
+    {
+        JsonDocument doc;
+        doc["test"] = 123;
+        char buffer[128] = {};
+        const size_t n = serializeJson(doc, buffer, sizeof(buffer));
+        if (n > 0u && n < sizeof(buffer)) {
+            oled_print("[JSON] %s", buffer);
+        } else {
+            oled_write("[JSON] serialize fail");
+        }
+    }
+
+    // Temporary isolation point: hold CPU after JSON smoke test so we can
+    // confirm whether resets come from later runtime code (Modbus/NodeNet loop).
+    oled_write("[JSON] hold");
+    while (1) {
+        ledGreen.blink(500u);
+        *LED_D2 = 0u;
     }
 
     while (1) {
