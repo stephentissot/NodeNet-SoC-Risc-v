@@ -63,6 +63,7 @@
 #define NODENET_STATUS_OFS   0x18u
 #define NODENET_LED_CFG_OFS  0x1Cu
 #define NODENET_UART_BAUD_OFS 0x20u
+#define NODENET_IRQ_CTRL_OFS 0x24u
 
 #define NODENET_MAX_PAYLOAD_SIZE 2048u
 
@@ -104,14 +105,22 @@ enum NodeNetPriority {
 class NodeNet {
 public:
   using StatusCallback = void (*)(uint8_t line, const char* text);
+  using MessageCallback = void (*)(const NodeNetMessage& msg);
 
   explicit NodeNet(uint32_t base,
                    uint8_t addr,
                    uint32_t uart_baud,
                    NodeNetPriority priority,
-                   uint32_t led_blink_ms = 100u);
+                   uint32_t led_blink_ms = 100u,
+                   MessageCallback broadcastCallback = nullptr,
+                   MessageCallback messageCallback = nullptr);
 
-  void Init(uint8_t addr, uint32_t uart_baud, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
+  void Init(uint8_t addr,
+            uint32_t uart_baud,
+            NodeNetPriority priority,
+            uint32_t led_blink_ms = 100u,
+            MessageCallback broadcastCallback = nullptr,
+            MessageCallback messageCallback = nullptr);
 
   uint32_t Status() const;
 
@@ -131,11 +140,16 @@ public:
 
   void Broadcast(const char* str) const;
 
+  void SetCallbacks(MessageCallback broadcastCallback,
+                    MessageCallback messageCallback);
+
   NodeNetMessage ReadMessage() const;
 
   static void FreeMessage(NodeNetMessage& msg);
 
   bool test(StatusCallback callback = nullptr);
+
+  void HandleInterrupt();
 
 
 private:
@@ -143,6 +157,8 @@ private:
   uint8_t node_addr_ = 0;
   uint32_t uart_baud_ = 0;
   NodeNetPriority priority_ = NODENET_PRIORITY_NORMAL;
+  MessageCallback broadcast_callback_ = nullptr;
+  MessageCallback message_callback_ = nullptr;
 
   static uint32_t ComputeUartDivisor(uint32_t baudrate);
 

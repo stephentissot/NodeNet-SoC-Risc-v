@@ -2,23 +2,70 @@
 
 #include <cstring>
 
+namespace {
+NodeNet* g_nodenet_irq_instance = nullptr;
+uint8_t g_nodenet_irq_payload[NODENET_MAX_PAYLOAD_SIZE + 1u] = {};
+
+inline void Picorv32UnmaskAllIrqs() {
+  asm volatile(".word 0x0600000b" ::: "memory");
+}
+
+inline void ApplyNodeNetIrqConfig(uint32_t base,
+                                  NodeNet::MessageCallback broadcastCallback,
+                                  NodeNet::MessageCallback messageCallback) {
+  if (broadcastCallback != nullptr || messageCallback != nullptr) {
+    Picorv32UnmaskAllIrqs();
+  }
+
+  *(volatile uint32_t*)(base + NODENET_IRQ_CTRL_OFS) =
+      (messageCallback != nullptr ? 0x1u : 0u) |
+      (broadcastCallback != nullptr ? 0x2u : 0u);
+}
+}
+
+extern "C" void nodenet_irq_dispatch(void) {
+  if (g_nodenet_irq_instance != nullptr) {
+    g_nodenet_irq_instance->HandleInterrupt();
+  }
+}
+
 NodeNet::NodeNet(uint32_t base,
                  uint8_t addr,
                  uint32_t uart_baud,
                  NodeNetPriority priority,
-                 uint32_t led_blink_ms)
+                 uint32_t led_blink_ms,
+                 MessageCallback broadcastCallback,
+                 MessageCallback messageCallback)
     : base_(base) {
-  Init(addr, uart_baud, priority, led_blink_ms);
+  Init(addr, uart_baud, priority, led_blink_ms, broadcastCallback, messageCallback);
 }
 
-void NodeNet::Init(uint8_t addr, uint32_t uart_baud, NodeNetPriority priority, uint32_t led_blink_ms) {
+void NodeNet::Init(uint8_t addr,
+                   uint32_t uart_baud,
+                   NodeNetPriority priority,
+                   uint32_t led_blink_ms,
+                   MessageCallback broadcastCallback,
+                   MessageCallback messageCallback) {
   node_addr_ = addr;
   uart_baud_ = uart_baud;
   priority_ = priority;
+  broadcast_callback_ = broadcastCallback;
+  message_callback_ = messageCallback;
+  g_nodenet_irq_instance = this;
   Write(NODENET_UART_BAUD_OFS, ComputeUartDivisor(uart_baud));
   Write(NODENET_CONFIG_OFS, ((uint32_t)priority << 8) | (uint32_t)addr);
   Write(NODENET_LED_CFG_OFS, led_blink_ms);
+  ApplyNodeNetIrqConfig(base_, broadcast_callback_, message_callback_);
   Write(NODENET_CONTROL_OFS, 0x2u);
+}
+
+void NodeNet::SetCallbacks(MessageCallback broadcastCallback,
+                           MessageCallback messageCallback) {
+  broadcast_callback_ = broadcastCallback;
+  message_callback_ = messageCallback;
+  g_nodenet_irq_instance = this;
+  Write(NODENET_CONTROL_OFS, 0x2u);
+  ApplyNodeNetIrqConfig(base_, broadcast_callback_, message_callback_);
 }
 
 uint32_t NodeNet::Status() const {
@@ -170,6 +217,53 @@ bool NodeNet::test(StatusCallback callback) {
 
   const bool rx_ok = (status_snapshot & (NODENET_STATUS_RX_ERROR | NODENET_STATUS_RX_OVERFLOW)) == 0u;
   return baud_ok && saw_tx_activity && tx_returned_idle && rx_ok;
+}
+
+void NodeNet::HandleInterrupt() {
+  if (!HasMessage()) {
+    return;
+  }
+
+  uint32_t header = Read(NODENET_RX_HDR_OFS);
+  if ((((header >> 15) & 0x1u) == 0u) && HasMessage()) {
+    header = Read(NODENET_RX_HDR_OFS);
+  }
+
+  const bool valid = ((header >> 15) & 0x1u) != 0u;
+  if (!valid) {
+    return;
+  }
+
+  uint16_t hw_len = (uint16_t)(header & 0x0FFFu);
+  if (hw_len > NODENET_MAX_PAYLOAD_SIZE) {
+    hw_len = NODENET_MAX_PAYLOAD_SIZE;
+  }
+
+  NodeNetMessage msg;
+  msg.src_addr = (uint8_t)(header >> 24);
+  msg.dest_addr = (uint8_t)(header >> 16);
+  msg.broadcast = (msg.dest_addr == 0u);
+  msg.len = hw_len;
+  msg.data = g_nodenet_irq_payload;
+
+  if (msg.len == 0u) {
+    (void)Read(NODENET_RX_DATA_OFS);
+  } else {
+    for (uint16_t index = 0; index < msg.len; ++index) {
+      g_nodenet_irq_payload[index] = (uint8_t)Read(NODENET_RX_DATA_OFS);
+    }
+  }
+  g_nodenet_irq_payload[msg.len] = 0u;
+
+  if (msg.broadcast) {
+    if (broadcast_callback_ != nullptr) {
+      broadcast_callback_(msg);
+    }
+  } else {
+    if (message_callback_ != nullptr) {
+      message_callback_(msg);
+    }
+  }
 }
 
 uint32_t NodeNet::ComputeUartDivisor(uint32_t baudrate) {

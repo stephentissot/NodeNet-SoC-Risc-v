@@ -261,11 +261,15 @@ module top (
     wire cpu_trap;
     wire cpu_mem_instr;
     wire nodenet_tx_led_out;
-    wire nodenet_rx_led_out;    
+    wire nodenet_rx_led_out;
+    wire nodenet_irq_message;
+    wire nodenet_irq_broadcast;
+    wire [31:0] cpu_irq;
 
     assign led_d2 = led_d2_out;
     assign led_g18 = nodenet_rx_led_out;
     assign led_h18 = nodenet_tx_led_out;
+    assign cpu_irq = {27'd0, nodenet_irq_broadcast, nodenet_irq_message, 3'd0};
     
     assign sdram_cpu_wait_live = wb_cyc && wb_stb && wb_sdram_sel && !wb_ack;
     assign led_e18 = led0_out;
@@ -465,6 +469,8 @@ module top (
         
         .uart_rx_i(rx0),
         .uart_tx_o(tx0),
+        .irq_message_o(nodenet_irq_message),
+        .irq_broadcast_o(nodenet_irq_broadcast),
         .tx_led_o(nodenet_tx_led_out),
         .rx_led_o(nodenet_rx_led_out)
     );
@@ -477,8 +483,8 @@ module top (
         .BARREL_SHIFTER(1),
         .ENABLE_FAST_MUL(1),
         .ENABLE_DIV(1),
-        .ENABLE_IRQ(0),
-        .ENABLE_IRQ_QREGS(0),
+        .ENABLE_IRQ(1),
+        .ENABLE_IRQ_QREGS(1),
         .LATCHED_IRQ(0),
         .PROGADDR_RESET(32'h00000000),
         .PROGADDR_IRQ(32'h00000004),
@@ -499,7 +505,7 @@ module top (
         .wbm_cyc_o(wb_cyc),
 
         // IRQs
-        .irq(32'd0),
+        .irq(cpu_irq),
         .trap(cpu_trap),
         .mem_instr(cpu_mem_instr)
     );

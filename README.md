@@ -16,14 +16,14 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 
 ## Features
 
-### NodeNet Validation Snapshot (2026-08-11)
+### NodeNet Validation Snapshot (2026-08-20)
 - Automatic heartbeat in HDL validated on hardware at ~10 s period.
 - RX to local address validated (message accepted and decoded).
 - TX path validated end-to-end.
 - Runtime baud operation validated at both 115200 and 1 Mb/s.
-- Remaining checks planned:
-  - Broadcast RX acceptance path.
-  - Non-matching destination address ignore path.
+- RX metadata is propagated end-to-end (`src`, `dst`, `broadcast`, `len`).
+- Distinct PicoRV32 IRQs exist for broadcast vs unicast RX and are consumed through firmware callbacks.
+- ROM stage0 now forwards the fixed IRQ vector at `0x00000004` to the SDRAM app IRQ entry.
 
 ### FlashDB Validation Snapshot (2026-08-13)
 - Flash low-level test passes at boot (`[FLASH] LowLevel PASS`).
@@ -54,8 +54,9 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - Anti-collision backoff (address-based delay)
   - Periodic heartbeat for node discovery
   - Priority-based transmission (LOW/NORMAL/HIGH)
-  - Full C++ firmware API in `include/nodenet.h`
+  - Full C++ firmware API in `src/firmware/lib/nodenet/nodenet.h`
   - Supports unicast, broadcast, and heartbeat messages
+  - Supports callback-driven broadcast / unicast reception on PicoRV32 IRQs
   - RX decode error reporting and TX scheduling status
   - Wishbone register interface (0x10006000)
 
@@ -94,7 +95,7 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - Final runtime image is linked for SDRAM via `link_app_sdram.ld`
   - Loaded by ROM-resident `boot_stage0` from SPI flash offset `0x244000`
   - Includes ArduinoJson 7 in freestanding mode, with an optional SDRAM-backed allocator for large JSON payloads
-  - **NodeNet485 echo loop**: Listens for messages, echoes responses
+  - **NodeNet485 callback flow**: receives broadcast/unicast events through IRQ callbacks and defers heavy work to the main loop
   - D2 activity heartbeat: non-blocking software toggle every 500 ms
 
 - **External SDRAM bring-up**:
@@ -140,6 +141,9 @@ make -C src/firmware firmware-app-build
 
 # Program firmware payload only in SPI flash (no FPGA rebuild)
 make flash-fw
+
+# If bootloader ROM startup / IRQ forwarding changed, reload the FPGA image too
+make ram
 
 # Optional: enforce openFPGALoader verify as fatal
 make FW_STRICT_VERIFY=1 flash-fw
@@ -207,7 +211,7 @@ targets in `Makefile` to ecpdap. Reference commands:
 ```
 
 **Output**:
-- `src/firmware/build/boot_stage0.hex` – Stage0 bootloader image (loaded into ROM)
+- `src/firmware/build/boot_stage0.hex` – Stage0 bootloader image (loaded into ROM, includes IRQ forward stub to the SDRAM app)
 - `src/firmware/build/nodenet_riscv_app.img` – SDRAM app payload with stage0 header (written in SPI flash at `0x244000`)
 - `build/top.bit` – FPGA bitstream (~300 KB)
 - `build/top.json` – Netlist (debug/inspection)
@@ -241,8 +245,9 @@ Address Range               Size      Purpose
 1. FPGA configuration loads the SoC bitstream and the `wb_rom` contents containing `boot_stage0`.
 2. Stage0 starts from `0x00000000`, initializes required peripherals, and reads the application header from SPI flash offset `0x244000`.
 3. Stage0 validates header fields and CRCs, copies the application payload into SDRAM at `0x20000000`, then jumps to the image entry point.
-4. The runtime firmware executes entirely from SDRAM, while SPI flash remains available for parameter storage, FlashDB, and firmware updates.
-5. SDRAM self-tests used by the runtime stay inside a reserved scratch area so they do not overwrite the executing image.
+4. PicoRV32 IRQ entry remains fixed at `0x00000004`; the ROM image forwards that vector to the SDRAM application IRQ entry at `0x20000004`.
+5. The runtime firmware executes entirely from SDRAM, while SPI flash remains available for parameter storage, FlashDB, and firmware updates.
+6. SDRAM self-tests used by the runtime stay inside a reserved scratch area so they do not overwrite the executing image.
 
 ## Device Pinout
 

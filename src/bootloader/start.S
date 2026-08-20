@@ -2,6 +2,10 @@
 .global _start
 
 _start:
+    j _reset_entry
+    j _app_irq_entry
+
+_reset_entry:
 
     # Temporary bring-up switch:
     # 1 = skip .data/.bss/.init_array and jump directly to main for diagnosis.
@@ -62,3 +66,7 @@ _start:
 
 loop:
     j loop
+
+_app_irq_entry:
+    li t0, 0x20000004
+    jr t0

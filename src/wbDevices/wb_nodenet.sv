@@ -25,6 +25,8 @@ module wb_nodenet #(
   output reg ack_o,
   input  wire uart_rx_i,
   output wire uart_tx_o,
+  output wire irq_message_o,
+  output wire irq_broadcast_o,
   output wire tx_led_o,
   output wire rx_led_o
 );
@@ -40,7 +42,8 @@ module wb_nodenet #(
     REG_CONTROL = 4'd5,
     REG_STATUS  = 4'd6,
     REG_LED_CFG = 4'd7,
-    REG_UART_BAUD = 4'd8;
+    REG_UART_BAUD = 4'd8,
+    REG_IRQ_CTRL = 4'd9;
 
   localparam [31:0] DEFAULT_ACTIVITY_BLINK_MS = 32'd100;
   localparam [31:0] CYCLES_PER_MS = CLOCK_RATE / 32'd1000;
@@ -112,6 +115,8 @@ module wb_nodenet #(
   reg [1:0] prio;
   reg [31:0] activity_blink_ms;
   reg [19:0] uart_divisor;
+  reg irq_message_enable;
+  reg irq_broadcast_enable;
 
   reg [7:0] tx_stage_dst;
   reg [15:0] tx_stage_len;
@@ -180,6 +185,8 @@ module wb_nodenet #(
   // Ignore RX for ~16 bit-times after local TX to avoid RS485 self-echo tails.
   assign rx_ignore_reload = {4'b0000, uart_divisor} << 4;
   assign rx_decode_enable = !uart_de && (rx_ignore_counter == 24'd0);
+  assign irq_message_o = irq_message_enable && rx_valid && (rx_dst != 8'h00);
+  assign irq_broadcast_o = irq_broadcast_enable && rx_valid && (rx_dst == 8'h00);
 
   uart_simple #(
     .CLOCK_RATE(CLOCK_RATE),
@@ -277,6 +284,8 @@ module wb_nodenet #(
       prio <= 2'b01;
       activity_blink_ms <= DEFAULT_ACTIVITY_BLINK_MS;
       uart_divisor <= (CLOCK_RATE / 1_000_000);
+      irq_message_enable <= 1'b0;
+      irq_broadcast_enable <= 1'b0;
       tx_stage_dst <= 8'h00;
       tx_stage_len <= 16'h0000;
       tx_load_count <= 16'h0000;
@@ -419,6 +428,11 @@ module wb_nodenet #(
                 uart_divisor <= dat_i[19:0];
             end
 
+            REG_IRQ_CTRL: begin
+              irq_message_enable <= dat_i[0];
+              irq_broadcast_enable <= dat_i[1];
+            end
+
             REG_CONTROL: begin
               if (dat_i[1]) begin
                 rx_valid <= 1'b0;
@@ -514,6 +528,10 @@ module wb_nodenet #(
 
             REG_UART_BAUD: begin
               dat_o <= {12'h000, uart_divisor};
+            end
+
+            REG_IRQ_CTRL: begin
+              dat_o <= {28'h0000000, 2'b00, irq_broadcast_enable, irq_message_enable};
             end
 
             default: begin
