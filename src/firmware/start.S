@@ -1,7 +1,13 @@
 .section .text
 .global _start
 
+.extern nodenet_irq_dispatch
+
 _start:
+    j _reset_entry
+    j _irq_entry
+
+_reset_entry:
 
     .option push
     .option norelax
@@ -53,3 +59,13 @@ _start:
 
 loop:
     j loop
+
+_irq_entry:
+    addi sp, sp, -16
+    sw ra, 12(sp)
+
+    call nodenet_irq_dispatch
+
+    lw ra, 12(sp)
+    addi sp, sp, 16
+    ret

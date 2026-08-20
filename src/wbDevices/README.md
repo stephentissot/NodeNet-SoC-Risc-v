@@ -497,7 +497,7 @@ wire.write(0x3C, buf, 2);
 |--------|------|-----|---------|
 | 0x00 | TX_CMD | R/W | `[dst(31:24) | len(15:0)]` |
 | 0x04 | TX_DATA | R/W | Write payload bytes / read load count |
-| 0x08 | RX_HDR | R | `[src(31:24) | rx_valid(16) | len(15:0)]` |
+| 0x08 | RX_HDR | R | `[src(31:24) | dst(23:16) | rx_valid(15) | len(11:0)]` |
 | 0x0C | RX_DATA | R | Read next received payload byte |
 | 0x10 | CONFIG | R/W | `[hb_interval(31:10) | prio(9:8) | addr(7:0)]` |
 | 0x14 | CONTROL | W | `bit0=trigger_tx bit1=clear_rx bit2=queue_heartbeat` |

@@ -10,7 +10,7 @@
 #include "u8g2.h"
 #include "u8g2_hal.h"
 #include "version.h"
-#include "nodenet.h"
+#include "lib/nodenet/nodenet.h"
 #include "ModbusMaster.h"
 #include "flash.h"
 #include "flashdb_port.h"
@@ -34,6 +34,18 @@ static constexpr uint8_t kOledConsoleLines = 5;
 static constexpr uint8_t kOledConsoleCols = 21;
 static char g_oled_console[kOledConsoleLines][kOledConsoleCols + 1] = {};
 static uint8_t g_oled_console_count = 0;
+static NodeNet* g_nodenet = nullptr;
+static WbLed* g_led_yellow = nullptr;
+static volatile bool g_nodenet_broadcast_pending = false;
+static volatile bool g_nodenet_message_pending = false;
+static volatile uint8_t g_nodenet_broadcast_src = 0u;
+static volatile uint8_t g_nodenet_message_src = 0u;
+static volatile uint16_t g_nodenet_broadcast_len = 0u;
+static volatile uint16_t g_nodenet_message_len = 0u;
+static volatile uint32_t g_nodenet_broadcast_count = 0u;
+static volatile uint32_t g_nodenet_message_count = 0u;
+static uint8_t g_nodenet_broadcast_data[kOledConsoleCols + 1] = {};
+static uint8_t g_nodenet_message_data[kOledConsoleCols + 1] = {};
 
 static bool oled_init(uint8_t addr7 = 0x3C)
 {
@@ -170,6 +182,21 @@ static void oled_write_payload_safe(const uint8_t* data, uint16_t len)
     oled_write(line);
 }
 
+static void nodenet_copy_payload_snapshot(volatile uint8_t* dst,
+                                          const uint8_t* src,
+                                          uint16_t len)
+{
+    uint16_t copy_len = len;
+    if (copy_len > kOledConsoleCols) {
+        copy_len = kOledConsoleCols;
+    }
+
+    for (uint16_t i = 0; i < copy_len; ++i) {
+        dst[i] = (src != nullptr) ? src[i] : 0u;
+    }
+    dst[copy_len] = 0u;
+}
+
 static void led_d2_blink()
 {
     *LED_D2 = 1u;delay(200u);*LED_D2 = 0u;delay(200u); // led_d2 on/off
@@ -179,6 +206,88 @@ static void led_d2_blink()
     delay(500u);
 }
 
+static void nodenet_broadcast_callback(const NodeNetMessage& msg)
+{
+    g_nodenet_broadcast_src = msg.src_addr;
+    g_nodenet_broadcast_len = msg.len;
+    nodenet_copy_payload_snapshot(g_nodenet_broadcast_data, msg.data, msg.len);
+    g_nodenet_broadcast_count += 1u;
+}
+
+static void nodenet_message_callback(const NodeNetMessage& msg)
+{
+    g_nodenet_message_src = msg.src_addr;
+    g_nodenet_message_len = msg.len;
+    nodenet_copy_payload_snapshot(g_nodenet_message_data, msg.data, msg.len);
+    g_nodenet_message_count += 1u;
+}
+
+static void nodenet_process_pending_events()
+{
+    static uint32_t s_last_broadcast_count = 0u;
+    static uint32_t s_last_message_count = 0u;
+
+    while (s_last_broadcast_count != g_nodenet_broadcast_count) {
+        uint32_t count_before = 0u;
+        uint32_t count_after = 0u;
+        uint8_t src = 0u;
+        uint16_t len = 0u;
+        uint8_t payload[kOledConsoleCols + 1] = {};
+
+        do {
+            count_before = g_nodenet_broadcast_count;
+            src = g_nodenet_broadcast_src;
+            len = g_nodenet_broadcast_len;
+            for (uint16_t i = 0; i <= kOledConsoleCols; ++i) {
+                payload[i] = g_nodenet_broadcast_data[i];
+            }
+            count_after = g_nodenet_broadcast_count;
+        } while (count_before != count_after);
+
+        s_last_broadcast_count = count_before;
+
+        oled_print("[NN] BC %02X #%lu",
+                   static_cast<unsigned>(src),
+                   static_cast<unsigned long>(s_last_broadcast_count));
+        if (len > 0u) {
+            oled_write_payload_safe(payload, len);
+        }
+    }
+
+    while (s_last_message_count != g_nodenet_message_count) {
+        uint32_t count_before = 0u;
+        uint32_t count_after = 0u;
+        uint8_t src = 0u;
+        uint16_t len = 0u;
+        uint8_t payload[kOledConsoleCols + 1] = {};
+
+        do {
+            count_before = g_nodenet_message_count;
+            src = g_nodenet_message_src;
+            len = g_nodenet_message_len;
+            for (uint16_t i = 0; i <= kOledConsoleCols; ++i) {
+                payload[i] = g_nodenet_message_data[i];
+            }
+            count_after = g_nodenet_message_count;
+        } while (count_before != count_after);
+
+        s_last_message_count = count_before;
+
+        oled_print("[NN] RX %02X #%lu",
+                   static_cast<unsigned>(src),
+                   static_cast<unsigned long>(s_last_message_count));
+        if (len > 0u) {
+            oled_write_payload_safe(payload, len);
+        }
+        if (g_led_yellow != nullptr) {
+            g_led_yellow->blink(300u);
+        }
+        if (g_nodenet != nullptr) {
+            g_nodenet->Send(src, "Hello from NodeNet!");
+        }
+    }
+}
+
 int main(void)
 {
     // Initial startup LED blink to indicate booting.
@@ -186,6 +295,7 @@ int main(void)
     // Harware definition
     WbLed  ledGreen(LED0_BASE);
     WbLed  ledYellow(LED1_BASE);
+    g_led_yellow = &ledYellow;
     ModbusMaster modbus1(MODBUS1_BASE);
     modbus1.begin(9600u, 500u, 2u);
     modbus1.setInterframeCharsQ1(14u);
@@ -200,7 +310,16 @@ int main(void)
     oled_write("v" FIRMWARE_VERSION);
 
     // NodeNet definition and initialization
-    NodeNet myNodeNet(NODENET0_BASE, 0x41, 1000000, NODENET_PRIORITY_NORMAL, 200);
+    NodeNet myNodeNet(
+        NODENET0_BASE,
+        0x41,
+        1000000,
+        NODENET_PRIORITY_NORMAL,
+        200,
+        nullptr,
+        nullptr);
+    g_nodenet = &myNodeNet;
+    oled_write("[NN] ctor ok");
     const bool nodenet_ok = myNodeNet.test(oled_boot_status);
 
     // POST Tests
@@ -302,20 +421,11 @@ int main(void)
         }
     }
 
+    myNodeNet.SetCallbacks(nodenet_broadcast_callback, nodenet_message_callback);
+    oled_write("[NN] irq armed");
+
     while (1) {
-
-        if (myNodeNet.HasMessage()) {
-            NodeNetMessage msg = myNodeNet.ReadMessage();
-            // if(msg.src_addr != 0){ // No response to broadcast messages
-            //     oled_print_rx_header(msg.src_addr, msg.len);
-            //     oled_write_payload_safe(msg.data, msg.len);
-            //     ledYellow.blink(300u);
-            //     // Send a reply to the sender, then release RX buffer.
-            //     myNodeNet.Send(msg.src_addr, "Hello from NodeNet!");
-            // }
-
-            NodeNet::FreeMessage(msg);
-        }
+        nodenet_process_pending_events();
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             const uint16_t coil_addr = static_cast<uint16_t>(modbus_channel - 1u);

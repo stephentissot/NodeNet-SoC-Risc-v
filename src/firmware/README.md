@@ -195,12 +195,13 @@ Legacy note: `lib/serial/Serial` remains available as a standalone utility class
 
 The NodeNet485 protocol enables reliable multi-node communication over RS-485 at 1 Mb/s.
 
-Validation snapshot (2026-08-11):
+Validation snapshot (2026-08-20):
 - Automatic heartbeat from HDL validated on hardware at ~10 s period.
 - RX path validated for frames addressed to the local node.
 - TX path validated end-to-end.
 - Runtime baud validated at 115200 and 1 Mb/s.
-- Pending targeted checks: broadcast acceptance and non-matching destination ignore behavior.
+- RX header metadata propagated to firmware (`src`, `dst`, `broadcast`, `len`).
+- Distinct broadcast/unicast receive IRQs wired to PicoRV32 callbacks.
 
 **Mailbox Register Model**:
 - **TX staging**: firmware writes one message into TX command/data registers
@@ -219,19 +220,25 @@ TX Path (Firmware → Hardware):
 
 RX Path (Hardware → Firmware):
     1. Hardware receives, decodes, and validates a frame
-    2. Hardware exposes source + length through RX_HDR
+    2. Hardware exposes source, destination, valid, and length through RX_HDR
     3. Firmware checks RX valid bit
     4. Firmware drains payload bytes through RX_DATA
 ```
 
-**Complete API** (from `include/nodenet.h`):
+**Complete API** (from `lib/nodenet/nodenet.h`):
 
 ```cpp
-#include "nodenet.h"
+#include "lib/nodenet/nodenet.h"
 
-// Preferred object API
 constexpr uint32_t NODENET0_BASE = 0x10006000u;
-NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
+NodeNet myNodeNet(
+    NODENET0_BASE,
+    0x01,
+    1'000'000,
+    NODENET_PRIORITY_NORMAL,
+    200,
+    nullptr,
+    nullptr);
 
 // Send unicast message to node 0x02
 myNodeNet.Send(0x02, "Hello", 5);
@@ -239,17 +246,35 @@ myNodeNet.Send(0x02, "Hello", 5);
 // Send broadcast to all nodes
 myNodeNet.Broadcast("ALERT");
 
-// Receive messages (check first to avoid blocking)
-if (myNodeNet.HasMessage()) {
-    NodeNetMessage msg = myNodeNet.ReadMessage();
-    printf("From node 0x%02X: len=%d\n", msg.src_addr, msg.len);
-    
-    // Echo back if not broadcast
-    if (msg.src_addr != 0) {
-        myNodeNet.Send(msg.src_addr, msg.data, msg.len);
+myNodeNet.SetCallbacks(onBroadcast, onMessage);
+```
+
+`NodeNetMessage` exposes `src_addr`, `dest_addr`, `broadcast`, `len`, and `data`.
+
+**IRQ callback pattern**:
+
+```cpp
+static volatile bool g_msg_pending = false;
+
+static void onMessage(const NodeNetMessage& msg)
+{
+    // Snapshot only. Defer OLED / flash / Send() work.
+    g_msg_pending = true;
+}
+
+int main()
+{
+    NodeNet myNodeNet(NODENET0_BASE, 0x41, 1'000'000,
+                      NODENET_PRIORITY_NORMAL, 200, nullptr, nullptr);
+
+    // Finish the rest of system init first.
+    myNodeNet.SetCallbacks(onBroadcast, onMessage);
+
+    while (1) {
+        if (g_msg_pending) {
+            g_msg_pending = false;
+        }
     }
-    
-    NodeNet::FreeMessage(msg);  // IMPORTANT: deallocate!
 }
 ```
 
@@ -359,7 +384,10 @@ uint16_t len = header & 0xFFFF;
 - **Driver Enable**: Automatic (hardware module handles)
 - **Current Status**: Functional TX/RX framing with mailbox-based Wishbone API
 
-For full protocol documentation including frame format, CRC, and encoding details, see [../wbDevices/README_NODENET.md](../wbDevices/README_NODENET.md).
+Bring-up note:
+- If you change IRQ startup / bootloader ROM forwarding, `make flash-fw` is not enough. Reload the FPGA image (`make ram` or equivalent) so the ROM vector at `0x00000004` matches the SDRAM app IRQ entry.
+
+For full protocol documentation including frame format, CRC, encoding details, and IRQ integration, see [../wbDevices/README_NODENET.md](../wbDevices/README_NODENET.md).
 
 ---
 

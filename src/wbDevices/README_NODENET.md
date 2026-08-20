@@ -11,17 +11,20 @@
 - **Heartbeat**: Periodic keep-alive messages
 - **Flow Control**: Priority-based transmission (LOW/NORMAL/HIGH)
 
-## Validation Status (2026-08-11)
+## Validation Status (2026-08-20)
 
 Validated on hardware:
 - Automatic HDL heartbeat every ~10 s.
 - RX decode for frames addressed to local node.
 - TX framing and emission path.
 - Runtime baud operation at 115200 and 1 Mb/s.
+- RX metadata propagation to firmware (`src`, `dst`, `broadcast`, `len`).
+- Distinct PicoRV32 interrupt delivery for unicast and broadcast RX events.
+- Callback-driven firmware integration after SDRAM app handoff.
 
 Still to verify:
-- Broadcast receive acceptance behavior.
-- Receive ignore behavior for non-matching destination address.
+- Long-run behavior under sustained multi-node traffic.
+- Whether a deeper firmware-side queue is needed for burst RX traffic.
 
 ## Architecture
 
@@ -73,6 +76,11 @@ The current implementation is intentionally **self-contained**: `wb_nodenet.sv` 
 - Header appears in `RX_HDR`
 - Payload bytes are drained from `RX_DATA`
 - Reading the last byte automatically frees the RX mailbox
+
+**RX IRQs:**
+- `irq_message_o` asserts while `rx_valid=1` and `dst != 0x00`
+- `irq_broadcast_o` asserts while `rx_valid=1` and `dst == 0x00`
+- Firmware deasserts the level IRQ by draining the payload or clearing RX with `CONTROL.bit1`
 
 **Capacity:**
 - One staged TX message at a time
@@ -138,12 +146,14 @@ Base address: `0x10006000`
 |--------|-----------|-----|-------|--------------------------------------|
 | 0x00   | TX_CMD    | R/W | 31:0  | `[dst(31:24) | len(15:0)]`           |
 | 0x04   | TX_DATA   | R/W | 7:0   | Write payload bytes / read load count |
-| 0x08   | RX_HDR    | R   | 31:0  | `[src(31:24) | rx_valid(16) | len]`  |
+| 0x08   | RX_HDR    | R   | 31:0  | `[src(31:24) | dst(23:16) | rx_valid(15) | len(11:0)]`  |
 | 0x0C   | RX_DATA   | R   | 7:0   | Read next received payload byte      |
 | 0x10   | CONFIG    | R/W | 31:0  | `[hb_interval(31:10) | prio(9:8) | addr]` |
 | 0x14   | CONTROL   | W   | 2:0   | `bit0=trigger_tx bit1=clear_rx bit2=queue_heartbeat` |
 | 0x18   | STATUS    | R   | 31:0  | TX/RX state, UART ready, error flags |
 | 0x1C   | LED_CFG   | R/W | 31:0  | TX/RX activity LED pulse duration (milliseconds) |
+| 0x20   | UART_BAUD | R/W | 19:0  | Runtime UART divisor |
+| 0x24   | IRQ_CTRL  | R/W | 1:0   | `bit0=unicast_irq_en bit1=broadcast_irq_en` |
 
 **Key STATUS bits:**
 - `bit31`: RX overflow
@@ -227,12 +237,18 @@ IDLE (searching for next SOH)
 
 ## Firmware Interface (C++)
 
-Header: `include/nodenet.h`
+Header: `src/firmware/lib/nodenet/nodenet.h`
 
 ```cpp
-// Preferred object API
 constexpr uint32_t NODENET0_BASE = 0x10006000u;
-NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
+NodeNet myNodeNet(
+   NODENET0_BASE,
+   0x01,
+   1'000'000,
+   NODENET_PRIORITY_NORMAL,
+   200,
+   nullptr,
+   nullptr);
 
 // Send unicast
 myNodeNet.Send(0x02, "Hello", 5);
@@ -240,16 +256,43 @@ myNodeNet.Send(0x02, "Hello", 5);
 // Send broadcast
 myNodeNet.Broadcast("Alert!");
 
-// Check for messages
-if (myNodeNet.HasMessage()) {
-   NodeNetMessage msg = myNodeNet.ReadMessage();
-  printf("From %d: %.*s\n", msg.src_addr, msg.len, msg.data);
-   NodeNet::FreeMessage(msg);
+// Arm callbacks only after the rest of boot is stable.
+myNodeNet.SetCallbacks(onBroadcast, onMessage);
+```
+
+`NodeNetMessage` now exposes `src_addr`, `dest_addr`, `broadcast`, `len`, and `data`.
+
+### Interrupt / Callback Model
+
+```cpp
+static void onBroadcast(const NodeNetMessage& msg)
+{
+   // Keep ISR work short: snapshot only.
 }
 
-// Check message count
-uint8_t count = myNodeNet.MessageCount();
+static void onMessage(const NodeNetMessage& msg)
+{
+   // Defer OLED / I2C / flash / long TX work to the main loop.
+}
+
+int main()
+{
+   NodeNet myNodeNet(NODENET0_BASE, 0x41, 1'000'000,
+                 NODENET_PRIORITY_NORMAL, 200, nullptr, nullptr);
+
+   // Finish the rest of system init first.
+   myNodeNet.SetCallbacks(onBroadcast, onMessage);
+
+   while (1) {
+      // Consume deferred events here.
+   }
+}
 ```
+
+Bring-up notes:
+- PicoRV32 resets with all IRQs masked; firmware must unmask them before NodeNet IRQs can fire.
+- The ROM bootloader owns the fixed IRQ vector at `0x00000004` and forwards it to the SDRAM app IRQ entry at `0x20000004`.
+- If you change ROM startup / IRQ forwarding, `make flash-fw` is not enough: reload the FPGA image with `make ram` or an equivalent full BRAM/bitstream update.
 
 ## Timing Parameters (@ 25 MHz)
 
@@ -277,13 +320,13 @@ This prevents medium contention when multiple nodes transmit.
 - **TX**: Colorlight i9 pin D16 (output to RS485 module)
 - **Driver Enable**: Not required (RS485 module handles automatically)
 
-**FPGA Wishbone Integration** (already in src/top.sv):
+**FPGA Wishbone Integration** (already in `src/top.sv`):
 
 ```verilog
 wb_nodenet #(
    .CLOCK_RATE(25_000_000)
 ) nodenet0 (
-    .clk_i(clk_25mhz),
+   .clk_i(sys_clk),
     .rst_i(reset),
     
     .adr_i(wb_adr),
@@ -294,27 +337,40 @@ wb_nodenet #(
     .cyc_i(wb_nodenet_sel),
     .ack_o(nodenet_ack),
     
-   .uart_rx_i(rx0),      // G5
-   .uart_tx_o(tx0),      // D16
-   .tx_led_o(led_h18),   // F4 (TX activity pulse)
-   .rx_led_o(led_g18)    // E5 (RX default ON, pulse on RX)
+   .uart_rx_i(rx0),
+   .uart_tx_o(tx0),
+   .irq_message_o(nodenet_irq_message),
+   .irq_broadcast_o(nodenet_irq_broadcast),
+   .tx_led_o(nodenet_tx_led_out),
+   .rx_led_o(nodenet_rx_led_out)
 );
 
-// Note: TX/RX LED pins are configured active-low with pull-up in LPF.
-// This keeps LEDs off during startup unless logic actively drives them low.
-
 assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12]);
+assign cpu_irq = {27'd0, nodenet_irq_broadcast, nodenet_irq_message, 3'd0};
 ```
 
 ### Firmware Usage
 
-Firmware API is in `src/firmware/include/nodenet.h`:
+Firmware API is in `src/firmware/lib/nodenet/nodenet.h`:
 
 ```cpp
 class NodeNet {
 public:
-   explicit NodeNet(uint32_t base, uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
-   void Init(uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
+   using MessageCallback = void (*)(const NodeNetMessage& msg);
+
+   explicit NodeNet(uint32_t base,
+                    uint8_t addr,
+                    uint32_t uart_baud,
+                    NodeNetPriority priority,
+                    uint32_t led_blink_ms = 100u,
+                    MessageCallback broadcastCallback = nullptr,
+                    MessageCallback messageCallback = nullptr);
+   void Init(uint8_t addr,
+             uint32_t uart_baud,
+             NodeNetPriority priority,
+             uint32_t led_blink_ms = 100u,
+             MessageCallback broadcastCallback = nullptr,
+             MessageCallback messageCallback = nullptr);
    uint32_t Status() const;
    bool HasMessage() const;
    uint8_t MessageCount() const;
@@ -322,6 +378,8 @@ public:
    void Send(uint8_t dst, const char* str) const;
    void Broadcast(const uint8_t* data, uint16_t len) const;
    void Broadcast(const char* str) const;
+   void SetCallbacks(MessageCallback broadcastCallback,
+                     MessageCallback messageCallback);
    NodeNetMessage ReadMessage() const;
    static void FreeMessage(NodeNetMessage& msg);
 };
@@ -329,18 +387,18 @@ public:
 
 ### Example Implementation (main.cpp)
 
-Current test code demonstrates:
-- Boot LED blink pattern (3 blinks)
-- Message listening loop
-- Echo response on received unicast messages
-- LED heartbeat indicator (blink every ~1 second)
+Current application code demonstrates:
+- Boot-time NodeNet self-test
+- Late IRQ arming after the rest of system init
+- Distinct broadcast and unicast callbacks
+- Deferring OLED / reply work out of the ISR into the main loop
 
 For custom applications:
-1. Define `constexpr uint32_t NODENET0_BASE = 0x10006000u` in your application
-2. Construct `NodeNet myNodeNet(NODENET0_BASE, node_address, priority, led_blink_ms)` at startup
-3. Check `myNodeNet.HasMessage()` in main loop
-4. Process messages with `myNodeNet.ReadMessage()`
-5. Send replies with `myNodeNet.Send(sender_addr, ...)`
+1. Define `constexpr uint32_t NODENET0_BASE = 0x10006000u` in your application.
+2. Construct `NodeNet myNodeNet(NODENET0_BASE, node_address, uart_baud, priority, led_blink_ms, nullptr, nullptr)` at startup.
+3. Finish the rest of boot-time init before calling `myNodeNet.SetCallbacks(...)`.
+4. Keep IRQ callbacks short and non-blocking.
+5. Do OLED / I2C / flash / long TX work from the main loop after snapshotting the event.
 
 ### Previous Integration Instructions (Preserved for Reference)
 
@@ -385,30 +443,17 @@ To add to a new system:
 
 ## Known Limitations
 
-1. **Loopback Mode Active**: Current wb_nodenet.sv implements simple RX→TX echo (not full encoder/decoder FSM)
-   - Sufficient for hardware integration validation
-   - Full protocol state machine ready for implementation in encoder/decoder modules
-
-2. **No TX/RX FIFOs Yet**: Currently single-message mode only
-   - FIFO infrastructure ready in module stubs
-   - Will improve throughput in burst scenarios
-
-3. **No Interrupt Support**: Firmware must poll for messages
-   - `irq_o` port available on wb_nodenet for future use
-
-4. **No Flow Control**: Sender doesn't check if receiver is ready
-   - Acceptable for low-bandwidth protocols
-   - RTS/CTS can be added to future iterations
-
-5. **Simple CRC**: XOR is weak; real protocols use CRC-16 or better
+1. **Single-entry mailboxes**: one staged TX message and one staged RX message only.
+2. **Level IRQ semantics**: IRQ remains asserted while `rx_valid` stays set.
+3. **No hardware RX queueing** for bursts beyond the current mailbox.
+4. **No flow control** beyond protocol scheduling.
+5. **Simple CRC**: XOR is weaker than CRC-16/CRC-32.
 
 ## Future Enhancements
 
-- [ ] Complete encoder/decoder instantiation (currently in modules, not wired)
-- [ ] Full TX/RX FIFO queues (32-entry hardware queues ready)
-- [ ] Interrupt-driven reception (hardware support exists)
+- [ ] Full TX/RX FIFO queues or a firmware ring-buffer handoff
 - [ ] CRC-16 polynomial (more robust error detection)
-- [ ] Configurable baud rate via CONFIG register (UART supports parameterized rate)
+- [ ] Richer IRQ diagnostics / counters visible to firmware
 - [ ] DMA support for large payloads
 - [ ] Flow control (RTS/CTS) on RS-485 lines
 

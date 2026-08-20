@@ -19,6 +19,7 @@ module nodenet_decoder (
   // Message output (to RX FIFO)
   output reg msg_valid_o,
   output reg [7:0] msg_src_addr_o,
+  output reg [7:0] msg_dst_addr_o,
   output reg [15:0] msg_len_o,
   output reg [7:0] msg_data_o,
   output reg msg_data_valid_o,
@@ -124,11 +125,16 @@ module nodenet_decoder (
               state <= RX_PAYLOAD;
             end
             else if (rx_byte_i == `NODENET_EOT) begin
-              // Heartbeat: no payload
-              msg_src_addr_o <= src;
-              msg_len_o <= 16'b0;
-              msg_complete_o <= 1'b1;
-              msg_valid_o <= 1'b1;
+              // Heartbeat frames are broadcast-only and carry no payload.
+              if (dst == 8'b0) begin
+                msg_src_addr_o <= src;
+                msg_dst_addr_o <= dst;
+                msg_len_o <= 16'b0;
+                msg_complete_o <= 1'b1;
+                msg_valid_o <= 1'b1;
+              end else begin
+                error_o <= 1'b1;
+              end
               state <= IDLE;
             end
           end
@@ -181,6 +187,7 @@ module nodenet_decoder (
             if (rx_byte_i == `NODENET_EOT) begin
               if (crc == crc_received && (dst == my_addr_i || dst == 8'b0)) begin
                 msg_src_addr_o <= src;
+                msg_dst_addr_o <= dst;
                 msg_len_o <= payload_len;
                 msg_complete_o <= 1'b1;
                 msg_valid_o <= 1'b1;
