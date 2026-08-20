@@ -13,7 +13,7 @@
  * Quick Start
  * ═══════════
  *   constexpr uint32_t NODENET0_BASE = 0x10006000u;
- *   NodeNet nodenet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
+ *   NodeNet nodenet(NODENET0_BASE, 0x01, 1'000'000, NODENET_PRIORITY_NORMAL, 200, nullptr, nullptr);
  *   nodenet.Send(0x02, "Hello", 5);               // Send to node 0x02
  *   if (nodenet.HasMessage()) {
  *     NodeNetMessage msg = nodenet.ReadMessage();   // Read incoming message
