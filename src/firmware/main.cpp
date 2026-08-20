@@ -212,7 +212,6 @@ static void nodenet_broadcast_callback(const NodeNetMessage& msg)
     g_nodenet_broadcast_len = msg.len;
     nodenet_copy_payload_snapshot(g_nodenet_broadcast_data, msg.data, msg.len);
     g_nodenet_broadcast_count += 1u;
-    g_nodenet_broadcast_pending = true;
 }
 
 static void nodenet_message_callback(const NodeNetMessage& msg)
@@ -221,40 +220,62 @@ static void nodenet_message_callback(const NodeNetMessage& msg)
     g_nodenet_message_len = msg.len;
     nodenet_copy_payload_snapshot(g_nodenet_message_data, msg.data, msg.len);
     g_nodenet_message_count += 1u;
-    g_nodenet_message_pending = true;
 }
 
 static void nodenet_process_pending_events()
 {
-    if (g_nodenet_broadcast_pending) {
-        const uint8_t src = g_nodenet_broadcast_src;
-        const uint16_t len = g_nodenet_broadcast_len;
+    static uint32_t s_last_broadcast_count = 0u;
+    static uint32_t s_last_message_count = 0u;
+
+    while (s_last_broadcast_count != g_nodenet_broadcast_count) {
+        uint32_t count_before = 0u;
+        uint32_t count_after = 0u;
+        uint8_t src = 0u;
+        uint16_t len = 0u;
         uint8_t payload[kOledConsoleCols + 1] = {};
-        for (uint16_t i = 0; i <= kOledConsoleCols; ++i) {
-            payload[i] = g_nodenet_broadcast_data[i];
-        }
-        g_nodenet_broadcast_pending = false;
+
+        do {
+            count_before = g_nodenet_broadcast_count;
+            src = g_nodenet_broadcast_src;
+            len = g_nodenet_broadcast_len;
+            for (uint16_t i = 0; i <= kOledConsoleCols; ++i) {
+                payload[i] = g_nodenet_broadcast_data[i];
+            }
+            count_after = g_nodenet_broadcast_count;
+        } while (count_before != count_after);
+
+        s_last_broadcast_count = count_before;
 
         oled_print("[NN] BC %02X #%lu",
                    static_cast<unsigned>(src),
-                   static_cast<unsigned long>(g_nodenet_broadcast_count));
+                   static_cast<unsigned long>(s_last_broadcast_count));
         if (len > 0u) {
             oled_write_payload_safe(payload, len);
         }
     }
 
-    if (g_nodenet_message_pending) {
-        const uint8_t src = g_nodenet_message_src;
-        const uint16_t len = g_nodenet_message_len;
+    while (s_last_message_count != g_nodenet_message_count) {
+        uint32_t count_before = 0u;
+        uint32_t count_after = 0u;
+        uint8_t src = 0u;
+        uint16_t len = 0u;
         uint8_t payload[kOledConsoleCols + 1] = {};
-        for (uint16_t i = 0; i <= kOledConsoleCols; ++i) {
-            payload[i] = g_nodenet_message_data[i];
-        }
-        g_nodenet_message_pending = false;
+
+        do {
+            count_before = g_nodenet_message_count;
+            src = g_nodenet_message_src;
+            len = g_nodenet_message_len;
+            for (uint16_t i = 0; i <= kOledConsoleCols; ++i) {
+                payload[i] = g_nodenet_message_data[i];
+            }
+            count_after = g_nodenet_message_count;
+        } while (count_before != count_after);
+
+        s_last_message_count = count_before;
 
         oled_print("[NN] RX %02X #%lu",
                    static_cast<unsigned>(src),
-                   static_cast<unsigned long>(g_nodenet_message_count));
+                   static_cast<unsigned long>(s_last_message_count));
         if (len > 0u) {
             oled_write_payload_safe(payload, len);
         }

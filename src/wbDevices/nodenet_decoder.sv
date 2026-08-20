@@ -125,12 +125,16 @@ module nodenet_decoder (
               state <= RX_PAYLOAD;
             end
             else if (rx_byte_i == `NODENET_EOT) begin
-              // Heartbeat: no payload
-              msg_src_addr_o <= src;
-              msg_dst_addr_o <= dst;
-              msg_len_o <= 16'b0;
-              msg_complete_o <= 1'b1;
-              msg_valid_o <= 1'b1;
+              // Heartbeat frames are broadcast-only and carry no payload.
+              if (dst == 8'b0) begin
+                msg_src_addr_o <= src;
+                msg_dst_addr_o <= dst;
+                msg_len_o <= 16'b0;
+                msg_complete_o <= 1'b1;
+                msg_valid_o <= 1'b1;
+              end else begin
+                error_o <= 1'b1;
+              end
               state <= IDLE;
             end
           end
