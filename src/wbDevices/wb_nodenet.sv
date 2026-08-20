@@ -132,6 +132,7 @@ module wb_nodenet #(
   reg last_tx_was_broadcast;
 
   reg [7:0] rx_src;
+  reg [7:0] rx_dst;
   reg [15:0] rx_len;
   reg [15:0] rx_read_idx;
   reg [15:0] rx_build_count;
@@ -161,6 +162,7 @@ module wb_nodenet #(
 
   wire decoder_msg_valid;
   wire [7:0] decoder_msg_src;
+  wire [7:0] decoder_msg_dst;
   wire [15:0] decoder_msg_len;
   wire [7:0] decoder_msg_data;
   wire decoder_msg_data_valid;
@@ -208,6 +210,7 @@ module wb_nodenet #(
     .rx_byte_i(uart_rx_data),
     .msg_valid_o(decoder_msg_valid),
     .msg_src_addr_o(decoder_msg_src),
+    .msg_dst_addr_o(decoder_msg_dst),
     .msg_len_o(decoder_msg_len),
     .msg_data_o(decoder_msg_data),
     .msg_data_valid_o(decoder_msg_data_valid),
@@ -292,6 +295,7 @@ module wb_nodenet #(
       tx_cooldown_counter <= 32'h0000_0000;
       last_tx_was_broadcast <= 1'b0;
       rx_src <= 8'h00;
+      rx_dst <= 8'h00;
       rx_len <= 16'h0000;
       rx_read_idx <= 16'h0000;
       rx_build_count <= 16'h0000;
@@ -338,6 +342,7 @@ module wb_nodenet #(
       if (decoder_msg_complete) begin
         if (decoder_msg_valid && !rx_valid && (decoder_msg_len <= MAX_PAYLOAD)) begin
           rx_src <= decoder_msg_src;
+          rx_dst <= decoder_msg_dst;
           rx_read_idx <= 16'h0000;
           rx_valid <= 1'b1;
           rx_led_trigger_pulse <= 1'b1;
@@ -453,7 +458,7 @@ module wb_nodenet #(
             end
 
             REG_RX_HDR: begin
-              dat_o <= {rx_src, 7'b0, rx_valid, rx_len};
+              dat_o <= {rx_src, rx_dst, rx_valid, 3'b000, rx_len[11:0]};
             end
 
             REG_RX_DATA: begin

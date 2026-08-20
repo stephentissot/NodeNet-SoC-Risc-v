@@ -10,7 +10,7 @@
 #include "u8g2.h"
 #include "u8g2_hal.h"
 #include "version.h"
-#include "nodenet.h"
+#include "lib/nodenet/nodenet.h"
 #include "ModbusMaster.h"
 #include "flash.h"
 #include "flashdb_port.h"
@@ -306,13 +306,14 @@ int main(void)
 
         if (myNodeNet.HasMessage()) {
             NodeNetMessage msg = myNodeNet.ReadMessage();
-            // if(msg.src_addr != 0){ // No response to broadcast messages
-            //     oled_print_rx_header(msg.src_addr, msg.len);
-            //     oled_write_payload_safe(msg.data, msg.len);
-            //     ledYellow.blink(300u);
-            //     // Send a reply to the sender, then release RX buffer.
-            //     myNodeNet.Send(msg.src_addr, "Hello from NodeNet!");
-            // }
+            if(!msg.broadcast){ // No response to broadcast messages
+                oled_print("[NN] RX from %02X to=%02X", static_cast<unsigned>(msg.src_addr), static_cast<unsigned>(msg.dest_addr));
+                //oled_print_rx_header(msg.src_addr, msg.len);
+                if(msg.len>0) oled_write_payload_safe(msg.data, msg.len);
+                ledYellow.blink(300u);
+                // Send a reply to the sender, then release RX buffer.
+                myNodeNet.Send(msg.src_addr, "Hello from NodeNet!");
+            }
 
             NodeNet::FreeMessage(msg);
         }

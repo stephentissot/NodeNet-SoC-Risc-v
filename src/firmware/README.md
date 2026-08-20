@@ -219,7 +219,7 @@ TX Path (Firmware → Hardware):
 
 RX Path (Hardware → Firmware):
     1. Hardware receives, decodes, and validates a frame
-    2. Hardware exposes source + length through RX_HDR
+    2. Hardware exposes source, destination, valid, and length through RX_HDR
     3. Firmware checks RX valid bit
     4. Firmware drains payload bytes through RX_DATA
 ```
