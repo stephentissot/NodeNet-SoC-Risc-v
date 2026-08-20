@@ -93,8 +93,13 @@ This project demonstrates a scalable embedded systems design on a cost-effective
   - Global C++ constructors called in `start.S` via `.init_array`
   - Final runtime image is linked for SDRAM via `link_app_sdram.ld`
   - Loaded by ROM-resident `boot_stage0` from SPI flash offset `0x244000`
+  - Includes ArduinoJson 7 in freestanding mode, with an optional SDRAM-backed allocator for large JSON payloads
   - **NodeNet485 echo loop**: Listens for messages, echoes responses
   - D2 activity heartbeat: non-blocking software toggle every 500 ms
+
+- **External SDRAM bring-up**:
+  - Cold boot initialization now follows the generated LiteDRAM DFII sequence before the SDRAM user port is released
+  - Firmware should still call `sdram_wait_ready()` before touching `SDRAM_DATA` objects or the JSON SDRAM pool
 
 - See [src/firmware/README.md](src/firmware/README.md) for full peripheral usage guide.
 - See [src/wbDevices/README_NODENET.md](src/wbDevices/README_NODENET.md) for protocol details.

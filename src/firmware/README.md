@@ -458,6 +458,49 @@ void* sdram_alloc(size_t bytes) {
 }
 ```
 
+**ArduinoJson 7 with the SDRAM allocator**:
+
+The firmware integrates ArduinoJson 7 in freestanding mode. For small documents, a regular `JsonDocument` is fine. For larger payloads, you can move the JSON heap into SDRAM with `g_sdram_json_allocator`.
+
+Rules:
+- Call `sdram_wait_ready()` before any SDRAM access.
+- Call `sdram_json_allocator_init()` once before the first `JsonDocument doc(&g_sdram_json_allocator);`.
+- The default JSON pool is `SDRAM_JSON_POOL_SIZE` (`256 KiB`) in `g_sdram_json_pool`.
+- The pool lives in SDRAM, so its content is undefined after reset until you initialize it.
+
+```cpp
+#include <ArduinoJson.h>
+#include "sdram.h"
+
+static void json_example(void)
+{
+    if (!sdram_wait_ready()) {
+        uart_puts("SDRAM not ready\n");
+        return;
+    }
+
+    if (!sdram_json_allocator_init()) {
+        uart_puts("JSON allocator init failed\n");
+        return;
+    }
+
+    JsonDocument doc(&g_sdram_json_allocator);
+    doc["node"] = "NodeNet";
+    doc["uptime_ms"] = *TIMER_MS;
+    doc["sdram"] = true;
+
+    char buffer[128];
+    size_t len = serializeJson(doc, buffer, sizeof(buffer));
+    if (len < sizeof(buffer)) {
+        buffer[len] = '\0';
+        uart_puts(buffer);
+        uart_puts("\n");
+    }
+}
+```
+
+This allocator is implemented in `sdram.cpp` as a simple free-list over `g_sdram_json_pool`. It supports `allocate()`, `deallocate()`, and `reallocate()`, which matches what ArduinoJson 7 expects from a custom allocator.
+
 **SDRAM Regions (Memory Map)**:
 ```
 Hardware: 8 MB total (M12L64322A SDRAM on Colorlight i9)

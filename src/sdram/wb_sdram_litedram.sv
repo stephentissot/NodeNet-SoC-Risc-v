@@ -117,22 +117,38 @@ module wb_sdram_litedram #(
     wire wb_ctrl_ack;
     wire [31:0] wb_ctrl_dat_r;
     wire wb_ctrl_err;
-    localparam [29:0] WB_CTRL_ADDR_CORE_ENABLE = 30'h0000_0000;
-    localparam [29:0] WB_CTRL_ADDR_DFII_CONTROL = 30'h0000_0200;
-    // dfii_control bits: [0]=sel, [1]=cke, [2]=odt, [3]=reset_n
-    // Force sel=1 (hardware path) and reset_n=1.
-    localparam [31:0] WB_CTRL_DFII_CONTROL_HW_MODE = 32'h0000_0009;
+    // wb_ctrl_adr is word-addressed. csr.csv byte addresses therefore divide by 4.
+    localparam [29:0] WB_CTRL_ADDR_DDRCTRL_INIT_DONE   = 30'h0000_0000;
+    localparam [29:0] WB_CTRL_ADDR_DFII_CONTROL       = 30'h0000_0200;
+    localparam [29:0] WB_CTRL_ADDR_DFII_PI0_COMMAND   = 30'h0000_0201;
+    localparam [29:0] WB_CTRL_ADDR_DFII_PI0_ISSUE     = 30'h0000_0202;
+    localparam [29:0] WB_CTRL_ADDR_DFII_PI0_ADDRESS   = 30'h0000_0203;
+    localparam [29:0] WB_CTRL_ADDR_DFII_PI0_BADDRESS  = 30'h0000_0204;
+    localparam [31:0] WB_CTRL_DDRCTRL_INIT_DONE       = 32'h0000_0001;
+    localparam [31:0] WB_CTRL_DFII_CONTROL_SOFTWARE   = 32'h0000_000E;
+    localparam [31:0] WB_CTRL_DFII_CONTROL_HARDWARE   = 32'h0000_0001;
+    localparam [31:0] WB_CTRL_DFII_CMD_PRECHARGE_ALL  = 32'h0000_000B;
+    localparam [31:0] WB_CTRL_DFII_CMD_AUTO_REFRESH   = 32'h0000_000D;
+    localparam [31:0] WB_CTRL_DFII_CMD_MODE_REGISTER  = 32'h0000_000F;
+    localparam [31:0] WB_CTRL_SDR_MR_RESET_DLL        = 32'h0000_0120;
+    localparam [31:0] WB_CTRL_SDR_MR_NORMAL           = 32'h0000_0020;
+    localparam [23:0] WB_CTRL_DELAY_ISSUE_GAP         = 24'd1;
+    localparam [23:0] WB_CTRL_DELAY_INIT_CKE          = 24'd20000;
+    localparam [23:0] WB_CTRL_DELAY_MR                = 24'd200;
+    localparam [23:0] WB_CTRL_DELAY_AUTO_REFRESH      = 24'd4;
+    localparam [4:0]  WB_CTRL_STEP_LAST               = 5'd26;
     reg  wb_ctrl_enable_req;
     reg  wb_ctrl_arm_pending;
     reg  wb_ctrl_done_r;
     reg  wb_ctrl_err_r;
-    reg  [2:0] wb_ctrl_step;
+    reg  [4:0] wb_ctrl_step;
     reg  [29:0] wb_ctrl_adr_r;
     reg  [31:0] wb_ctrl_dat_w_r;
     reg  [3:0] wb_ctrl_sel_r;
     reg        wb_ctrl_we_r;
     reg  [23:0] wb_ctrl_wait_ctr;
     reg  [23:0] wb_ctrl_start_delay_ctr;
+    reg  [23:0] wb_ctrl_delay_ctr;
     reg  [23:0] wb_post_enable_guard_ctr;
     wire        user_port_ready_u;
     wire        wb_ctrl_pending_u;
@@ -226,10 +242,98 @@ module wb_sdram_litedram #(
         end
     endfunction
 
-    assign wb_ctrl_pending_u = wb_ctrl_arm_pending | wb_ctrl_enable_req;
-    assign user_port_ready_u = init_done & wb_ctrl_done_r & ~wb_ctrl_err_r & ~user_rst & (wb_post_enable_guard_ctr == 24'd0);
-    assign init_done_o = init_done;
-    assign init_error_o = init_error;
+    function automatic [29:0] wb_ctrl_step_addr;
+        input [4:0] step;
+        begin
+            case (step)
+                5'd0:  wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_CONTROL;
+                5'd1:  wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_ADDRESS;
+                5'd2:  wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_BADDRESS;
+                5'd3:  wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_COMMAND;
+                5'd4:  wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_ISSUE;
+                5'd5:  wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_ADDRESS;
+                5'd6:  wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_BADDRESS;
+                5'd7:  wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_COMMAND;
+                5'd8:  wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_ISSUE;
+                5'd9:  wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_ADDRESS;
+                5'd10: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_BADDRESS;
+                5'd11: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_COMMAND;
+                5'd12: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_ISSUE;
+                5'd13: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_ADDRESS;
+                5'd14: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_BADDRESS;
+                5'd15: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_COMMAND;
+                5'd16: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_ISSUE;
+                5'd17: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_ADDRESS;
+                5'd18: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_BADDRESS;
+                5'd19: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_COMMAND;
+                5'd20: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_ISSUE;
+                5'd21: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_ADDRESS;
+                5'd22: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_BADDRESS;
+                5'd23: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_COMMAND;
+                5'd24: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_ISSUE;
+                5'd25: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_CONTROL;
+                5'd26: wb_ctrl_step_addr = WB_CTRL_ADDR_DDRCTRL_INIT_DONE;
+                default: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_CONTROL;
+            endcase
+        end
+    endfunction
+
+    function automatic [31:0] wb_ctrl_step_data;
+        input [4:0] step;
+        begin
+            case (step)
+                5'd0:  wb_ctrl_step_data = WB_CTRL_DFII_CONTROL_SOFTWARE;
+                5'd1:  wb_ctrl_step_data = 32'h0000_0400;
+                5'd2:  wb_ctrl_step_data = 32'h0000_0000;
+                5'd3:  wb_ctrl_step_data = WB_CTRL_DFII_CMD_PRECHARGE_ALL;
+                5'd4:  wb_ctrl_step_data = 32'h0000_0001;
+                5'd5:  wb_ctrl_step_data = WB_CTRL_SDR_MR_RESET_DLL;
+                5'd6:  wb_ctrl_step_data = 32'h0000_0000;
+                5'd7:  wb_ctrl_step_data = WB_CTRL_DFII_CMD_MODE_REGISTER;
+                5'd8:  wb_ctrl_step_data = 32'h0000_0001;
+                5'd9:  wb_ctrl_step_data = 32'h0000_0400;
+                5'd10: wb_ctrl_step_data = 32'h0000_0000;
+                5'd11: wb_ctrl_step_data = WB_CTRL_DFII_CMD_PRECHARGE_ALL;
+                5'd12: wb_ctrl_step_data = 32'h0000_0001;
+                5'd13: wb_ctrl_step_data = 32'h0000_0000;
+                5'd14: wb_ctrl_step_data = 32'h0000_0000;
+                5'd15: wb_ctrl_step_data = WB_CTRL_DFII_CMD_AUTO_REFRESH;
+                5'd16: wb_ctrl_step_data = 32'h0000_0001;
+                5'd17: wb_ctrl_step_data = 32'h0000_0000;
+                5'd18: wb_ctrl_step_data = 32'h0000_0000;
+                5'd19: wb_ctrl_step_data = WB_CTRL_DFII_CMD_AUTO_REFRESH;
+                5'd20: wb_ctrl_step_data = 32'h0000_0001;
+                5'd21: wb_ctrl_step_data = WB_CTRL_SDR_MR_NORMAL;
+                5'd22: wb_ctrl_step_data = 32'h0000_0000;
+                5'd23: wb_ctrl_step_data = WB_CTRL_DFII_CMD_MODE_REGISTER;
+                5'd24: wb_ctrl_step_data = 32'h0000_0001;
+                5'd25: wb_ctrl_step_data = WB_CTRL_DFII_CONTROL_HARDWARE;
+                5'd26: wb_ctrl_step_data = WB_CTRL_DDRCTRL_INIT_DONE;
+                default: wb_ctrl_step_data = 32'h0000_0000;
+            endcase
+        end
+    endfunction
+
+    function automatic [23:0] wb_ctrl_step_delay;
+        input [4:0] step;
+        begin
+            case (step)
+                5'd0:  wb_ctrl_step_delay = WB_CTRL_DELAY_INIT_CKE;
+                5'd4:  wb_ctrl_step_delay = WB_CTRL_DELAY_ISSUE_GAP;
+                5'd8:  wb_ctrl_step_delay = WB_CTRL_DELAY_MR;
+                5'd12: wb_ctrl_step_delay = WB_CTRL_DELAY_ISSUE_GAP;
+                5'd16: wb_ctrl_step_delay = WB_CTRL_DELAY_AUTO_REFRESH;
+                5'd20: wb_ctrl_step_delay = WB_CTRL_DELAY_AUTO_REFRESH;
+                5'd24: wb_ctrl_step_delay = WB_CTRL_DELAY_MR;
+                default: wb_ctrl_step_delay = WB_CTRL_DELAY_ISSUE_GAP;
+            endcase
+        end
+    endfunction
+
+    assign wb_ctrl_pending_u = wb_ctrl_arm_pending | wb_ctrl_enable_req | (wb_ctrl_delay_ctr != 24'd0);
+    assign user_port_ready_u = wb_ctrl_done_r & ~wb_ctrl_err_r & ~user_rst & (wb_post_enable_guard_ctr == 24'd0);
+    assign init_done_o = wb_ctrl_done_r;
+    assign init_error_o = wb_ctrl_err_r;
     assign dbg_ack_o = dbg_ack_r;
     assign dbg_err_o = dbg_err_r;
     assign dbg_timeout_o = dbg_timeout_r;
@@ -258,9 +362,7 @@ module wb_sdram_litedram #(
     assign cpu_read_sel = (!wb_we_i && (wb_sel_i == 4'b0000)) ? 4'b1111 : wb_sel_i;
     assign cpu_write_sel = (wb_sel_i == 4'b0000) ? 4'b1111 : wb_sel_i;
     assign cpu_partial_write_req = cpu_write_req && (cpu_write_sel != 4'b1111);
-    assign direct_cpu_req = (state == ST_IDLE) && wb_req_active && user_port_ready_u &&
-                            !selftest_running && !selftest_reg_sel && !cpu_partial_write_req &&
-                            !direct_cpu_holdoff_r;
+    assign direct_cpu_req = 1'b0;
     assign direct_cpu_ack_or_err = direct_cpu_req && user_port_wb_ack_or_err;
 
     // DQM is hard-wired low on this PCB, so sub-word stores must be expanded
@@ -278,7 +380,7 @@ module wb_sdram_litedram #(
         (state == ST_RMW_WRITE_LO) ? rmw_lower_write_dat :
         req_wdat;
     assign core_wb_sel =
-        direct_cpu_req ? cpu_read_sel :
+        direct_cpu_req ? (wb_we_i ? cpu_write_sel : cpu_read_sel) :
         (state == ST_WB_WAIT)  ? req_sel :
         (state == ST_RMW_READ_LO) ? 4'b1111 :
         (state == ST_RMW_WRITE_LO)? 4'b1111 :
@@ -293,12 +395,13 @@ module wb_sdram_litedram #(
 
     assign sdram_clk = sdram_clk_i;
 
-    assign wb_ack_o = direct_cpu_ack_or_err ? 1'b1 : wb_ack_r;
-    assign wb_dat_o = direct_cpu_req ? (user_port_wb_err ? 32'd0 : user_port_wb_dat_raw) : wb_dat_r;
+    assign wb_ack_o = wb_ack_r;
+    assign wb_dat_o = wb_dat_r;
 
-    // In GENSDRPHY 1:1 mode, user_clk == clk. Ordinary CPU full-word accesses
-    // therefore pass straight through to the generated LiteDRAM Wishbone port,
-    // while this FSM only handles local control/self-test/RMW cases.
+    // Keep all CPU traffic ordered through this FSM. The generated LiteDRAM
+    // user port can acknowledge a completed write with dat_r left at zero;
+    // issuing a new direct CPU read immediately afterward can otherwise
+    // mis-consume that response as the read result.
 
     always @(posedge user_clk or posedge rst) begin
         if (rst) begin
@@ -314,13 +417,14 @@ module wb_sdram_litedram #(
             wb_ctrl_arm_pending <= 1'b1;
             wb_ctrl_done_r   <= 1'b0;
             wb_ctrl_err_r    <= 1'b0;
-            wb_ctrl_step     <= 2'd0;
-            wb_ctrl_adr_r    <= WB_CTRL_ADDR_CORE_ENABLE;
-            wb_ctrl_dat_w_r  <= 32'd1;
+            wb_ctrl_step     <= 5'd0;
+            wb_ctrl_adr_r    <= WB_CTRL_ADDR_DFII_CONTROL;
+            wb_ctrl_dat_w_r  <= WB_CTRL_DFII_CONTROL_SOFTWARE;
             wb_ctrl_sel_r    <= 4'b1111;
             wb_ctrl_we_r     <= 1'b1;
             wb_ctrl_wait_ctr <= 24'd0;
             wb_ctrl_start_delay_ctr <= 24'd2048;
+            wb_ctrl_delay_ctr <= 24'd0;
             wb_post_enable_guard_ctr <= 24'd0;
             state          <= ST_IDLE;
             req_adr        <= 32'd0;
@@ -378,13 +482,14 @@ module wb_sdram_litedram #(
             wb_ctrl_arm_pending <= 1'b1;
             wb_ctrl_done_r   <= 1'b0;
             wb_ctrl_err_r    <= 1'b0;
-            wb_ctrl_step     <= 2'd0;
-            wb_ctrl_adr_r    <= WB_CTRL_ADDR_CORE_ENABLE;
-            wb_ctrl_dat_w_r  <= 32'd1;
+            wb_ctrl_step     <= 5'd0;
+            wb_ctrl_adr_r    <= WB_CTRL_ADDR_DFII_CONTROL;
+            wb_ctrl_dat_w_r  <= WB_CTRL_DFII_CONTROL_SOFTWARE;
             wb_ctrl_sel_r    <= 4'b1111;
             wb_ctrl_we_r     <= 1'b1;
             wb_ctrl_wait_ctr <= 24'd0;
             wb_ctrl_start_delay_ctr <= 24'd2048;
+            wb_ctrl_delay_ctr <= 24'd0;
             wb_post_enable_guard_ctr <= 24'd0;
             state          <= ST_IDLE;
             req_adr        <= 32'd0;
@@ -571,19 +676,15 @@ module wb_sdram_litedram #(
                 selftest_progress <= {22'd0, 1'b0, 1'b0, 8'd0};
             end
 
-            // Give LiteDRAM core internals time to leave reset before the
-            // first wb_ctrl write that enables user-port traffic.
+            // Give LiteDRAM core internals time to leave reset before driving
+            // the generated DFII software-init sequence through wb_ctrl.
             if (wb_ctrl_arm_pending) begin
                 if (wb_ctrl_start_delay_ctr != 24'd0) begin
                     wb_ctrl_start_delay_ctr <= wb_ctrl_start_delay_ctr - 24'd1;
                 end else begin
                     wb_ctrl_arm_pending <= 1'b0;
-                    wb_ctrl_step <= 3'd0;
-                    wb_ctrl_adr_r <= WB_CTRL_ADDR_CORE_ENABLE;
-                    wb_ctrl_dat_w_r <= 32'd1;
-                    wb_ctrl_sel_r <= 4'b1111;
-                    wb_ctrl_we_r <= 1'b1;
-                    wb_ctrl_enable_req <= 1'b1;
+                    wb_ctrl_step <= 5'd0;
+                    wb_ctrl_delay_ctr <= 24'd0;
                     wb_ctrl_wait_ctr <= 24'd0;
                 end
             end
@@ -592,71 +693,43 @@ module wb_sdram_litedram #(
                 wb_post_enable_guard_ctr <= wb_post_enable_guard_ctr - 24'd1;
             end
 
-            // Bring LiteDRAM user port out of reset-gate through wb_ctrl once
-            // after reset instead of forcing generated CSR defaults in RTL text.
+            if (!wb_ctrl_arm_pending && !wb_ctrl_done_r && !wb_ctrl_err_r && !wb_ctrl_enable_req) begin
+                if (wb_ctrl_delay_ctr != 24'd0) begin
+                    wb_ctrl_delay_ctr <= wb_ctrl_delay_ctr - 24'd1;
+                end else begin
+                    wb_ctrl_adr_r <= wb_ctrl_step_addr(wb_ctrl_step);
+                    wb_ctrl_dat_w_r <= wb_ctrl_step_data(wb_ctrl_step);
+                    wb_ctrl_sel_r <= 4'b1111;
+                    wb_ctrl_we_r <= 1'b1;
+                    wb_ctrl_enable_req <= 1'b1;
+                    wb_ctrl_wait_ctr <= 24'd0;
+                end
+            end
+
+            // Run LiteDRAM's generated SDR DFII init sequence, then hand the
+            // DFI bus back to the hardware controller for normal accesses.
             if (wb_ctrl_enable_req) begin
                 if (wb_ctrl_ack) begin
+                    wb_ctrl_enable_req <= 1'b0;
                     wb_ctrl_wait_ctr <= 24'd0;
-                    if (wb_ctrl_step == 3'd0) begin
-                        // Read back enable CSR to ensure write has been latched.
-                        wb_ctrl_step <= 3'd1;
-                        wb_ctrl_adr_r <= WB_CTRL_ADDR_CORE_ENABLE;
-                        wb_ctrl_dat_w_r <= 32'd0;
-                        wb_ctrl_sel_r <= 4'b1111;
-                        wb_ctrl_we_r <= 1'b0;
-                    end else if (wb_ctrl_step == 3'd1) begin
-                        if (wb_ctrl_dat_r[0]) begin
-                            // Verify DFII control is in hardware path (sel=1),
-                            // otherwise reads can be stuck in command NOP mode.
-                            wb_ctrl_step <= 3'd2;
-                            wb_ctrl_adr_r <= WB_CTRL_ADDR_DFII_CONTROL;
-                            wb_ctrl_dat_w_r <= 32'd0;
-                            wb_ctrl_sel_r <= 4'b1111;
-                            wb_ctrl_we_r <= 1'b0;
-                        end else begin
-                            wb_ctrl_enable_req <= 1'b0;
-                            wb_ctrl_err_r <= 1'b1;
-                        end
-                    end else if (wb_ctrl_step == 3'd2) begin
-                        if (wb_ctrl_dat_r[0] && wb_ctrl_dat_r[3]) begin
-                            wb_ctrl_enable_req <= 1'b0;
-                            wb_ctrl_done_r <= 1'b1;
-                            wb_post_enable_guard_ctr <= WB_POST_ENABLE_GUARD_CYCLES;
-                        end else begin
-                            // Force DFII control to hardware path and verify.
-                            wb_ctrl_step <= 3'd3;
-                            wb_ctrl_adr_r <= WB_CTRL_ADDR_DFII_CONTROL;
-                            wb_ctrl_dat_w_r <= WB_CTRL_DFII_CONTROL_HW_MODE;
-                            wb_ctrl_sel_r <= 4'b1111;
-                            wb_ctrl_we_r <= 1'b1;
-                        end
-                    end else if (wb_ctrl_step == 3'd3) begin
-                        wb_ctrl_step <= 3'd4;
-                        wb_ctrl_adr_r <= WB_CTRL_ADDR_DFII_CONTROL;
-                        wb_ctrl_dat_w_r <= 32'd0;
-                        wb_ctrl_sel_r <= 4'b1111;
-                        wb_ctrl_we_r <= 1'b0;
-                    end else if (wb_ctrl_step == 3'd4) begin
-                        wb_ctrl_enable_req <= 1'b0;
-                        if (wb_ctrl_dat_r[0] && wb_ctrl_dat_r[3]) begin
-                            wb_ctrl_done_r <= 1'b1;
-                            wb_post_enable_guard_ctr <= WB_POST_ENABLE_GUARD_CYCLES;
-                        end else begin
-                            wb_ctrl_err_r <= 1'b1;
-                        end
+                    if (wb_ctrl_step == WB_CTRL_STEP_LAST) begin
+                        wb_ctrl_done_r <= 1'b1;
+                        wb_post_enable_guard_ctr <= WB_POST_ENABLE_GUARD_CYCLES;
                     end else begin
-                        wb_ctrl_enable_req <= 1'b0;
-                        wb_ctrl_err_r <= 1'b1;
+                        wb_ctrl_step <= wb_ctrl_step + 5'd1;
+                        wb_ctrl_delay_ctr <= wb_ctrl_step_delay(wb_ctrl_step);
                     end
                 end else if (wb_ctrl_err) begin
                     wb_ctrl_enable_req <= 1'b0;
                     wb_ctrl_err_r <= 1'b1;
+                    wb_ctrl_delay_ctr <= 24'd0;
                     wb_ctrl_wait_ctr <= 24'd0;
                 end else if (wb_ctrl_wait_ctr < WB_TIMEOUT_CYCLES) begin
                     wb_ctrl_wait_ctr <= wb_ctrl_wait_ctr + 24'd1;
                 end else begin
                     wb_ctrl_enable_req <= 1'b0;
                     wb_ctrl_err_r <= 1'b1;
+                    wb_ctrl_delay_ctr <= 24'd0;
                     wb_ctrl_wait_ctr <= 24'd0;
                 end
             end
@@ -711,6 +784,15 @@ module wb_sdram_litedram #(
                         rmw_is_selftest <= 1'b0;
                         wb_wait_ctr <= 24'd0;
                         state <= ST_RMW_READ_HI;
+                    end else if (wb_req_active) begin
+                        dbg_cpu_req_seen_r <= 1'b1;
+                        req_adr <= wb_adr_i;
+                        req_wdat <= wb_dat_i;
+                        req_sel <= wb_we_i ? cpu_write_sel : cpu_read_sel;
+                        req_we <= wb_we_i;
+                        rmw_is_selftest <= 1'b0;
+                        wb_wait_ctr <= 24'd0;
+                        state <= ST_WB_WAIT;
                     end
                 end
 

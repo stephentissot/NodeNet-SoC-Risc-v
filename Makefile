@@ -29,12 +29,14 @@ FLASH_TOTAL_BYTES=0x800000
 FW_IMAGE_SLOT_BYTES=0x5BC000
 FW_IMAGE_VERIFY_TOOL=src/firmware/tools/verify_firmware_image.py
 FW_IMAGE_TEST_TOOL=src/firmware/tools/make_boot_test_images.py
+FW_SKIP_RESET ?= 0
 FIRMWARE_PREV_HEX=$(BUILD)/nodenet_riscv.prev.hex
 FIRMWARE_PADDED_HEX=$(BUILD)/nodenet_riscv.padded.hex
 FIRMWARE_PREV_PADDED_HEX=$(BUILD)/nodenet_riscv.prev_padded.hex
 FW_PATCH_CONFIG=$(BUILD)/$(TOP)_fw.config
 FW_PATCH_BIT=$(BUILD)/$(TOP)_fw.bit
 FLASH_BOOT_IMAGE=$(BUILD)/$(TOP)_flash.bit
+FLASH_PROGRAM_IMAGE=$(BUILD)/$(TOP).bit
 ROM_BYTES=65536
 LITEDRAM_BUILD_DIR ?= $(BUILD)/litedram
 LITEDRAM_CONFIG ?= tools/litedram/colorlight_i9.yml
@@ -200,11 +202,15 @@ flash-fw-write-image:
 		exit 2; \
 	fi
 	@ofl_verify=""; \
+	ofl_reset=""; \
 	if [ "$(FW_STRICT_VERIFY)" = "1" ]; then \
 		ofl_verify="--verify"; \
 	fi; \
-	echo "[FWIMG] openFPGALoader write offset=$(FW_IMAGE_FLASH_OFFSET) strict=$(FW_STRICT_VERIFY)"; \
-	openFPGALoader -b colorlight-i9 -f --skip-reset --unprotect-flash $$ofl_verify -o $(FW_IMAGE_FLASH_OFFSET) $(IMAGE_TO_FLASH)
+	if [ "$(FW_SKIP_RESET)" = "1" ]; then \
+		ofl_reset="--skip-reset"; \
+	fi; \
+	echo "[FWIMG] openFPGALoader write offset=$(FW_IMAGE_FLASH_OFFSET) strict=$(FW_STRICT_VERIFY) skip_reset=$(FW_SKIP_RESET)"; \
+	openFPGALoader -b colorlight-i9 -f $$ofl_reset --unprotect-flash $$ofl_verify -o $(FW_IMAGE_FLASH_OFFSET) $(IMAGE_TO_FLASH)
 
 # End-to-end firmware-only cycle: build+verify image, program flash partition, then
 # reload the current bitstream in SRAM to restart stage0 without synthesis/P&R.
@@ -322,12 +328,15 @@ ram-fw:
 		ecppack --compress $(FW_PATCH_CONFIG) $(FW_PATCH_BIT); then \
 		openFPGALoader -b colorlight-i9 $(FW_PATCH_BIT); \
 	else \
-		echo "ecpbram patch failed, fallback to full rebuild/program (make ram)."; \
-		$(MAKE) ram; \
+		echo "ecpbram patch failed, fallback to full bitstream rebuild/program (make all + make ram-fast)."; \
+		$(MAKE) all; \
+		$(MAKE) ram-fast; \
 	fi
 
 
-# Generate SPI Flash image for cold boot (bootaddr=0)
+# Generate an alternate SPI flash image for experiments.
+# The official Colorlight i9 flows generally program the raw `.bit` file
+# directly into flash rather than a separately repacked boot image.
 flash_image: $(BUILD)/$(TOP).config
 	ecppack \
 		--compress \
@@ -339,17 +348,15 @@ flash_image: $(BUILD)/$(TOP).config
 
 # Program W25Q64 SPI Flash
 #
-# Primary flow uses ecpdap as requested:
-#   ecpdap program <bit>
-#   ecpdap flash erase
-#   ecpdap flash write <bit>
+# Primary flow uses the same high-level Colorlight i9 path found in the
+# official repo: unprotect once, then write the raw compressed `.bit` to flash.
+# Avoid preloading the user design into SRAM before this step: once the design
+# is live, it can own the flash pins and complicate JTAG/sysCONFIG flash access.
 #
 # Falls back to OpenOCD jtagspi, then openFPGALoader.
-flash: flash_image
-	@if ecpdap -f $(ECPDAP_FREQ) program $(BUILD)/$(TOP).bit && \
-		ecpdap -f $(ECPDAP_FREQ) flash unprotect && \
-		ecpdap -f $(ECPDAP_FREQ) flash erase && \
-		ecpdap -f $(ECPDAP_FREQ) flash write $(FLASH_BOOT_IMAGE) && \
+flash: $(FLASH_PROGRAM_IMAGE)
+	@if ecpdap -f $(ECPDAP_FREQ) flash unprotect && \
+		ecpdap -f $(ECPDAP_FREQ) flash write $(FLASH_PROGRAM_IMAGE) && \
 		ecpdap -f $(ECPDAP_FREQ) flash jump write 0x0 --spimode read && \
 		ecpdap -f $(ECPDAP_FREQ) flash jump read; then \
 		echo "ecpdap flash succeeded."; \
@@ -362,12 +369,12 @@ flash: flash_image
 		    source [find cpld/jtagspi.cfg]; \
 		    init; \
 		    jtagspi_init ecp5.pld \"\" -1; \
-		    flash write_image erase unlock $(FLASH_BOOT_IMAGE) 0x0; \
+		    flash write_image erase unlock $(FLASH_PROGRAM_IMAGE) 0x0; \
 		    exit"; then \
 		echo "OpenOCD flash succeeded (fallback)."; \
 	else \
 		echo "ecpdap/OpenOCD failed, retrying with openFPGALoader..."; \
-		openFPGALoader -b colorlight-i9 -f --verify $(FLASH_BOOT_IMAGE); \
+		openFPGALoader -b colorlight-i9 -f --verify $(FLASH_PROGRAM_IMAGE); \
 	fi
 
 
