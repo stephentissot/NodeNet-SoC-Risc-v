@@ -3,28 +3,55 @@
 #include <cstring>
 
 namespace {
+constexpr uint32_t kNodeNetIrqMessageBit = 3u;
+constexpr uint32_t kNodeNetIrqBroadcastBit = 4u;
+constexpr uint32_t kNodeNetIrqMask =
+    (1u << kNodeNetIrqMessageBit) | (1u << kNodeNetIrqBroadcastBit);
+
 NodeNet* g_nodenet_irq_instance = nullptr;
 uint8_t g_nodenet_irq_payload[NODENET_MAX_PAYLOAD_SIZE + 1u] = {};
+bool g_nodenet_irq_mask_initialized = false;
 
-inline void Picorv32UnmaskAllIrqs() {
-  asm volatile(".word 0x0600000b" ::: "memory");
+inline uint32_t Picorv32SwapIrqMask(uint32_t newMask) {
+  register uint32_t mask_reg asm("a0") = newMask;
+  asm volatile(".word 0x0605650b" : "+r"(mask_reg) : : "memory");
+  return mask_reg;
 }
 
-inline void ApplyNodeNetIrqConfig(uint32_t base,
+inline uint32_t Picorv32ReadPendingIrqs() {
+  register uint32_t pending_reg asm("a0");
+  asm volatile(".word 0x0000c50b" : "=r"(pending_reg) : : "memory");
+  return pending_reg;
+}
+
+inline void WriteNodeNetIrqConfig(uint32_t base,
                                   NodeNet::MessageCallback broadcastCallback,
                                   NodeNet::MessageCallback messageCallback) {
-  if (broadcastCallback != nullptr || messageCallback != nullptr) {
-    Picorv32UnmaskAllIrqs();
-  }
-
   *(volatile uint32_t*)(base + NODENET_IRQ_CTRL_OFS) =
       (messageCallback != nullptr ? 0x1u : 0u) |
       (broadcastCallback != nullptr ? 0x2u : 0u);
 }
+
+inline void ApplyNodeNetCpuIrqMask(bool callbacks_enabled) {
+  if (!callbacks_enabled && !g_nodenet_irq_mask_initialized) {
+    return;
+  }
+
+  uint32_t irq_mask = Picorv32SwapIrqMask(0xFFFFffffu);
+  irq_mask |= kNodeNetIrqMask;
+
+  if (callbacks_enabled) {
+    irq_mask &= ~kNodeNetIrqMask;
+  }
+
+  (void)Picorv32SwapIrqMask(irq_mask);
+  g_nodenet_irq_mask_initialized = true;
+}
 }
 
 extern "C" void nodenet_irq_dispatch(void) {
-  if (g_nodenet_irq_instance != nullptr) {
+  if (g_nodenet_irq_instance != nullptr &&
+      (Picorv32ReadPendingIrqs() & kNodeNetIrqMask) != 0u) {
     g_nodenet_irq_instance->HandleInterrupt();
   }
 }
@@ -55,7 +82,9 @@ void NodeNet::Init(uint8_t addr,
   Write(NODENET_UART_BAUD_OFS, ComputeUartDivisor(uart_baud));
   Write(NODENET_CONFIG_OFS, ((uint32_t)priority << 8) | (uint32_t)addr);
   Write(NODENET_LED_CFG_OFS, led_blink_ms);
-  ApplyNodeNetIrqConfig(base_, broadcast_callback_, message_callback_);
+  WriteNodeNetIrqConfig(base_, broadcast_callback_, message_callback_);
+  ApplyNodeNetCpuIrqMask(broadcast_callback_ != nullptr ||
+                         message_callback_ != nullptr);
   Write(NODENET_CONTROL_OFS, 0x2u);
 }
 
@@ -65,7 +94,9 @@ void NodeNet::SetCallbacks(MessageCallback broadcastCallback,
   message_callback_ = messageCallback;
   g_nodenet_irq_instance = this;
   Write(NODENET_CONTROL_OFS, 0x2u);
-  ApplyNodeNetIrqConfig(base_, broadcast_callback_, message_callback_);
+  WriteNodeNetIrqConfig(base_, broadcast_callback_, message_callback_);
+  ApplyNodeNetCpuIrqMask(broadcast_callback_ != nullptr ||
+                         message_callback_ != nullptr);
 }
 
 uint32_t NodeNet::Status() const {
