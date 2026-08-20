@@ -12,6 +12,8 @@ src/firmware/.cache/
 *.hex
 *.bit
 *.json
+!modbusLib/
+!modbusLib/*.json
 *.config
 *.vvp
 
