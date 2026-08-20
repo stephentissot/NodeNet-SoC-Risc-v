@@ -118,11 +118,13 @@ module wb_sdram_litedram #(
     wire [31:0] wb_ctrl_dat_r;
     wire wb_ctrl_err;
     // wb_ctrl_adr is word-addressed. csr.csv byte addresses therefore divide by 4.
+    localparam [29:0] WB_CTRL_ADDR_DDRCTRL_INIT_DONE   = 30'h0000_0000;
     localparam [29:0] WB_CTRL_ADDR_DFII_CONTROL       = 30'h0000_0200;
     localparam [29:0] WB_CTRL_ADDR_DFII_PI0_COMMAND   = 30'h0000_0201;
     localparam [29:0] WB_CTRL_ADDR_DFII_PI0_ISSUE     = 30'h0000_0202;
     localparam [29:0] WB_CTRL_ADDR_DFII_PI0_ADDRESS   = 30'h0000_0203;
     localparam [29:0] WB_CTRL_ADDR_DFII_PI0_BADDRESS  = 30'h0000_0204;
+    localparam [31:0] WB_CTRL_DDRCTRL_INIT_DONE       = 32'h0000_0001;
     localparam [31:0] WB_CTRL_DFII_CONTROL_SOFTWARE   = 32'h0000_000E;
     localparam [31:0] WB_CTRL_DFII_CONTROL_HARDWARE   = 32'h0000_0001;
     localparam [31:0] WB_CTRL_DFII_CMD_PRECHARGE_ALL  = 32'h0000_000B;
@@ -134,7 +136,7 @@ module wb_sdram_litedram #(
     localparam [23:0] WB_CTRL_DELAY_INIT_CKE          = 24'd20000;
     localparam [23:0] WB_CTRL_DELAY_MR                = 24'd200;
     localparam [23:0] WB_CTRL_DELAY_AUTO_REFRESH      = 24'd4;
-    localparam [4:0]  WB_CTRL_STEP_LAST               = 5'd25;
+    localparam [4:0]  WB_CTRL_STEP_LAST               = 5'd26;
     reg  wb_ctrl_enable_req;
     reg  wb_ctrl_arm_pending;
     reg  wb_ctrl_done_r;
@@ -269,6 +271,8 @@ module wb_sdram_litedram #(
                 5'd22: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_BADDRESS;
                 5'd23: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_COMMAND;
                 5'd24: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_PI0_ISSUE;
+                5'd25: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_CONTROL;
+                5'd26: wb_ctrl_step_addr = WB_CTRL_ADDR_DDRCTRL_INIT_DONE;
                 default: wb_ctrl_step_addr = WB_CTRL_ADDR_DFII_CONTROL;
             endcase
         end
@@ -304,6 +308,7 @@ module wb_sdram_litedram #(
                 5'd23: wb_ctrl_step_data = WB_CTRL_DFII_CMD_MODE_REGISTER;
                 5'd24: wb_ctrl_step_data = 32'h0000_0001;
                 5'd25: wb_ctrl_step_data = WB_CTRL_DFII_CONTROL_HARDWARE;
+                5'd26: wb_ctrl_step_data = WB_CTRL_DDRCTRL_INIT_DONE;
                 default: wb_ctrl_step_data = 32'h0000_0000;
             endcase
         end

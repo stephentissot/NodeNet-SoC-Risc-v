@@ -8,6 +8,9 @@ SDRAM_DATA volatile uint32_t g_sdram_test_scratch_words[SDRAM_TEST_SCRATCH_WORDS
 SDRAM_DATA alignas(8) uint8_t g_sdram_json_pool[SDRAM_JSON_POOL_SIZE];
 SdramJsonAllocator g_sdram_json_allocator;
 
+static_assert((sizeof(SdramJsonAllocator::BlockHeader) % SdramJsonAllocator::kAlignment) == 0u,
+	"SdramJsonAllocator::BlockHeader must preserve payload alignment");
+
 SdramJsonAllocator::SdramJsonAllocator()
 	: pool_base_(nullptr),
 	  pool_size_(0u),
@@ -32,11 +35,12 @@ void* SdramJsonAllocator::payloadFromBlock(BlockHeader* block)
 void SdramJsonAllocator::init(void* pool, size_t pool_size)
 {
 	pool_base_ = pool;
-	pool_size_ = alignUp(pool_size, alignof(size_t));
+	pool_size_ = alignUp(pool_size, kAlignment);
 	initialized_ = false;
 	head_ = nullptr;
 
-	if (pool_base_ == nullptr || pool_size_ <= sizeof(BlockHeader)) {
+	if (pool_base_ == nullptr || pool_size_ <= sizeof(BlockHeader) ||
+		((reinterpret_cast<uintptr_t>(pool_base_) & (kAlignment - 1u)) != 0u)) {
 		return;
 	}
 
@@ -55,8 +59,8 @@ bool SdramJsonAllocator::isInitialized() const
 
 void SdramJsonAllocator::splitBlock(BlockHeader* block, size_t wanted_size)
 {
-	const size_t aligned_wanted = alignUp(wanted_size, alignof(size_t));
-	if (block == nullptr || block->size <= aligned_wanted + sizeof(BlockHeader) + alignof(size_t)) {
+	const size_t aligned_wanted = alignUp(wanted_size, kAlignment);
+	if (block == nullptr || block->size <= aligned_wanted + sizeof(BlockHeader) + kAlignment) {
 		return;
 	}
 
@@ -106,7 +110,7 @@ void* SdramJsonAllocator::allocate(size_t size)
 		return nullptr;
 	}
 
-	const size_t wanted = alignUp(size, alignof(size_t));
+	const size_t wanted = alignUp(size, kAlignment);
 	BlockHeader* cur = head_;
 	while (cur) {
 		if (cur->used == kFreeTag && cur->size >= wanted) {
@@ -153,7 +157,7 @@ void* SdramJsonAllocator::reallocate(void* ptr, size_t new_size)
 		return nullptr;
 	}
 
-	const size_t wanted = alignUp(new_size, alignof(size_t));
+	const size_t wanted = alignUp(new_size, kAlignment);
 	if (block->size >= wanted) {
 		splitBlock(block, wanted);
 		return ptr;
@@ -183,6 +187,10 @@ void* SdramJsonAllocator::reallocate(void* ptr, size_t new_size)
 
 bool sdram_json_allocator_init(void)
 {
+	if (!sdram_wait_ready()) {
+		return false;
+	}
+
 	g_sdram_json_allocator.init(g_sdram_json_pool, sizeof(g_sdram_json_pool));
 	return g_sdram_json_allocator.isInitialized();
 }

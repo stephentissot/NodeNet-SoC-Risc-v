@@ -91,14 +91,16 @@ public:
     void deallocate(void* ptr) override;
     void* reallocate(void* ptr, size_t new_size) override;
 
-private:
     struct BlockHeader {
         size_t size;
         BlockHeader* next;
         BlockHeader* prev;
         uint32_t used;
     };
-
+    static constexpr size_t kAlignment = alignof(uint64_t);
+    
+private:
+    static constexpr size_t kMinBlockSize = sizeof(BlockHeader) + kAlignment;
     static constexpr uint32_t kUsedTag = 0x51A7A110u;
     static constexpr uint32_t kFreeTag = 0xFEEE0000u;
 
@@ -117,7 +119,7 @@ private:
 extern SDRAM_DATA alignas(8) uint8_t g_sdram_json_pool[SDRAM_JSON_POOL_SIZE];
 extern SdramJsonAllocator g_sdram_json_allocator;
 
-/* Must be called after sdram_wait_ready() and before first JsonDocument use. */
+/* Waits for SDRAM readiness, then initializes the ArduinoJson pool. */
 bool sdram_json_allocator_init(void);
 
 #endif
