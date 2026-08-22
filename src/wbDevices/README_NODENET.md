@@ -9,7 +9,7 @@
 - **Error Detection**: XOR CRC
 - **Anti-collision**: Address-based backoff for broadcasts
 - **Heartbeat**: Periodic keep-alive messages
-- **Flow Control**: Priority-based transmission (LOW/NORMAL/HIGH)
+- **Flow Control**: Fixed TX timing aligned with the ESP32 firmware rules
 
 ## Validation Status (2026-08-20)
 
@@ -122,9 +122,9 @@ MMIO mailbox registers only.
 
 4. **nodenet_heartbeat.sv**
    - Tracks heartbeat timer
-   - Calculates anti-collision backoff based on:
-     - `addr * 50ms` for broadcasts (avoid collisions)
-     - `addr * 2ms` for unicasts (stagger transmissions)
+    - Calculates anti-collision backoff based on:
+       - `addr * 50ms` for broadcasts (avoid collisions)
+       - fixed `10ms` line-ready delay for unicasts
    - Signals when heartbeat is due
 
 5. **uart_simple.sv**
@@ -148,7 +148,7 @@ Base address: `0x10006000`
 | 0x04   | TX_DATA   | R/W | 7:0   | Write payload bytes / read load count |
 | 0x08   | RX_HDR    | R   | 31:0  | `[src(31:24) | dst(23:16) | rx_valid(15) | len(11:0)]`  |
 | 0x0C   | RX_DATA   | R   | 7:0   | Read next received payload byte      |
-| 0x10   | CONFIG    | R/W | 31:0  | `[hb_interval(31:10) | prio(9:8) | addr]` |
+| 0x10   | CONFIG    | R/W | 31:0  | `[hb_interval(31:10) | reserved(9:8) | addr]` |
 | 0x14   | CONTROL   | W   | 2:0   | `bit0=trigger_tx bit1=clear_rx bit2=queue_heartbeat` |
 | 0x18   | STATUS    | R   | 31:0  | TX/RX state, UART ready, error flags |
 | 0x1C   | LED_CFG   | R/W | 31:0  | TX/RX activity LED pulse duration (milliseconds) |
@@ -245,7 +245,6 @@ NodeNet myNodeNet(
    NODENET0_BASE,
    0x01,
    1'000'000,
-   NODENET_PRIORITY_NORMAL,
    200,
    nullptr,
    nullptr);
@@ -278,7 +277,7 @@ static void onMessage(const NodeNetMessage& msg)
 int main()
 {
    NodeNet myNodeNet(NODENET0_BASE, 0x41, 1'000'000,
-                 NODENET_PRIORITY_NORMAL, 200, nullptr, nullptr);
+                 200, nullptr, nullptr);
 
    // Finish the rest of system init first.
    myNodeNet.SetCallbacks(onBroadcast, onMessage);
@@ -301,13 +300,13 @@ Bring-up notes:
 | UART Bit Time (1 Mb/s) | 1 µs | 25 | `BAUD_RATE=1_000_000` |
 | Heartbeat (default) | 10 seconds | 250,000,000 | Configurable |
 | Broadcast backoff per addr unit | 50 ms | 1,250,000 | Per node address |
-| Unicast delay per addr unit | 2 ms | 50,000 | Per node address |
+| Unicast line-ready delay | 10 ms | 250,000 | Fixed before unicast |
 | Line ready time | 10 ms | 250,000 | Hardcoded |
 | Receive timeout | 1 second | 25,000,000 | Hardcoded |
 
 **Anti-collision mechanism**: If node address is 0x05:
-- After unicast: can transmit again after 5 × 2ms = 10ms
-- After broadcast: must wait 5 × 50ms = 250ms before next transmission
+- After unicast: can transmit after the fixed 10ms line-ready delay
+- After broadcast: must wait 5 × 50ms = 250ms before transmission
 
 This prevents medium contention when multiple nodes transmit.
 
@@ -361,13 +360,11 @@ public:
    explicit NodeNet(uint32_t base,
                     uint8_t addr,
                     uint32_t uart_baud,
-                    NodeNetPriority priority,
                     uint32_t led_blink_ms = 100u,
                     MessageCallback broadcastCallback = nullptr,
                     MessageCallback messageCallback = nullptr);
    void Init(uint8_t addr,
              uint32_t uart_baud,
-             NodeNetPriority priority,
              uint32_t led_blink_ms = 100u,
              MessageCallback broadcastCallback = nullptr,
              MessageCallback messageCallback = nullptr);
@@ -395,7 +392,7 @@ Current application code demonstrates:
 
 For custom applications:
 1. Define `constexpr uint32_t NODENET0_BASE = 0x10006000u` in your application.
-2. Construct `NodeNet myNodeNet(NODENET0_BASE, node_address, uart_baud, priority, led_blink_ms, nullptr, nullptr)` at startup.
+2. Construct `NodeNet myNodeNet(NODENET0_BASE, node_address, uart_baud, led_blink_ms, nullptr, nullptr)` at startup.
 3. Finish the rest of boot-time init before calling `myNodeNet.SetCallbacks(...)`.
 4. Keep IRQ callbacks short and non-blocking.
 5. Do OLED / I2C / flash / long TX work from the main loop after snapshotting the event.

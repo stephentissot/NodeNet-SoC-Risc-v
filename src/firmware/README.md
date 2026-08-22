@@ -235,7 +235,6 @@ NodeNet myNodeNet(
     NODENET0_BASE,
     0x01,
     1'000'000,
-    NODENET_PRIORITY_NORMAL,
     200,
     nullptr,
     nullptr);
@@ -265,7 +264,7 @@ static void onMessage(const NodeNetMessage& msg)
 int main()
 {
     NodeNet myNodeNet(NODENET0_BASE, 0x41, 1'000'000,
-                      NODENET_PRIORITY_NORMAL, 200, nullptr, nullptr);
+                      200, nullptr, nullptr);
 
     // Finish the rest of system init first.
     myNodeNet.SetCallbacks(onBroadcast, onMessage);
@@ -283,8 +282,10 @@ int main()
 ```cpp
 class NodeNet {
 public:
-    explicit NodeNet(uint32_t base, uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
-    void Init(uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
+    explicit NodeNet(uint32_t base, uint8_t addr, uint32_t uart_baud, uint32_t led_blink_ms = 100u,
+                     MessageCallback broadcastCallback = nullptr, MessageCallback messageCallback = nullptr);
+    void Init(uint8_t addr, uint32_t uart_baud, uint32_t led_blink_ms = 100u,
+              MessageCallback broadcastCallback = nullptr, MessageCallback messageCallback = nullptr);
     uint32_t Status() const;
     bool TxMailboxReady() const;
     bool TxHasSpace(uint16_t msg_len) const;
@@ -304,7 +305,7 @@ public:
 ```cpp
 int main() {
     constexpr uint32_t NODENET0_BASE = 0x10006000u;
-    NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
+    NodeNet myNodeNet(NODENET0_BASE, 0x01, 1'000'000, 200);
     
     while (1) {
         if (myNodeNet.HasMessage()) {
@@ -326,7 +327,7 @@ int main() {
 ```cpp
 int main() {
     constexpr uint32_t NODENET0_BASE = 0x10006000u;
-    NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
+    NodeNet myNodeNet(NODENET0_BASE, 0x01, 1'000'000, 200);
     
     // Send request to node 0x02
     myNodeNet.Send(0x02, "STATUS?", 7);
@@ -357,7 +358,7 @@ int main() {
 **Mailbox Debugging**:
 
 ```cpp
-NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
+NodeNet myNodeNet(NODENET0_BASE, 0x01, 1'000'000, 200);
 uint32_t status = myNodeNet.Status();
 bool tx_busy = (status & (NODENET_STATUS_TX_PENDING | NODENET_STATUS_TX_ACTIVE)) != 0;
 bool rx_ready = (status & NODENET_STATUS_RX_VALID) != 0;

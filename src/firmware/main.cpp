@@ -12,17 +12,10 @@
 #include "version.h"
 #include "lib/nodenet/nodenet.h"
 #include "ModbusMaster.h"
-#include "flash.h"
-#include "flashdb_port.h"
 
-// Hardware — compile-time constants so GCC emits direct MMIO addresses
-static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x10000000UL);
-#define LED0_BASE  0x10000004UL
-#define LED1_BASE  0x10000008UL
-#define I2C0_BASE  0x10005000UL
-#define MODBUS1_BASE 0x10004000u
-#define FLASH_BASE 0x10007000u
-static constexpr uint32_t NODENET0_BASE = 0x10006000u;
+#include "nodenetCore.h"
+
+
 static constexpr uint8_t MODBUS1_SLAVE_ADDR_DEFAULT = 0x01u;
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -206,100 +199,13 @@ static void led_d2_blink()
     delay(500u);
 }
 
-static void nodenet_broadcast_callback(const NodeNetMessage& msg)
-{
-    g_nodenet_broadcast_src = msg.src_addr;
-    g_nodenet_broadcast_len = msg.len;
-    nodenet_copy_payload_snapshot(g_nodenet_broadcast_data, msg.data, msg.len);
-    g_nodenet_broadcast_count += 1u;
-}
-
-static void nodenet_message_callback(const NodeNetMessage& msg)
-{
-    g_nodenet_message_src = msg.src_addr;
-    g_nodenet_message_len = msg.len;
-    nodenet_copy_payload_snapshot(g_nodenet_message_data, msg.data, msg.len);
-    g_nodenet_message_count += 1u;
-}
-
-static void nodenet_process_pending_events()
-{
-    static uint32_t s_last_broadcast_count = 0u;
-    static uint32_t s_last_message_count = 0u;
-
-    while (s_last_broadcast_count != g_nodenet_broadcast_count) {
-        uint32_t count_before = 0u;
-        uint32_t count_after = 0u;
-        uint8_t src = 0u;
-        uint16_t len = 0u;
-        uint8_t payload[kOledConsoleCols + 1] = {};
-
-        do {
-            count_before = g_nodenet_broadcast_count;
-            src = g_nodenet_broadcast_src;
-            len = g_nodenet_broadcast_len;
-            for (uint16_t i = 0; i <= kOledConsoleCols; ++i) {
-                payload[i] = g_nodenet_broadcast_data[i];
-            }
-            count_after = g_nodenet_broadcast_count;
-        } while (count_before != count_after);
-
-        s_last_broadcast_count = count_before;
-
-        oled_print("[NN] BC %02X #%lu",
-                   static_cast<unsigned>(src),
-                   static_cast<unsigned long>(s_last_broadcast_count));
-        if (len > 0u) {
-            oled_write_payload_safe(payload, len);
-        }
-    }
-
-    while (s_last_message_count != g_nodenet_message_count) {
-        uint32_t count_before = 0u;
-        uint32_t count_after = 0u;
-        uint8_t src = 0u;
-        uint16_t len = 0u;
-        uint8_t payload[kOledConsoleCols + 1] = {};
-
-        do {
-            count_before = g_nodenet_message_count;
-            src = g_nodenet_message_src;
-            len = g_nodenet_message_len;
-            for (uint16_t i = 0; i <= kOledConsoleCols; ++i) {
-                payload[i] = g_nodenet_message_data[i];
-            }
-            count_after = g_nodenet_message_count;
-        } while (count_before != count_after);
-
-        s_last_message_count = count_before;
-
-        oled_print("[NN] RX %02X #%lu",
-                   static_cast<unsigned>(src),
-                   static_cast<unsigned long>(s_last_message_count));
-        if (len > 0u) {
-            oled_write_payload_safe(payload, len);
-        }
-        if (g_led_yellow != nullptr) {
-            g_led_yellow->blink(300u);
-        }
-        if (g_nodenet != nullptr) {
-            g_nodenet->Send(src, "Hello from NodeNet!");
-        }
-    }
-}
-
 int main(void)
 {
     // Initial startup LED blink to indicate booting.
     led_d2_blink();
     // Harware definition
     WbLed  ledGreen(LED0_BASE);
-    WbLed  ledYellow(LED1_BASE);
-    g_led_yellow = &ledYellow;
-    ModbusMaster modbus1(MODBUS1_BASE);
-    modbus1.begin(9600u, 500u, 2u);
-    modbus1.setInterframeCharsQ1(14u);
-    Flash myFlash(FLASH_BASE);
+    WbLed  ledYellow(LED1_BASE);    
 
     static constexpr uint32_t kBlinkPeriodMs = 2000u;
     bool led_on = false;
@@ -312,140 +218,143 @@ int main(void)
     // NodeNet definition and initialization
     NodeNet myNodeNet(
         NODENET0_BASE,
-        0x41,
+        0x04,
         1000000,
-        NODENET_PRIORITY_NORMAL,
         200,
         nullptr,
         nullptr);
-    g_nodenet = &myNodeNet;
-    oled_write("[NN] ctor ok");
-    const bool nodenet_ok = myNodeNet.test(oled_boot_status);
 
-    // POST Tests
-    oled_write("[BOOT] Running tests");
-    oled_write(nodenet_ok ? "[NN] Self-test PASS" : "[NN] Self-test FAIL");
 
-    uint8_t modbus_channel = 1u;
-    uint8_t modbus_slave_addr = MODBUS1_SLAVE_ADDR_DEFAULT;
-    bool modbus_channel_state[8] = {false, false, false, false, false, false, false, false};
+    NodeNetCore nodeNetCore(&myNodeNet);
+    nodeNetCore.begin();
+    // oled_write("[NN] ctor ok");
+    // const bool nodenet_ok = myNodeNet.test(oled_boot_status);
 
-    const bool sdram_ok = sdramTest(oled_boot_status);
-    oled_write(sdram_ok ? "[BOOT] System ready" : "[BOOT] Degraded mode");
+    // // POST Tests
+    // oled_write("[BOOT] Running tests");
+    // oled_write(nodenet_ok ? "[NN] Self-test PASS" : "[NN] Self-test FAIL");
 
-    const bool flash_ok = myFlash.lowLevelTest(oled_boot_status);
-    oled_write(flash_ok ? "[FLASH] LowLevel PASS" : "[FLASH] LowLevel FAIL");
+    // uint8_t modbus_channel = 1u;
+    // uint8_t modbus_slave_addr = MODBUS1_SLAVE_ADDR_DEFAULT;
+    // bool modbus_channel_state[8] = {false, false, false, false, false, false, false, false};
 
-    bool flashdb_ok = false;
-    if (flash_ok) {
-        flashdb_ok = flashdb_init(&myFlash, oled_boot_status);
-        oled_write(flashdb_ok ? "[FDB] Ready" : "[FDB] Init FAIL");
-    } else {
-        oled_write("[FDB] skip (flash)");
-    }
-    if (flashdb_ok) {
-        (void)flashdb_boot_counter_test(oled_boot_status);
-    }
+    // const bool sdram_ok = sdramTest(oled_boot_status);
+    // oled_write(sdram_ok ? "[BOOT] System ready" : "[BOOT] Degraded mode");
 
-    // Probe Waveshare serial settings using slave=0 discovery command.
-    bool modbus_found = false;
-    uint16_t device_addr_reg = 0u;
-    uint16_t version_reg = 0u;
-    static const uint32_t kProbeBaud[] = {9600u, 4800u, 19200u, 38400u, 57600u, 115200u, 128000u, 256000u};
-    for (uint32_t baud : kProbeBaud) {
-        modbus1.begin(baud, 200u, 0u);
-        modbus1.setInterframeCharsQ1(14u);
-        // Waveshare extension: slave 0 query for 0x4000 returns actual device address.
-        if (modbus1.readHoldingRegisters(0u, 0x4000u, 1u, &device_addr_reg)) {
-            uint8_t detected = static_cast<uint8_t>(device_addr_reg & 0x00FFu);
-            if (detected == 0u) {
-                detected = MODBUS1_SLAVE_ADDR_DEFAULT;
-            }
-            modbus_slave_addr = detected;
-            modbus_found = true;
-            oled_print("[MB] link @%lu", static_cast<unsigned long>(baud));
-            oled_print("[MB] slave=%u", static_cast<unsigned>(modbus_slave_addr));
-            break;
-        }
-    }
+    // const bool flash_ok = myFlash.lowLevelTest(oled_boot_status);
+    // oled_write(flash_ok ? "[FLASH] LowLevel PASS" : "[FLASH] LowLevel FAIL");
 
-    // Fallback: small direct slave scan on the default baud.
-    if (!modbus_found) {
-        modbus1.begin(9600u, 250u, 1u);
-        modbus1.setInterframeCharsQ1(14u);
-        for (uint8_t slave = 1u; slave <= 16u; ++slave) {
-            if (modbus1.readHoldingRegisters(slave, 0x4000u, 1u, &device_addr_reg)) {
-                modbus_slave_addr = slave;
-                modbus_found = true;
-                oled_print("[MB] fallback @9600");
-                oled_print("[MB] slave=%u", static_cast<unsigned>(modbus_slave_addr));
-                break;
-            }
-        }
-    }
+    // bool flashdb_ok = false;
+    // if (flash_ok) {
+    //     flashdb_ok = flashdb_init(&myFlash, oled_boot_status);
+    //     oled_write(flashdb_ok ? "[FDB] Ready" : "[FDB] Init FAIL");
+    // } else {
+    //     oled_write("[FDB] skip (flash)");
+    // }
+    // if (flashdb_ok) {
+    //     (void)flashdb_boot_counter_test(oled_boot_status);
+    // }
 
-    if (!modbus_found) {
-        modbus1.begin(9600u, 500u, 2u);
-        modbus1.setInterframeCharsQ1(14u);
-        oled_write("[MB] probe failed");
-    } else if (modbus1.readHoldingRegisters(modbus_slave_addr, 0x8000u, 1u, &version_reg)) {
-        char version_text[16] = {};
-        format_version_hundredths(version_reg, version_text, sizeof(version_text));
-        oled_print("[MB] ver=0x%04X", static_cast<unsigned>(version_reg));
-        oled_write(version_text);
-    } else {
-        char status_hex[11] = {};
-        hex32_to_str(modbus1.lastHwStatus(), status_hex);
-        oled_write("[MB] ver read fail");
-        oled_write(status_hex);
-    }
+    // // Probe Waveshare serial settings using slave=0 discovery command.
+    // bool modbus_found = false;
+    // uint16_t device_addr_reg = 0u;
+    // uint16_t version_reg = 0u;
+    // static const uint32_t kProbeBaud[] = {9600u, 4800u, 19200u, 38400u, 57600u, 115200u, 128000u, 256000u};
+    // for (uint32_t baud : kProbeBaud) {
+    //     modbus1.begin(baud, 200u, 0u);
+    //     modbus1.setInterframeCharsQ1(14u);
+    //     // Waveshare extension: slave 0 query for 0x4000 returns actual device address.
+    //     if (modbus1.readHoldingRegisters(0u, 0x4000u, 1u, &device_addr_reg)) {
+    //         uint8_t detected = static_cast<uint8_t>(device_addr_reg & 0x00FFu);
+    //         if (detected == 0u) {
+    //             detected = MODBUS1_SLAVE_ADDR_DEFAULT;
+    //         }
+    //         modbus_slave_addr = detected;
+    //         modbus_found = true;
+    //         oled_print("[MB] link @%lu", static_cast<unsigned long>(baud));
+    //         oled_print("[MB] slave=%u", static_cast<unsigned>(modbus_slave_addr));
+    //         break;
+    //     }
+    // }
 
-    char device_id[12] = {};
-    if (myFlash.readUniqueIdAscii(device_id, sizeof(device_id))) {
-        oled_print("[FLASH] ID %s", device_id);
-    } else {
-        oled_write("[FLASH] ID read fail");
-    }
+    // // Fallback: small direct slave scan on the default baud.
+    // if (!modbus_found) {
+    //     modbus1.begin(9600u, 250u, 1u);
+    //     modbus1.setInterframeCharsQ1(14u);
+    //     for (uint8_t slave = 1u; slave <= 16u; ++slave) {
+    //         if (modbus1.readHoldingRegisters(slave, 0x4000u, 1u, &device_addr_reg)) {
+    //             modbus_slave_addr = slave;
+    //             modbus_found = true;
+    //             oled_print("[MB] fallback @9600");
+    //             oled_print("[MB] slave=%u", static_cast<unsigned>(modbus_slave_addr));
+    //             break;
+    //         }
+    //     }
+    // }
 
-    if (!sdram_json_allocator_init()) {
-        oled_write("[JSON] alloc init fail");
-    } else {
-        JsonDocument doc(&g_sdram_json_allocator);
-        doc["test"] = 123;
-        char buffer[128] = {};
-        const size_t n = serializeJson(doc, buffer, sizeof(buffer));
-        if (n > 0u && n < sizeof(buffer)) {
-            oled_print("[JSON] %s", buffer);
-        } else {
-            oled_write("[JSON] serialize fail");
-        }
-    }
+    // if (!modbus_found) {
+    //     modbus1.begin(9600u, 500u, 2u);
+    //     modbus1.setInterframeCharsQ1(14u);
+    //     oled_write("[MB] probe failed");
+    // } else if (modbus1.readHoldingRegisters(modbus_slave_addr, 0x8000u, 1u, &version_reg)) {
+    //     char version_text[16] = {};
+    //     format_version_hundredths(version_reg, version_text, sizeof(version_text));
+    //     oled_print("[MB] ver=0x%04X", static_cast<unsigned>(version_reg));
+    //     oled_write(version_text);
+    // } else {
+    //     char status_hex[11] = {};
+    //     hex32_to_str(modbus1.lastHwStatus(), status_hex);
+    //     oled_write("[MB] ver read fail");
+    //     oled_write(status_hex);
+    // }
 
-    myNodeNet.SetCallbacks(nodenet_broadcast_callback, nodenet_message_callback);
-    oled_write("[NN] irq armed");
+    // char device_id[12] = {};
+    // if (myFlash.readUniqueIdAscii(device_id, sizeof(device_id))) {
+    //     oled_print("[FLASH] ID %s", device_id);
+    // } else {
+    //     oled_write("[FLASH] ID read fail");
+    // }
+
+    // if (!sdram_json_allocator_init()) {
+    //     oled_write("[JSON] alloc init fail");
+    // } else {
+    //     JsonDocument doc(&g_sdram_json_allocator);
+    //     doc["test"] = 123;
+    //     char buffer[128] = {};
+    //     const size_t n = serializeJson(doc, buffer, sizeof(buffer));
+    //     if (n > 0u && n < sizeof(buffer)) {
+    //         oled_print("[JSON] %s", buffer);
+    //     } else {
+    //         oled_write("[JSON] serialize fail");
+    //     }
+    // }
+
+    // myNodeNet.SetCallbacks(nodenet_broadcast_callback, nodenet_message_callback);
+    // oled_write("[NN] irq armed");
 
     while (1) {
-        nodenet_process_pending_events();
+        nodeNetCore.loop();
+        //nodenet_process_pending_events();
         uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
-            const uint16_t coil_addr = static_cast<uint16_t>(modbus_channel - 1u);
-            const uint8_t idx = static_cast<uint8_t>(modbus_channel - 1u);
-            modbus_channel_state[idx] = !modbus_channel_state[idx];
-            const bool ok = modbus1.writeSingleCoil(modbus_slave_addr, coil_addr, modbus_channel_state[idx]);
-            if (!ok) {
-                char status_hex[11] = {};
-                hex32_to_str(modbus1.lastHwStatus(), status_hex);
-                oled_print("[MB] CH%u err=%u", modbus_channel, static_cast<unsigned>(modbus1.lastError()));
-                oled_write(status_hex);
-                ledYellow.blink(250u);
-            } else {
-                ledGreen.blink(100u);
-            }
+            // const uint16_t coil_addr = static_cast<uint16_t>(modbus_channel - 1u);
+            // const uint8_t idx = static_cast<uint8_t>(modbus_channel - 1u);
+            // modbus_channel_state[idx] = !modbus_channel_state[idx];
+            // const bool ok = modbus1.writeSingleCoil(modbus_slave_addr, coil_addr, modbus_channel_state[idx]);
+            // if (!ok) {
+            //     char status_hex[11] = {};
+            //     hex32_to_str(modbus1.lastHwStatus(), status_hex);
+            //     oled_print("[MB] CH%u err=%u", modbus_channel, static_cast<unsigned>(modbus1.lastError()));
+            //     oled_write(status_hex);
+            //     ledYellow.blink(250u);
+            // } else {
+            //     ledGreen.blink(100u);
+            // }
 
-            modbus_channel = static_cast<uint8_t>(modbus_channel + 1u);
-            if (modbus_channel > 8u) {
-                modbus_channel = 1u;
-            }
+            // modbus_channel = static_cast<uint8_t>(modbus_channel + 1u);
+            // if (modbus_channel > 8u) {
+            //     modbus_channel = 1u;
+            // }
 
             led_on = !led_on;
             *LED_D2 = led_on ? 0u : 1u;

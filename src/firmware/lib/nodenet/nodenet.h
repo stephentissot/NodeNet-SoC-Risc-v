@@ -13,12 +13,12 @@
  * Quick Start
  * ═══════════
  *   constexpr uint32_t NODENET0_BASE = 0x10006000u;
- *   NodeNet nodenet(NODENET0_BASE, 0x01, 1'000'000, NODENET_PRIORITY_NORMAL, 200, nullptr, nullptr);
+ *   NodeNet nodenet(NODENET0_BASE, 0x01, 1'000'000, 200, nullptr, nullptr);
  *   nodenet.Send(0x02, "Hello", 5);               // Send to node 0x02
  *   if (nodenet.HasMessage()) {
  *     NodeNetMessage msg = nodenet.ReadMessage();   // Read incoming message
  *     process(msg.src_addr, msg.data, msg.len);    // Process message
- *     NodeNet::FreeMessage(msg);                   // Deallocate
+ *     NodeNet::FreeMessage(msg);                   // Free heap buffer from ReadMessage()
  *   }
  * 
  * Mailbox Register Flow
@@ -86,20 +86,16 @@
 
 #define NODENET_BROADCAST 0x00  // Address 0 means broadcast to all nodes
 
-// Message structure returned by NodeNet::ReadMessage()
+// Message structure used by polled reads and IRQ callbacks.
+// Ownership depends on the source:
+// - ReadMessage(): data points to a heap buffer owned by the caller, free with FreeMessage().
+// - IRQ callback path: data points to a shared internal IRQ buffer, copy it immediately and do not free it.
 struct NodeNetMessage {
   uint8_t src_addr = 0u;        // Sender's node address
   uint8_t dest_addr = 0u;       // Destination node address (0 = broadcast)
   bool broadcast = false;       // True when dest_addr == 0
   uint16_t len = 0u;            // Payload length in bytes
-  uint8_t* data = nullptr;      // Dynamically allocated payload buffer
-};
-
-// Priority levels (affects transmission scheduling)
-enum NodeNetPriority {
-  NODENET_PRIORITY_LOW = 0,     // Lowest: Sent last
-  NODENET_PRIORITY_NORMAL = 1,  // Default: Normal scheduling
-  NODENET_PRIORITY_HIGH = 2     // Highest: Sent first
+  uint8_t* data = nullptr;      // Payload storage, owned either by caller or the IRQ path depending on source
 };
 
 class NodeNet {
@@ -110,14 +106,12 @@ public:
   explicit NodeNet(uint32_t base,
                    uint8_t addr,
                    uint32_t uart_baud,
-                   NodeNetPriority priority,
                    uint32_t led_blink_ms = 100u,
                    MessageCallback broadcastCallback = nullptr,
                    MessageCallback messageCallback = nullptr);
 
   void Init(uint8_t addr,
             uint32_t uart_baud,
-            NodeNetPriority priority,
             uint32_t led_blink_ms = 100u,
             MessageCallback broadcastCallback = nullptr,
             MessageCallback messageCallback = nullptr);
@@ -145,18 +139,19 @@ public:
 
   NodeNetMessage ReadMessage() const;
 
+  // Free only messages produced by ReadMessage().
+  // IRQ callback messages use an internal shared buffer and must not be freed.
   static void FreeMessage(NodeNetMessage& msg);
 
   bool test(StatusCallback callback = nullptr);
 
   void HandleInterrupt();
-
+  uint8_t GetNodeAddress() const { return node_addr_; }
 
 private:
   uint32_t base_;
   uint8_t node_addr_ = 0;
   uint32_t uart_baud_ = 0;
-  NodeNetPriority priority_ = NODENET_PRIORITY_NORMAL;
   MessageCallback broadcast_callback_ = nullptr;
   MessageCallback message_callback_ = nullptr;
 

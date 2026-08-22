@@ -85,20 +85,13 @@ module wb_nodenet #(
 
   function [31:0] compute_tx_delay;
     input [7:0] dst_addr;
-    input [1:0] prio_sel;
     input [7:0] src_addr;
     reg [31:0] delay_cycles;
     begin
       if (dst_addr == 8'h00)
         delay_cycles = {24'h0, src_addr} * `NODENET_BROADCAST_DELAY_PER_ADDR;
       else
-        delay_cycles = `NODENET_LINE_READY_CYCLES + ({24'h0, src_addr} * `NODENET_UNICAST_DELAY_PER_ADDR);
-
-      case (prio_sel)
-        2'b10: delay_cycles = delay_cycles >> 1;
-        2'b00: delay_cycles = delay_cycles + (delay_cycles >> 1);
-        default: begin end
-      endcase
+        delay_cycles = `NODENET_LINE_READY_CYCLES;
 
       compute_tx_delay = delay_cycles;
     end
@@ -112,7 +105,6 @@ module wb_nodenet #(
   reg [7:0] node_addr;
   reg hb_enabled;
   reg [31:0] heartbeat_interval;
-  reg [1:0] prio;
   reg [31:0] activity_blink_ms;
   reg [19:0] uart_divisor;
   reg irq_message_enable;
@@ -179,12 +171,15 @@ module wb_nodenet #(
   wire [31:0] unused_next_transmit_allowed;
   wire [31:0] activity_blink_cycles;
   wire [23:0] rx_ignore_reload;
+  wire rx_in_progress;
   reg heartbeat_pending;
 
   assign activity_blink_cycles = ((activity_blink_ms != 32'd0) ? activity_blink_ms : DEFAULT_ACTIVITY_BLINK_MS) * CYCLES_PER_MS;
   // Ignore RX for ~16 bit-times after local TX to avoid RS485 self-echo tails.
   assign rx_ignore_reload = {4'b0000, uart_divisor} << 4;
   assign rx_decode_enable = !uart_de && (rx_ignore_counter == 24'd0);
+  assign rx_in_progress = (rx_build_count != 16'd0) || uart_rx_valid ||
+                          decoder_msg_data_valid || (decoder_msg_complete && decoder_msg_valid);
   assign irq_message_o = irq_message_enable && rx_valid && (rx_dst != 8'h00);
   assign irq_broadcast_o = irq_broadcast_enable && rx_valid && (rx_dst == 8'h00);
 
@@ -281,7 +276,6 @@ module wb_nodenet #(
       node_addr <= 8'h01;
       hb_enabled <= 1'b0;
       heartbeat_interval <= `NODENET_HEARTBEAT_DEFAULT_CYCLES;
-      prio <= 2'b01;
       activity_blink_ms <= DEFAULT_ACTIVITY_BLINK_MS;
       uart_divisor <= (CLOCK_RATE / 1_000_000);
       irq_message_enable <= 1'b0;
@@ -380,10 +374,10 @@ module wb_nodenet #(
         if (heartbeat_trigger)
           heartbeat_pending <= 1'b1;
 
-        if ((heartbeat_pending || heartbeat_trigger) && !tx_stage_valid && !tx_pending && !tx_active) begin
+        if ((heartbeat_pending || heartbeat_trigger) && !tx_stage_valid && !tx_pending && !tx_active && !rx_in_progress) begin
           tx_pending <= 1'b1;
           tx_pending_is_heartbeat <= 1'b1;
-          tx_cooldown_counter <= compute_tx_delay(8'h00, prio, node_addr);
+          tx_cooldown_counter <= compute_tx_delay(8'h00, node_addr);
           tx_led_trigger_pulse <= 1'b1;
           heartbeat_pending <= 1'b0;
         end
@@ -412,9 +406,8 @@ module wb_nodenet #(
             REG_CONFIG: begin
               node_addr <= dat_i[7:0];
               hb_enabled <= (dat_i[7:0] != 8'h00);
-              prio <= dat_i[9:8];
               // Keep the existing/default heartbeat interval when firmware
-              // only updates addr/prio (dat_i[31:10] == 0).
+              // only updates the node address (dat_i[31:8] == 0).
               if (dat_i[31:10] != 22'd0)
                 heartbeat_interval <= {dat_i[31:10], 10'b0};
             end
@@ -444,17 +437,17 @@ module wb_nodenet #(
                 rx_build_count <= 16'h0000;
               end
 
-              if (hb_enabled && dat_i[2] && !tx_stage_valid && !tx_pending && !tx_active) begin
+              if (hb_enabled && dat_i[2] && !tx_stage_valid && !tx_pending && !tx_active && !rx_in_progress) begin
                 tx_pending <= 1'b1;
                 tx_pending_is_heartbeat <= 1'b1;
-                tx_cooldown_counter <= compute_tx_delay(8'h00, prio, node_addr);
+                tx_cooldown_counter <= compute_tx_delay(8'h00, node_addr);
                 tx_led_trigger_pulse <= 1'b1;
               end
 
-              if (dat_i[0] && tx_stage_valid && !tx_pending && !tx_active && (tx_load_count == tx_stage_len)) begin
+              if (dat_i[0] && tx_stage_valid && !tx_pending && !tx_active && !rx_in_progress && (tx_load_count == tx_stage_len)) begin
                 tx_pending <= 1'b1;
                 tx_pending_is_heartbeat <= 1'b0;
-                tx_cooldown_counter <= compute_tx_delay(tx_stage_dst, prio, node_addr);
+                tx_cooldown_counter <= compute_tx_delay(tx_stage_dst, node_addr);
                 tx_led_trigger_pulse <= 1'b1;
               end
             end
@@ -493,7 +486,7 @@ module wb_nodenet #(
             end
 
             REG_CONFIG: begin
-              dat_o <= {heartbeat_interval[31:10], prio, node_addr};
+              dat_o <= {heartbeat_interval[31:10], 2'b00, node_addr};
             end
 
             REG_CONTROL: begin
@@ -541,7 +534,7 @@ module wb_nodenet #(
         end
       end
 
-      if (!tx_active && tx_pending && (tx_cooldown_counter == 32'h0000_0000)) begin
+      if (!tx_active && !rx_in_progress && tx_pending && (tx_cooldown_counter == 32'h0000_0000)) begin
         tx_pending <= 1'b0;
         tx_active <= 1'b1;
         uart_tx_ready_d <= 1'b0;
