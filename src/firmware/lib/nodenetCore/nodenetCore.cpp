@@ -9,6 +9,8 @@
 
 
 namespace {
+constexpr const char* kFlashDbConfigKey = "nodenet.config";
+
 void formatHexPreview(const uint8_t* data, uint16_t len, char* out, size_t outSize)
 {
     static const char kHex[] = "0123456789ABCDEF";
@@ -49,6 +51,8 @@ NodeNetCore::NodeNetCore(NodeNet* nodeNet) : _nodeNet(nodeNet)
     }
     this->deviceId[sizeof(this->deviceId) - 1] = '\0';
     this->addr = _nodeNet ? _nodeNet->GetNodeAddress() : 0u;
+    strncpy(this->instrumentName, this->deviceId, sizeof(this->instrumentName) - 1);
+    this->instrumentName[sizeof(this->instrumentName) - 1] = '\0';
 
     // Initialise sdram allocator for JSON documents
     if (!sdram_json_allocator_init()) {
@@ -67,13 +71,17 @@ void NodeNetCore::begin()
     _logger = new NodeLogger(_nodeNet, 0x04);
     _logger->Info("NodeNetCore initialized with deviceId: %s", deviceId);
 
-    if (!sdram_json_allocator_init()) {
-        _logger->Error("SDRAM JSON allocator initialization failed");
-    }
+    loadPreferences();
 
     _nodeNet->SetCallbacks(nodenet_broadcast_callback_trampoline,
                            nodenet_message_callback_trampoline);
     _logger->Info("NodeNetCore IRQ callbacks armed");
+
+    // Start modbus features
+    _modbus1 = new ModbusMaster(MODBUS1_BASE);
+    _modbus1->begin(9600u, 500u, 2u);
+    _modbus1->setInterframeCharsQ1(14u);
+    features.hasModbus0 = true;
 
     JsonDocument discoverMsg(&g_sdram_json_allocator);
     discoverMsg["cmd"] = "WhoIs";
@@ -82,11 +90,6 @@ void NodeNetCore::begin()
     nodeHeader(discoverMsg);
     nodeFeatures(discoverMsg);
     enqueueOutputMessage(0u, discoverMsg);
-
-    _modbus1 = new ModbusMaster(MODBUS1_BASE);
-    _modbus1->begin(9600u, 500u, 2u);
-    _modbus1->setInterframeCharsQ1(14u);
-    features.hasModbus0 = true;
 }
 
 void NodeNetCore::loop()
@@ -97,10 +100,74 @@ void NodeNetCore::loop()
 
 void NodeNetCore::savePreferences()
 {
+    if (!ensureFlashDbReady()) {
+        if (_logger != nullptr) {
+            _logger->Warning("FlashDB not ready, preferences not saved");
+        }
+        return;
+    }
+
+    JsonDocument prefsDoc;
+    toJson(prefsDoc);
+
+    const size_t jsonSize = measureJson(prefsDoc);
+    if (jsonSize == 0u || jsonSize >= kPreferencesJsonMaxSize) {
+        if (_logger != nullptr) {
+            _logger->Warning("Preferences JSON too large to save");
+        }
+        return;
+    }
+
+    char jsonBuffer[kPreferencesJsonMaxSize] = {};
+    if (serializeJson(prefsDoc, jsonBuffer, sizeof(jsonBuffer)) != jsonSize) {
+        if (_logger != nullptr) {
+            _logger->Warning("Preferences JSON serialization failed");
+        }
+        return;
+    }
+
+    if (!flashdb_set_str(kFlashDbConfigKey, jsonBuffer)) {
+        if (_logger != nullptr) {
+            _logger->Warning("FlashDB save failed");
+        }
+        return;
+    }
+
+    if (_logger != nullptr) {
+        _logger->Info("Preferences saved");
+    }
 }
 
 void NodeNetCore::loadPreferences()
 {
+    if (!ensureFlashDbReady()) {
+        if (_logger != nullptr) {
+            _logger->Warning("FlashDB not ready, preferences not loaded");
+        }
+        return;
+    }
+
+    char jsonBuffer[kPreferencesJsonMaxSize] = {};
+    if (!flashdb_get_str(kFlashDbConfigKey, jsonBuffer, sizeof(jsonBuffer))) {
+        savePreferences();
+        return;
+    }
+
+    JsonDocument prefsDoc;
+    const DeserializationError error = deserializeJson(prefsDoc, jsonBuffer);
+    if (error != DeserializationError::Ok) {
+        if (_logger != nullptr) {
+            _logger->Warning("Preferences JSON parse failed: %s", error.c_str());
+        }
+        savePreferences();
+        return;
+    }
+
+    fromJson(prefsDoc);
+
+    if (_logger != nullptr) {
+        _logger->Info("Preferences loaded");
+    }
 }
 
 bool NodeNetCore::isInitialized()
@@ -347,6 +414,7 @@ bool NodeNetCore::updateProperty(const JsonDocument& request)
 
         strncpy(instrumentName, instrumentNameValue, sizeof(instrumentName) - 1);
         instrumentName[sizeof(instrumentName) - 1] = '\0';
+        savePreferences();
         return true;
     } else if (strcmp(propertyName, "master") == 0) {
         if (!value.is<bool>()) {
@@ -354,8 +422,22 @@ bool NodeNetCore::updateProperty(const JsonDocument& request)
         }
 
         master = value.as<bool>();
+        savePreferences();
         return true;
     }
 
     return false;
+}
+
+bool NodeNetCore::ensureFlashDbReady()
+{
+    if (flashdb_is_ready()) {
+        return true;
+    }
+
+    if (_flash == nullptr) {
+        return false;
+    }
+
+    return flashdb_init(_flash, nullptr);
 }

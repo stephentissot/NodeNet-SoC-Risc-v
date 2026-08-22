@@ -40,10 +40,33 @@ class NodeNetCore
         void refreshScreen();
 
         HardwareType hardwareType = HardwareType::UNDEFINED;
+
+        // Nodenet settings and features
         uint8_t addr = 0u;
         char deviceId[12] = {};
         char instrumentName[30] = {};
         bool master = false;
+
+
+        void toJson(JsonDocument& doc) {
+            doc["addr"] = addr;
+            doc["deviceId"] = deviceId;
+            doc["instrumentName"] = instrumentName;
+            doc["master"] = master;
+        }
+        void fromJson(const JsonDocument& doc) {
+            const uint8_t currentAddr = addr;
+            const bool currentMaster = master;
+            const char* currentDeviceId = deviceId;
+            const char* currentInstrumentName = instrumentName;
+
+            addr = doc["addr"] | currentAddr;
+            strncpy(deviceId, doc["deviceId"] | currentDeviceId, sizeof(deviceId) - 1);
+            deviceId[sizeof(deviceId) - 1] = '\0';
+            strncpy(instrumentName, doc["instrumentName"] | currentInstrumentName, sizeof(instrumentName) - 1);
+            instrumentName[sizeof(instrumentName) - 1] = '\0';
+            master = doc["master"] | currentMaster;
+        }
 
         struct Features {
             bool hasModbus0 = false; 
@@ -59,6 +82,7 @@ class NodeNetCore
     private:
         static constexpr uint8_t kInputQueueCapacity = 8u;
         static constexpr uint8_t kOutputQueueCapacity = 8u;
+        static constexpr size_t kPreferencesJsonMaxSize = 256u;
 
         struct QueuedMessage {
             uint8_t srcAddr = 0u;
@@ -142,5 +166,7 @@ class NodeNetCore
         // request: parsed JSON command containing at least "property" and "value".
         // Returns true when the property exists and the value type is accepted.
         bool updateProperty(const JsonDocument& request);
+
+        bool ensureFlashDbReady();
 
 };
