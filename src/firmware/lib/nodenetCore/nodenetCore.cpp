@@ -15,6 +15,18 @@ constexpr const char* kFlashDbModbus0Key = "nodenet.modbus0";
 constexpr const char* kFlashDbPointCatalogKey = "nodenet.points";
 constexpr uint8_t kModbus0PortIndex = 0u;
 constexpr uint8_t kWaveshareDefaultSlaveAddress = 1u;
+constexpr uint32_t kPointCatalogFlashMagic = 0x50434154u; // "PCAT"
+constexpr uint32_t kPointCatalogFlashVersion = 1u;
+constexpr uint32_t kPointCatalogFlashBase = Flash::kParamBase;
+constexpr uint32_t kPointCatalogFlashSectors = 3u;
+constexpr uint32_t kPointCatalogFlashSize = kPointCatalogFlashSectors * Flash::kSectorSize;
+
+struct PointCatalogFlashHeader {
+    uint32_t magic = 0u;
+    uint32_t version = 0u;
+    uint32_t payload_size = 0u;
+    uint32_t checksum = 0u;
+};
 
 static void copy_text(char* dst, size_t dst_size, const char* src) {
     if (dst == nullptr || dst_size == 0u) {
@@ -48,6 +60,133 @@ static bool request_identity_from_json(PointIdentity& id, const JsonDocument& re
     }
 
     make_point_identity(id, device_id, feature, point_id);
+    return true;
+}
+
+static bool strings_equal(const char* lhs, const char* rhs) {
+    if (lhs == nullptr || rhs == nullptr) {
+        return false;
+    }
+
+    return std::strcmp(lhs, rhs) == 0;
+}
+
+static void build_point_path(const PointDefinition& definition, char* out, size_t out_size) {
+    if (out == nullptr || out_size == 0u) {
+        return;
+    }
+
+    (void)snprintf(out,
+                   out_size,
+                   "%s.%s.%s",
+                   definition.id.device_id,
+                   definition.id.feature,
+                   definition.id.point_id);
+    out[out_size - 1u] = '\0';
+}
+
+static void build_feature_path(const PointDefinition& definition, char* out, size_t out_size) {
+    if (out == nullptr || out_size == 0u) {
+        return;
+    }
+
+    (void)snprintf(out,
+                   out_size,
+                   "%s.%s",
+                   definition.id.device_id,
+                   definition.id.feature);
+    out[out_size - 1u] = '\0';
+}
+
+static bool append_unique_string(JsonArray array, const char* value) {
+    for (JsonVariantConst item : array) {
+        const char* existing = item | "";
+        if (strings_equal(existing, value)) {
+            return true;
+        }
+    }
+
+    return array.add(value);
+}
+
+static uint8_t response_destination_from_request(const JsonDocument& request) {
+    uint8_t dest_addr = request["from"] | 0u;
+    if (dest_addr == 255u) {
+        dest_addr = 0u;
+    }
+    return dest_addr;
+}
+
+static uint32_t point_catalog_checksum(const uint8_t* data, size_t len) {
+    uint32_t hash = 2166136261u;
+    if (data == nullptr) {
+        return hash;
+    }
+
+    for (size_t index = 0; index < len; ++index) {
+        hash ^= data[index];
+        hash *= 16777619u;
+    }
+
+    return hash;
+}
+
+static bool flash_read_bytes(Flash* flash, uint32_t base, void* out, size_t len) {
+    if (flash == nullptr || out == nullptr) {
+        return false;
+    }
+
+    uint8_t page[Flash::kPageSize] = {};
+    uint8_t* out_bytes = static_cast<uint8_t*>(out);
+    size_t copied = 0u;
+    while (copied < len) {
+        const uint32_t pos = base + static_cast<uint32_t>(copied);
+        const uint32_t page_base = pos & ~(Flash::kPageSize - 1u);
+        const uint32_t page_offset = pos - page_base;
+        if (!flash->readPage(page_base, page)) {
+            return false;
+        }
+
+        size_t chunk = Flash::kPageSize - page_offset;
+        if (chunk > (len - copied)) {
+            chunk = len - copied;
+        }
+        std::memcpy(out_bytes + copied, page + page_offset, chunk);
+        copied += chunk;
+    }
+
+    return true;
+}
+
+static bool flash_write_erased_bytes(Flash* flash, uint32_t base, const void* data, size_t len) {
+    if (flash == nullptr || data == nullptr) {
+        return false;
+    }
+
+    const uint8_t* in_bytes = static_cast<const uint8_t*>(data);
+    uint8_t page[Flash::kPageSize] = {};
+    const uint32_t first_page_base = base & ~(Flash::kPageSize - 1u);
+    const uint32_t first_page_offset = base - first_page_base;
+    size_t consumed = 0u;
+    uint32_t page_base = first_page_base;
+
+    while (consumed < len) {
+        std::memset(page, 0xFF, sizeof(page));
+        const uint32_t page_offset = (page_base == first_page_base) ? first_page_offset : 0u;
+        size_t chunk = Flash::kPageSize - page_offset;
+        if (chunk > (len - consumed)) {
+            chunk = len - consumed;
+        }
+
+        std::memcpy(page + page_offset, in_bytes + consumed, chunk);
+        if (!flash->writePage(page_base, page)) {
+            return false;
+        }
+
+        consumed += chunk;
+        page_base += Flash::kPageSize;
+    }
+
     return true;
 }
 
@@ -177,7 +316,9 @@ void NodeNetCore::loadPreferences()
 
     char jsonBuffer[kPreferencesJsonMaxSize] = {};
     if (!flashdb_get_str(kFlashDbConfigKey, jsonBuffer, sizeof(jsonBuffer))) {
-        savePreferences();
+        if (_logger != nullptr) {
+            _logger->Info("Preferences absent, using defaults");
+        }
         return;
     }
 
@@ -187,7 +328,6 @@ void NodeNetCore::loadPreferences()
         if (_logger != nullptr) {
             _logger->Warning("Preferences JSON parse failed: %s", error.c_str());
         }
-        savePreferences();
         return;
     }
 
@@ -400,10 +540,27 @@ void NodeNetCore::processInputQueue()
 
         switch (cmd) {
             case NodeNetCommands::Cmd::DISCOVER_REQ:
+                // Reply first so discovery latency is not dominated by catalog persistence.
                 nodeHeader(response);             
                 response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::DISCOVER_RES);
                 nodeFeatures(response);
-                queueResponse = true;
+                {
+                    const uint8_t destAddr = response_destination_from_request(request);
+                    if (!enqueueOutputMessage(destAddr, response)) {
+                        _logger->Warning("NodeNetCore response enqueue failed for dst=%u", msg.srcAddr);
+                    } else {
+                        processOutputQueue();
+                    }
+                }
+
+                // Learn remote node metadata after the response is already on the wire.
+                registerNodePointDefinition(request);
+                publishNodePointStates(request);
+                break;
+            case NodeNetCommands::Cmd::DISCOVER_RES:
+                // Received discover response from another node, add points to catalog
+                registerNodePointDefinition(request);
+                publishNodePointStates(request);
                 break;
             case NodeNetCommands::Cmd::POINT_DEFS_REQ:
                 queueResponse = handlePointDefinitionsRequest(request, response);
@@ -432,11 +589,7 @@ void NodeNetCore::processInputQueue()
             continue;
         }
 
-        uint8_t destAddr = request["from"] | 0u;
-        if(destAddr == 255) // Message was originated from driver and relayed by master
-        {
-            destAddr = 0u;
-        }
+        const uint8_t destAddr = response_destination_from_request(request);
         if (!enqueueOutputMessage(destAddr, response)) {
             _logger->Warning("NodeNetCore response enqueue failed for dst=%u", msg.srcAddr);
         }
@@ -509,33 +662,190 @@ bool NodeNetCore::updateProperty(const JsonDocument& request)
 bool NodeNetCore::handlePointDefinitionsRequest(const JsonDocument& request, JsonDocument& response)
 {
     response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::POINT_DEFS_RES);
-    response["total"] = static_cast<uint32_t>(_pointCatalog.size());
-
+    const char* path = request["path"] | "";
     const uint32_t offset = request["offset"] | 0u;
     const uint32_t limit = request["limit"] | 4u;
+    response["path"] = path;
     response["offset"] = offset;
     response["count"] = 0u;
     response["hasMore"] = false;
-    JsonArray points = response["points"].to<JsonArray>();
 
     const PointDefinition* definitions = _pointCatalog.entries();
-    uint32_t added = 0u;
-    for (uint32_t index = offset; index < _pointCatalog.size() && added < limit; ++index) {
+    bool exact_point_match = false;
+    bool exact_feature_match = false;
+    bool exact_device_match = false;
+
+    if (path[0] != '\0') {
+        char feature_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + 2u] = {};
+        char point_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + sizeof(PointIdentity::point_id) + 3u] = {};
+        for (size_t index = 0; index < _pointCatalog.size(); ++index) {
+            build_point_path(definitions[index], point_path, sizeof(point_path));
+            if (strings_equal(path, point_path)) {
+                exact_point_match = true;
+                break;
+            }
+
+            build_feature_path(definitions[index], feature_path, sizeof(feature_path));
+            if (strings_equal(path, feature_path)) {
+                exact_feature_match = true;
+            }
+            if (strings_equal(path, definitions[index].id.device_id)) {
+                exact_device_match = true;
+            }
+        }
+    }
+
+    if (path[0] == '\0' || exact_device_match) {
+        response["kind"] = "devices";
+        JsonArray devices = response["devices"].to<JsonArray>();
+        uint32_t matched_devices = 0u;
+        uint32_t emitted_devices = 0u;
+
+        for (size_t index = 0; index < _pointCatalog.size(); ++index) {
+            if (path[0] != '\0' && !strings_equal(definitions[index].id.device_id, path)) {
+                continue;
+            }
+
+            bool first_for_device = true;
+            for (size_t probe = 0; probe < index; ++probe) {
+                if (strings_equal(definitions[probe].id.device_id, definitions[index].id.device_id) &&
+                    (path[0] == '\0' || strings_equal(definitions[probe].id.device_id, path))) {
+                    first_for_device = false;
+                    break;
+                }
+            }
+            if (!first_for_device) {
+                continue;
+            }
+
+            if (matched_devices < offset) {
+                matched_devices += 1u;
+                continue;
+            }
+            if (emitted_devices >= limit) {
+                matched_devices += 1u;
+                continue;
+            }
+
+            JsonObject device = devices.add<JsonObject>();
+            device["deviceId"] = definitions[index].id.device_id;
+            JsonArray features = device["features"].to<JsonArray>();
+
+            for (size_t feature_index = 0; feature_index < _pointCatalog.size(); ++feature_index) {
+                if (!strings_equal(definitions[feature_index].id.device_id, definitions[index].id.device_id)) {
+                    continue;
+                }
+                if (!append_unique_string(features, definitions[feature_index].id.feature)) {
+                    break;
+                }
+            }
+
+            response["count"] = emitted_devices + 1u;
+            response["hasMore"] = false;
+            if (measureJson(response) > NODENET_MAX_PAYLOAD_SIZE) {
+                devices.remove(devices.size() - 1u);
+                response["count"] = emitted_devices;
+                response["hasMore"] = true;
+                break;
+            }
+
+            emitted_devices += 1u;
+            matched_devices += 1u;
+        }
+
+        uint32_t total_devices = 0u;
+        for (size_t index = 0; index < _pointCatalog.size(); ++index) {
+            if (path[0] != '\0' && !strings_equal(definitions[index].id.device_id, path)) {
+                continue;
+            }
+
+            bool first_for_device = true;
+            for (size_t probe = 0; probe < index; ++probe) {
+                if (strings_equal(definitions[probe].id.device_id, definitions[index].id.device_id) &&
+                    (path[0] == '\0' || strings_equal(definitions[probe].id.device_id, path))) {
+                    first_for_device = false;
+                    break;
+                }
+            }
+            if (first_for_device) {
+                total_devices += 1u;
+            }
+        }
+
+        response["total"] = total_devices;
+        response["hasMore"] = (offset + (response["count"] | 0u)) < total_devices;
+        return true;
+    }
+
+    response["kind"] = "points";
+    JsonArray points = response["points"].to<JsonArray>();
+    uint32_t matched_points = 0u;
+    uint32_t emitted_points = 0u;
+
+    for (size_t index = 0; index < _pointCatalog.size(); ++index) {
+        char feature_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + 2u] = {};
+        char point_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + sizeof(PointIdentity::point_id) + 3u] = {};
+        bool matches = false;
+
+        if (path[0] == '\0') {
+            matches = true;
+        } else if (exact_point_match) {
+            build_point_path(definitions[index], point_path, sizeof(point_path));
+            matches = strings_equal(path, point_path);
+        } else if (exact_feature_match) {
+            build_feature_path(definitions[index], feature_path, sizeof(feature_path));
+            matches = strings_equal(path, feature_path);
+        }
+
+        if (!matches) {
+            continue;
+        }
+
+        if (matched_points < offset) {
+            matched_points += 1u;
+            continue;
+        }
+        if (emitted_points >= limit) {
+            matched_points += 1u;
+            continue;
+        }
+
         JsonObject point = points.add<JsonObject>();
         PointCatalog::serializeDefinition(point, definitions[index]);
-        response["count"] = added + 1u;
-        response["hasMore"] = (index + 1u) < _pointCatalog.size();
+        response["count"] = emitted_points + 1u;
+        response["hasMore"] = false;
         if (measureJson(response) > NODENET_MAX_PAYLOAD_SIZE) {
             points.remove(points.size() - 1u);
-            response["count"] = added;
+            response["count"] = emitted_points;
             response["hasMore"] = true;
             break;
         }
-        added += 1u;
+
+        emitted_points += 1u;
+        matched_points += 1u;
     }
 
-    response["count"] = added;
-    response["hasMore"] = (offset + added) < _pointCatalog.size();
+    uint32_t total_points = 0u;
+    for (size_t index = 0; index < _pointCatalog.size(); ++index) {
+        char feature_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + 2u] = {};
+        char point_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + sizeof(PointIdentity::point_id) + 3u] = {};
+        bool matches = false;
+
+        if (exact_point_match) {
+            build_point_path(definitions[index], point_path, sizeof(point_path));
+            matches = strings_equal(path, point_path);
+        } else if (exact_feature_match) {
+            build_feature_path(definitions[index], feature_path, sizeof(feature_path));
+            matches = strings_equal(path, feature_path);
+        }
+
+        if (matches) {
+            total_points += 1u;
+        }
+    }
+
+    response["total"] = total_points;
+    response["hasMore"] = (offset + (response["count"] | 0u)) < total_points;
     return true;
 }
 
@@ -600,14 +910,15 @@ bool NodeNetCore::ensureFlashDbReady()
 
 bool NodeNetCore::savePointCatalog()
 {
-    if (!ensureFlashDbReady()) {
+    if (_flash == nullptr) {
         if (_logger != nullptr) {
-            _logger->Warning("FlashDB not ready, point catalog not saved");
+            _logger->Warning("Flash not ready, point catalog not saved");
         }
         return false;
     }
 
     char jsonBuffer[PointCatalog::kMaxSerializedSize] = {};
+    const uint32_t save_start_ms = millis();
     if (!_pointCatalog.saveToJson(jsonBuffer, sizeof(jsonBuffer))) {
         if (_logger != nullptr) {
             _logger->Warning("Point catalog JSON serialization failed");
@@ -615,15 +926,49 @@ bool NodeNetCore::savePointCatalog()
         return false;
     }
 
-    if (!flashdb_set_str(kFlashDbPointCatalogKey, jsonBuffer)) {
+    const size_t payload_size = std::strlen(jsonBuffer);
+    const size_t total_size = sizeof(PointCatalogFlashHeader) + payload_size;
+    if (total_size > kPointCatalogFlashSize) {
         if (_logger != nullptr) {
-            _logger->Warning("Point catalog FlashDB save failed");
+            _logger->Warning("Point catalog too large for raw flash storage");
+        }
+        return false;
+    }
+
+    PointCatalogFlashHeader header = {};
+    header.magic = kPointCatalogFlashMagic;
+    header.version = kPointCatalogFlashVersion;
+    header.payload_size = static_cast<uint32_t>(payload_size);
+    header.checksum = point_catalog_checksum(reinterpret_cast<const uint8_t*>(jsonBuffer), payload_size);
+
+    const uint32_t flash_write_start_ms = millis();
+    for (uint32_t sector = 0u; sector < kPointCatalogFlashSectors; ++sector) {
+        if (!_flash->eraseSector(kPointCatalogFlashBase + (sector * Flash::kSectorSize))) {
+            if (_logger != nullptr) {
+                _logger->Warning("Point catalog raw flash erase failed");
+            }
+            return false;
+        }
+    }
+
+    if (!flash_write_erased_bytes(_flash, kPointCatalogFlashBase, &header, sizeof(header)) ||
+        !flash_write_erased_bytes(_flash,
+                                  kPointCatalogFlashBase + static_cast<uint32_t>(sizeof(header)),
+                                  jsonBuffer,
+                                  payload_size)) {
+        if (_logger != nullptr) {
+            _logger->Warning("Point catalog raw flash write failed");
         }
         return false;
     }
 
     if (_logger != nullptr) {
-        _logger->Info("Point catalog saved (%u entries)", static_cast<unsigned>(_pointCatalog.size()));
+        const uint32_t flash_write_ms = millis() - flash_write_start_ms;
+        const uint32_t total_save_ms = millis() - save_start_ms;
+        _logger->Info("Point catalog saved (%u entries, flash=%lu ms, total=%lu ms)",
+                      static_cast<unsigned>(_pointCatalog.size()),
+                      static_cast<unsigned long>(flash_write_ms),
+                      static_cast<unsigned long>(total_save_ms));
     }
 
     return true;
@@ -633,11 +978,59 @@ bool NodeNetCore::loadPointCatalog()
 {
     _pointCatalog.clear();
 
-    if (!ensureFlashDbReady()) {
+    if (_flash == nullptr) {
         if (_logger != nullptr) {
-            _logger->Warning("FlashDB not ready, point catalog not loaded");
+            _logger->Warning("Flash not ready, point catalog not loaded");
         }
         return false;
+    }
+
+    PointCatalogFlashHeader header = {};
+    if (flash_read_bytes(_flash, kPointCatalogFlashBase, &header, sizeof(header)) &&
+        header.magic == kPointCatalogFlashMagic &&
+        header.version == kPointCatalogFlashVersion &&
+        header.payload_size < PointCatalog::kMaxSerializedSize &&
+        (sizeof(header) + header.payload_size) <= kPointCatalogFlashSize) {
+        char pointCatalogJson[PointCatalog::kMaxSerializedSize] = {};
+        if (!flash_read_bytes(_flash,
+                              kPointCatalogFlashBase + static_cast<uint32_t>(sizeof(header)),
+                              pointCatalogJson,
+                              header.payload_size)) {
+            if (_logger != nullptr) {
+                _logger->Warning("Point catalog raw flash read failed");
+            }
+            return false;
+        }
+
+        pointCatalogJson[header.payload_size] = '\0';
+        const uint32_t checksum = point_catalog_checksum(reinterpret_cast<const uint8_t*>(pointCatalogJson),
+                                                         header.payload_size);
+        if (checksum != header.checksum) {
+            if (_logger != nullptr) {
+                _logger->Warning("Point catalog checksum mismatch");
+            }
+            return false;
+        }
+
+        if (!_pointCatalog.loadFromJson(pointCatalogJson)) {
+            if (_logger != nullptr) {
+                _logger->Warning("Point catalog JSON parse failed");
+            }
+            _pointCatalog.clear();
+            return false;
+        }
+
+        if (_logger != nullptr) {
+            _logger->Info("Point catalog loaded (%u entries)", static_cast<unsigned>(_pointCatalog.size()));
+        }
+        return true;
+    }
+
+    if (!ensureFlashDbReady()) {
+        if (_logger != nullptr) {
+            _logger->Info("Point catalog absent, starting empty");
+        }
+        return true;
     }
 
     char pointCatalogJson[PointCatalog::kMaxSerializedSize] = {};
@@ -660,12 +1053,71 @@ bool NodeNetCore::loadPointCatalog()
         _logger->Info("Point catalog loaded (%u entries)", static_cast<unsigned>(_pointCatalog.size()));
     }
 
+    (void)savePointCatalog();
+
     return true;
+}
+
+void NodeNetCore::registerNodePointDefinition(JsonDocument& doc)
+{
+    const bool autosave_enabled = _pointCatalogAutosaveEnabled;
+    const bool was_dirty = _pointCatalogDirty;
+    _pointCatalogAutosaveEnabled = false;
+
+    PointDefinition definition = {};
+    make_point_identity(definition.id, doc["deviceId"], "core", "instrumentName");
+    copy_text(definition.display_name, sizeof(definition.display_name), "Instrument Name");
+    definition.backend = PointBackend::NodeNet;
+    definition.direction = PointDirection::InOut;
+    definition.value_type = PointValueType::String;
+    definition.string_capacity = sizeof(doc["instrumentName"].as<const char*>());
+    definition.polling.refresh_ms = 0u;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, doc["deviceId"], "core", "master");
+    copy_text(definition.display_name, sizeof(definition.display_name), "Master Role");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::InOut;
+    definition.value_type = PointValueType::Bool;
+    definition.polling.refresh_ms = 0u;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    _pointCatalogAutosaveEnabled = autosave_enabled;
+    if (autosave_enabled && _pointCatalogDirty && _pointCatalogDirty != was_dirty) {
+        const bool saved = savePointCatalog();
+        if (saved) {
+            _pointCatalogDirty = false;
+        }
+    }
+}
+
+void NodeNetCore::publishNodePointStates(JsonDocument& doc)
+{
+    PointIdentity id = {};
+    PointState state = {};
+
+    make_point_identity(id, doc["deviceId"], "core", "instrumentName");
+    copy_text(state.string_value, sizeof(state.string_value), doc["instrumentName"] | "");
+    state.quality = PointQuality::Good;
+    state.last_update_ms = millis();
+    state.last_good_update_ms = state.last_update_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, doc["deviceId"], "core", "master");
+    state = {};
+    state.value.b = doc["master"] | false;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = millis();
+    state.last_good_update_ms = state.last_update_ms;
+    (void)updatePointState(id, state);
 }
 
 void NodeNetCore::registerBuiltinPointDefinitions()
 {
-    PointDefinition definition = {};
+    PointDefinition definition = {};    
 
     make_point_identity(definition.id, deviceId, "core", "instrumentName");
     copy_text(definition.display_name, sizeof(definition.display_name), "Instrument Name");

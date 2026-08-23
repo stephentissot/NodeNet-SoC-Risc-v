@@ -173,6 +173,30 @@ static bool deserialize_persisted_definition(PointDefinition& definition, JsonAr
     return true;
 }
 
+static bool deserialize_persisted_definition(PointDefinition& definition, JsonObjectConst entry) {
+    if (entry.isNull()) {
+        return false;
+    }
+
+    deserialize_common(definition, entry);
+    deserialize_backend_ref(definition, entry);
+    return true;
+}
+
+static bool deserialize_persisted_entry(PointDefinition& definition, JsonVariantConst entry) {
+    JsonArrayConst compact_entry = entry.as<JsonArrayConst>();
+    if (!compact_entry.isNull()) {
+        return deserialize_persisted_definition(definition, compact_entry);
+    }
+
+    JsonObjectConst legacy_entry = entry.as<JsonObjectConst>();
+    if (!legacy_entry.isNull()) {
+        return deserialize_persisted_definition(definition, legacy_entry);
+    }
+
+    return false;
+}
+
 }  // namespace
 
 void PointCatalog::clear() {
@@ -318,6 +342,9 @@ bool PointCatalog::loadFromJson(const char* json) {
 
     JsonArrayConst points = doc["points"].as<JsonArrayConst>();
     if (points.isNull()) {
+        points = doc.as<JsonArrayConst>();
+    }
+    if (points.isNull()) {
         clear();
         return true;
     }
@@ -329,7 +356,7 @@ bool PointCatalog::loadFromJson(const char* json) {
         }
 
         PointDefinition definition = {};
-        if (!deserialize_persisted_definition(definition, item.as<JsonArrayConst>())) {
+        if (!deserialize_persisted_entry(definition, item)) {
             return false;
         }
         entries_[count_] = definition;

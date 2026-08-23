@@ -186,6 +186,8 @@ class NodeNetCore
         bool ensureFlashDbReady();
         bool savePointCatalog();
         bool loadPointCatalog();
+        void registerNodePointDefinition(JsonDocument& doc);
+        void publishNodePointStates(JsonDocument& doc);
         void registerBuiltinPointDefinitions();
         void publishBuiltinPointStates();
 
