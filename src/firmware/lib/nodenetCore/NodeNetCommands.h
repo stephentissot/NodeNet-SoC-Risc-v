@@ -57,6 +57,10 @@ public:
     NETWORK_REQ, // Ask for network settings
     NETWORK_RES, // Response with network settings
     NETWORK_UPD, // Request to update network settings
+    POINT_DEFS_REQ,
+    POINT_DEFS_RES,
+    POINT_UPSERT,
+    POINT_DELETE,
   };
 
   // Parsing string -> enum
@@ -90,6 +94,10 @@ public:
     if(strcmp(cmd, "networkReq") == 0)   return NETWORK_REQ;
     if(strcmp(cmd, "networkRes") == 0)   return NETWORK_RES;
     if(strcmp(cmd, "networkUpd") == 0)   return NETWORK_UPD;
+    if(strcmp(cmd, "pointDefsReq") == 0)   return POINT_DEFS_REQ;
+    if(strcmp(cmd, "pointDefsRes") == 0)   return POINT_DEFS_RES;
+    if(strcmp(cmd, "pointUpsert") == 0)   return POINT_UPSERT;
+    if(strcmp(cmd, "pointDelete") == 0)   return POINT_DELETE;
 
     return CMD_UNKNOWN;
   }
@@ -125,6 +133,10 @@ public:
       case NETWORK_REQ: return "networkReq";
       case NETWORK_RES: return "networkRes";
       case NETWORK_UPD: return "networkUpd";
+      case POINT_DEFS_REQ: return "pointDefsReq";
+      case POINT_DEFS_RES: return "pointDefsRes";
+      case POINT_UPSERT: return "pointUpsert";
+      case POINT_DELETE: return "pointDelete";
       default:         return "Unknown";
     }
   }

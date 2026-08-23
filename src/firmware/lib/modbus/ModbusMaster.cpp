@@ -22,7 +22,7 @@ ModbusMaster::ModbusMaster(uint32_t base_addr, uint32_t clock_hz)
       last_hw_status_(0u) {
 }
 
-void ModbusMaster::begin(uint32_t baudrate, uint32_t timeout_ms, uint8_t retries) {
+void ModbusMaster::begin(uint32_t baudrate, uint32_t timeout_ms, uint8_t retries, uint8_t interFrameCharsQ1) {
     timeout_ms_ = timeout_ms;
     retries_ = retries;
 
@@ -31,6 +31,8 @@ void ModbusMaster::begin(uint32_t baudrate, uint32_t timeout_ms, uint8_t retries
     writeReg(interframe_reg_, computeInterframeCycles(baudrate));
     writeReg(retry_reg_, retries_);
     writeReg(control_reg_, CTRL_CLEAR_STATUS);
+
+    setInterframeCharsQ1(interFrameCharsQ1);
 
     last_error_ = Error::None;
     last_exception_code_ = 0u;

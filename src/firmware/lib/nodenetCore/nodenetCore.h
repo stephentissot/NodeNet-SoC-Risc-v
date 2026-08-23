@@ -6,10 +6,12 @@
 #include <ArduinoJson.h>
 #include "nodeInfo.h"
 #include "bigsister.h"
+#include "ModbusTypes.h"
 #include "ModbusMaster.h"
 #include "nodenet.h"
 #include "nodenetLogger.h"
 #include "NodeNetCommands.h"
+#include "PointCatalog.h"
 #include "flash.h"
 #include "flashdb_port.h"
 
@@ -38,6 +40,12 @@ class NodeNetCore
 
         // Refreshes any user-facing screen or display state owned by the core.
         void refreshScreen();
+
+        PointCatalog& pointCatalog() { return _pointCatalog; }
+        const PointCatalog& pointCatalog() const { return _pointCatalog; }
+        bool upsertPointDefinition(const PointDefinition& definition);
+        bool updatePointState(const PointIdentity& id, const PointState& state);
+        bool updatePointCommandState(const PointIdentity& id, const PointCommandState& state);
 
         HardwareType hardwareType = HardwareType::UNDEFINED;
 
@@ -77,7 +85,9 @@ class NodeNetCore
             };
         } features;    
 
-
+        struct modbus0Settings {
+            ModbusComSettings comSettings = {};
+        } modbus0Settings;
 
     private:
         static constexpr uint8_t kInputQueueCapacity = 8u;
@@ -102,9 +112,12 @@ class NodeNetCore
         static NodeNetCore* s_active_instance;
 
         NodeNet* _nodeNet;
-        ModbusMaster* _modbus1 = nullptr;
+        ModbusMaster* _modbus0 = nullptr;
         NodeLogger* _logger = nullptr;
         Flash* _flash = nullptr;
+        PointCatalog _pointCatalog;
+        bool _pointCatalogAutosaveEnabled = true;
+        bool _pointCatalogDirty = false;
         MessageQueue<kInputQueueCapacity> _inputQueue;
         MessageQueue<kOutputQueueCapacity> _outputQueue;
         volatile bool _inputQueueOverflow = false;
@@ -166,7 +179,14 @@ class NodeNetCore
         // request: parsed JSON command containing at least "property" and "value".
         // Returns true when the property exists and the value type is accepted.
         bool updateProperty(const JsonDocument& request);
+        bool handlePointDefinitionsRequest(const JsonDocument& request, JsonDocument& response);
+        bool handlePointUpsertRequest(const JsonDocument& request, JsonDocument& response);
+        bool handlePointDeleteRequest(const JsonDocument& request, JsonDocument& response);
 
         bool ensureFlashDbReady();
+        bool savePointCatalog();
+        bool loadPointCatalog();
+        void registerBuiltinPointDefinitions();
+        void publishBuiltinPointStates();
 
 };

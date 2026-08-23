@@ -4,12 +4,15 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "ModbusTypes.h"
+
 class ModbusMaster {
 public:
     static constexpr uint32_t kDefaultClockHz = 25000000u;
     static constexpr uint32_t kDefaultBaudrate = 115200u;
     static constexpr uint32_t kDefaultTimeoutMs = 200u;
     static constexpr uint8_t kDefaultRetries = 1u;
+    static constexpr uint8_t kDefaultInterframeCharsQ1 = 14u;
 
     enum class Error : uint8_t {
         None = 0,
@@ -32,7 +35,8 @@ public:
 
     void begin(uint32_t baudrate = kDefaultBaudrate,
                uint32_t timeout_ms = kDefaultTimeoutMs,
-               uint8_t retries = kDefaultRetries);
+               uint8_t retries = kDefaultRetries,
+               uint8_t interFrameCharsQ1 = kDefaultInterframeCharsQ1);
 
     void setTimeoutMs(uint32_t timeout_ms);
     void setRetries(uint8_t retries);
