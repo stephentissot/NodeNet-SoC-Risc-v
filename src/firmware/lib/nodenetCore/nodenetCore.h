@@ -11,6 +11,7 @@
 #include "nodenet.h"
 #include "nodenetLogger.h"
 #include "NodeNetCommands.h"
+#include "PlcCore.h"
 #include "PointCatalog.h"
 #include "flash.h"
 #include "flashdb_port.h"
@@ -115,6 +116,7 @@ class NodeNetCore
         ModbusMaster* _modbus0 = nullptr;
         NodeLogger* _logger = nullptr;
         Flash* _flash = nullptr;
+        PlcCore _plcCore;
         PointCatalog _pointCatalog;
         bool _pointCatalogAutosaveEnabled = true;
         bool _pointCatalogDirty = false;
@@ -180,6 +182,7 @@ class NodeNetCore
         // Returns true when the property exists and the value type is accepted.
         bool updateProperty(const JsonDocument& request);
         bool handlePointDefinitionsRequest(const JsonDocument& request, JsonDocument& response);
+        bool handlePointStatesRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePointUpsertRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePointDeleteRequest(const JsonDocument& request, JsonDocument& response);
 

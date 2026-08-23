@@ -59,6 +59,8 @@ public:
     NETWORK_UPD, // Request to update network settings
     POINT_DEFS_REQ,
     POINT_DEFS_RES,
+    POINT_STATES_REQ,
+    POINT_STATES_RES,
     POINT_UPSERT,
     POINT_DELETE,
   };
@@ -96,6 +98,8 @@ public:
     if(strcmp(cmd, "networkUpd") == 0)   return NETWORK_UPD;
     if(strcmp(cmd, "pointDefsReq") == 0)   return POINT_DEFS_REQ;
     if(strcmp(cmd, "pointDefsRes") == 0)   return POINT_DEFS_RES;
+    if(strcmp(cmd, "pointStatesReq") == 0)   return POINT_STATES_REQ;
+    if(strcmp(cmd, "pointStatesRes") == 0)   return POINT_STATES_RES;
     if(strcmp(cmd, "pointUpsert") == 0)   return POINT_UPSERT;
     if(strcmp(cmd, "pointDelete") == 0)   return POINT_DELETE;
 
@@ -135,6 +139,8 @@ public:
       case NETWORK_UPD: return "networkUpd";
       case POINT_DEFS_REQ: return "pointDefsReq";
       case POINT_DEFS_RES: return "pointDefsRes";
+      case POINT_STATES_REQ: return "pointStatesReq";
+      case POINT_STATES_RES: return "pointStatesRes";
       case POINT_UPSERT: return "pointUpsert";
       case POINT_DELETE: return "pointDelete";
       default:         return "Unknown";

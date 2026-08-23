@@ -27,7 +27,7 @@ enum class ModbusDataType : uint8_t {
 };
 
 struct ModbusComSettings {
-    uint32_t baudrate = 115200u;
+    uint32_t baudrate = 9600u;
     uint32_t timeout_ms = 200u;
     uint8_t retries = 1u;
     uint8_t interframe_chars_q1 = 14u;

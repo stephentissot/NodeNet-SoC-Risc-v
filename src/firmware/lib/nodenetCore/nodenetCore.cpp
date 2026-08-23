@@ -15,6 +15,7 @@ constexpr const char* kFlashDbModbus0Key = "nodenet.modbus0";
 constexpr const char* kFlashDbPointCatalogKey = "nodenet.points";
 constexpr uint8_t kModbus0PortIndex = 0u;
 constexpr uint8_t kWaveshareDefaultSlaveAddress = 1u;
+constexpr uint8_t kEurotherm6100SlaveAddress = 2u;
 constexpr uint32_t kPointCatalogFlashMagic = 0x50434154u; // "PCAT"
 constexpr uint32_t kPointCatalogFlashVersion = 1u;
 constexpr uint32_t kPointCatalogFlashBase = Flash::kParamBase;
@@ -190,6 +191,46 @@ static bool flash_write_erased_bytes(Flash* flash, uint32_t base, const void* da
     return true;
 }
 
+static void serialize_point_state(JsonObject obj,
+                                  const PointDefinition& definition,
+                                  const PointState& state) {
+    obj["deviceId"] = definition.id.device_id;
+    obj["feature"] = definition.id.feature;
+    obj["pointId"] = definition.id.point_id;
+    obj["quality"] = static_cast<uint8_t>(state.quality);
+    obj["lastUpdateMs"] = state.last_update_ms;
+    obj["lastGoodUpdateMs"] = state.last_good_update_ms;
+
+    switch (definition.value_type) {
+        case PointValueType::Bool:
+            obj["value"] = state.value.b;
+            break;
+        case PointValueType::Uint16:
+            obj["value"] = state.value.u16;
+            break;
+        case PointValueType::Int16:
+            obj["value"] = state.value.i16;
+            break;
+        case PointValueType::Uint32:
+            obj["value"] = state.value.u32;
+            break;
+        case PointValueType::Int32:
+            obj["value"] = state.value.i32;
+            break;
+        case PointValueType::Float:
+            obj["value"] = state.value.f32;
+            break;
+        case PointValueType::Enum:
+            obj["value"] = state.value.enum_value;
+            break;
+        case PointValueType::String:
+            obj["value"] = state.string_value;
+            break;
+        default:
+            break;
+    }
+}
+
 }
 
 NodeNetCore* NodeNetCore::s_active_instance = nullptr;
@@ -236,11 +277,6 @@ void NodeNetCore::begin()
         (void)savePointCatalog();
         _pointCatalogDirty = false;
     }
-    publishBuiltinPointStates();
-
-    _nodeNet->SetCallbacks(nodenet_broadcast_callback_trampoline,
-                           nodenet_message_callback_trampoline);
-    _logger->Info("NodeNetCore IRQ callbacks armed");
 
     // Start modbus features
     _modbus0 = new ModbusMaster(MODBUS1_BASE);
@@ -249,6 +285,13 @@ void NodeNetCore::begin()
                     modbus0Settings.comSettings.retries,
                     modbus0Settings.comSettings.interframe_chars_q1);
     features.hasModbus0 = true;
+    _plcCore.begin(&_pointCatalog, _modbus0, _logger);
+
+    publishBuiltinPointStates();
+
+    _nodeNet->SetCallbacks(nodenet_broadcast_callback_trampoline,
+                           nodenet_message_callback_trampoline);
+    _logger->Info("NodeNetCore IRQ callbacks armed");
 
     JsonDocument discoverMsg(&g_sdram_json_allocator);
     discoverMsg["cmd"] = "WhoIs";
@@ -262,6 +305,8 @@ void NodeNetCore::begin()
 void NodeNetCore::loop()
 {
     processInputQueue();
+    processOutputQueue();
+    _plcCore.loop();
     processOutputQueue();
 }
 
@@ -565,6 +610,9 @@ void NodeNetCore::processInputQueue()
             case NodeNetCommands::Cmd::POINT_DEFS_REQ:
                 queueResponse = handlePointDefinitionsRequest(request, response);
                 break;
+            case NodeNetCommands::Cmd::POINT_STATES_REQ:
+                queueResponse = handlePointStatesRequest(request, response);
+                break;
             case NodeNetCommands::Cmd::POINT_UPSERT:
                 queueResponse = handlePointUpsertRequest(request, response);
                 break;
@@ -812,6 +860,197 @@ bool NodeNetCore::handlePointDefinitionsRequest(const JsonDocument& request, Jso
 
         JsonObject point = points.add<JsonObject>();
         PointCatalog::serializeDefinition(point, definitions[index]);
+        response["count"] = emitted_points + 1u;
+        response["hasMore"] = false;
+        if (measureJson(response) > NODENET_MAX_PAYLOAD_SIZE) {
+            points.remove(points.size() - 1u);
+            response["count"] = emitted_points;
+            response["hasMore"] = true;
+            break;
+        }
+
+        emitted_points += 1u;
+        matched_points += 1u;
+    }
+
+    uint32_t total_points = 0u;
+    for (size_t index = 0; index < _pointCatalog.size(); ++index) {
+        char feature_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + 2u] = {};
+        char point_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + sizeof(PointIdentity::point_id) + 3u] = {};
+        bool matches = false;
+
+        if (exact_point_match) {
+            build_point_path(definitions[index], point_path, sizeof(point_path));
+            matches = strings_equal(path, point_path);
+        } else if (exact_feature_match) {
+            build_feature_path(definitions[index], feature_path, sizeof(feature_path));
+            matches = strings_equal(path, feature_path);
+        }
+
+        if (matches) {
+            total_points += 1u;
+        }
+    }
+
+    response["total"] = total_points;
+    response["hasMore"] = (offset + (response["count"] | 0u)) < total_points;
+    return true;
+}
+
+bool NodeNetCore::handlePointStatesRequest(const JsonDocument& request, JsonDocument& response)
+{
+    response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::POINT_STATES_RES);
+    const char* path = request["path"] | "";
+    const uint32_t offset = request["offset"] | 0u;
+    const uint32_t limit = request["limit"] | 4u;
+    response["path"] = path;
+    response["offset"] = offset;
+    response["count"] = 0u;
+    response["hasMore"] = false;
+
+    const PointDefinition* definitions = _pointCatalog.entries();
+    const PointState* states = _pointCatalog.states();
+    bool exact_point_match = false;
+    bool exact_feature_match = false;
+    bool exact_device_match = false;
+
+    if (path[0] != '\0') {
+        char feature_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + 2u] = {};
+        char point_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + sizeof(PointIdentity::point_id) + 3u] = {};
+        for (size_t index = 0; index < _pointCatalog.size(); ++index) {
+            build_point_path(definitions[index], point_path, sizeof(point_path));
+            if (strings_equal(path, point_path)) {
+                exact_point_match = true;
+                break;
+            }
+
+            build_feature_path(definitions[index], feature_path, sizeof(feature_path));
+            if (strings_equal(path, feature_path)) {
+                exact_feature_match = true;
+            }
+            if (strings_equal(path, definitions[index].id.device_id)) {
+                exact_device_match = true;
+            }
+        }
+    }
+
+    if (path[0] == '\0' || exact_device_match) {
+        response["kind"] = "devices";
+        JsonArray devices = response["devices"].to<JsonArray>();
+        uint32_t matched_devices = 0u;
+        uint32_t emitted_devices = 0u;
+
+        for (size_t index = 0; index < _pointCatalog.size(); ++index) {
+            if (path[0] != '\0' && !strings_equal(definitions[index].id.device_id, path)) {
+                continue;
+            }
+
+            bool first_for_device = true;
+            for (size_t probe = 0; probe < index; ++probe) {
+                if (strings_equal(definitions[probe].id.device_id, definitions[index].id.device_id) &&
+                    (path[0] == '\0' || strings_equal(definitions[probe].id.device_id, path))) {
+                    first_for_device = false;
+                    break;
+                }
+            }
+            if (!first_for_device) {
+                continue;
+            }
+
+            if (matched_devices < offset) {
+                matched_devices += 1u;
+                continue;
+            }
+            if (emitted_devices >= limit) {
+                matched_devices += 1u;
+                continue;
+            }
+
+            JsonObject device = devices.add<JsonObject>();
+            device["deviceId"] = definitions[index].id.device_id;
+            JsonArray features = device["features"].to<JsonArray>();
+
+            for (size_t feature_index = 0; feature_index < _pointCatalog.size(); ++feature_index) {
+                if (!strings_equal(definitions[feature_index].id.device_id, definitions[index].id.device_id)) {
+                    continue;
+                }
+                if (!append_unique_string(features, definitions[feature_index].id.feature)) {
+                    break;
+                }
+            }
+
+            response["count"] = emitted_devices + 1u;
+            response["hasMore"] = false;
+            if (measureJson(response) > NODENET_MAX_PAYLOAD_SIZE) {
+                devices.remove(devices.size() - 1u);
+                response["count"] = emitted_devices;
+                response["hasMore"] = true;
+                break;
+            }
+
+            emitted_devices += 1u;
+            matched_devices += 1u;
+        }
+
+        uint32_t total_devices = 0u;
+        for (size_t index = 0; index < _pointCatalog.size(); ++index) {
+            if (path[0] != '\0' && !strings_equal(definitions[index].id.device_id, path)) {
+                continue;
+            }
+
+            bool first_for_device = true;
+            for (size_t probe = 0; probe < index; ++probe) {
+                if (strings_equal(definitions[probe].id.device_id, definitions[index].id.device_id) &&
+                    (path[0] == '\0' || strings_equal(definitions[probe].id.device_id, path))) {
+                    first_for_device = false;
+                    break;
+                }
+            }
+            if (first_for_device) {
+                total_devices += 1u;
+            }
+        }
+
+        response["total"] = total_devices;
+        response["hasMore"] = (offset + (response["count"] | 0u)) < total_devices;
+        return true;
+    }
+
+    response["kind"] = "points";
+    JsonArray points = response["pointStates"].to<JsonArray>();
+    uint32_t matched_points = 0u;
+    uint32_t emitted_points = 0u;
+
+    for (size_t index = 0; index < _pointCatalog.size(); ++index) {
+        char feature_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + 2u] = {};
+        char point_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + sizeof(PointIdentity::point_id) + 3u] = {};
+        bool matches = false;
+
+        if (path[0] == '\0') {
+            matches = true;
+        } else if (exact_point_match) {
+            build_point_path(definitions[index], point_path, sizeof(point_path));
+            matches = strings_equal(path, point_path);
+        } else if (exact_feature_match) {
+            build_feature_path(definitions[index], feature_path, sizeof(feature_path));
+            matches = strings_equal(path, feature_path);
+        }
+
+        if (!matches) {
+            continue;
+        }
+
+        if (matched_points < offset) {
+            matched_points += 1u;
+            continue;
+        }
+        if (emitted_points >= limit) {
+            matched_points += 1u;
+            continue;
+        }
+
+        JsonObject point = points.add<JsonObject>();
+        serialize_point_state(point, definitions[index], states[index]);
         response["count"] = emitted_points + 1u;
         response["hasMore"] = false;
         if (measureJson(response) > NODENET_MAX_PAYLOAD_SIZE) {
@@ -1189,6 +1428,30 @@ void NodeNetCore::registerBuiltinPointDefinitions()
         definition.ref.modbus.access = ModbusAccess::Read;
         (void)upsertPointDefinition(definition);
     }
+
+    static const uint16_t kEurothermPvAddresses[] = {41433u, 41436u, 41439u};
+    for (uint8_t channel = 0u; channel < 3u; ++channel) {
+        char point_id[32] = {};
+        char display_name[32] = {};
+
+        definition = {};
+        (void)snprintf(point_id, sizeof(point_id), "ch%u", static_cast<unsigned>(channel + 1u));
+        (void)snprintf(display_name, sizeof(display_name), "Eurotherm CH%u PV", static_cast<unsigned>(channel + 1u));
+        make_point_identity(definition.id, deviceId, "modbus0.eurotherm6100", point_id);
+        copy_text(definition.display_name, sizeof(definition.display_name), display_name);
+        definition.backend = PointBackend::Modbus;
+        definition.direction = PointDirection::Input;
+        definition.value_type = PointValueType::Int16;
+        definition.polling.refresh_ms = 1000u;
+        definition.polling.timeout_ms = 3000u;
+        definition.ref.modbus.port_index = kModbus0PortIndex;
+        definition.ref.modbus.slave_address = kEurotherm6100SlaveAddress;
+        definition.ref.modbus.address = kEurothermPvAddresses[channel];
+        definition.ref.modbus.register_count = 1u;
+        definition.ref.modbus.table = ModbusTable::HoldingRegisters;
+        definition.ref.modbus.access = ModbusAccess::Read;
+        (void)upsertPointDefinition(definition);
+    }
 }
 
 void NodeNetCore::publishBuiltinPointStates()
@@ -1231,6 +1494,17 @@ void NodeNetCore::publishBuiltinPointStates()
 
         (void)snprintf(point_id, sizeof(point_id), "input%u", static_cast<unsigned>(channel + 1u));
         make_point_identity(id, deviceId, "modbus0.waveshare8ch", point_id);
+        state = {};
+        state.quality = PointQuality::BadNotConnected;
+        state.last_update_ms = millis();
+        (void)updatePointState(id, state);
+    }
+
+    for (uint8_t channel = 0u; channel < 3u; ++channel) {
+        char point_id[32] = {};
+
+        (void)snprintf(point_id, sizeof(point_id), "ch%u", static_cast<unsigned>(channel + 1u));
+        make_point_identity(id, deviceId, "modbus0.eurotherm6100", point_id);
         state = {};
         state.quality = PointQuality::BadNotConnected;
         state.last_update_ms = millis();

@@ -59,6 +59,8 @@ NODENETCORE_OBJ=$(BUILD)/nodenetCore.o
 PLC_DIR=lib/plc
 PLC_CATALOG_SRC=$(PLC_DIR)/PointCatalog.cpp
 PLC_CATALOG_OBJ=$(BUILD)/PointCatalog.o
+PLC_CORE_SRC=$(PLC_DIR)/PlcCore.cpp
+PLC_CORE_OBJ=$(BUILD)/PlcCore.o
 ARDUINOJSON_DIR=lib/ArduinoJson
 ARDUINOJSON_INC=$(ARDUINOJSON_DIR)/src
 FLASHDB_DIR=lib/FlashDB-2.2.0
@@ -74,7 +76,7 @@ NODENET_DIR=lib/nodenet
 NODENET_SRC=lib/nodenet/nodenet.cpp
 NODENET_OBJ=$(BUILD)/nodenet.o
 
-DEPS=$(BUILD)/start.d $(BUILD)/app_start.d $(BUILD)/boot_start.d $(MAIN_OBJ:.o=.d) $(NODENET_OBJ:.o=.d) $(NODENETCORE_OBJ:.o=.d) $(PLC_CATALOG_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(BUILD)/Serial.d $(BUILD)/ModbusMaster.d $(BUILD)/flash.d $(BUILD)/flashdb_port.d $(BUILD)/sdram.d $(BUILD)/fdb.d $(BUILD)/fdb_kvdb.d $(BUILD)/fdb_utils.d $(U8G2_OBJS:.o=.d)
+DEPS=$(BUILD)/start.d $(BUILD)/app_start.d $(BUILD)/boot_start.d $(MAIN_OBJ:.o=.d) $(NODENET_OBJ:.o=.d) $(NODENETCORE_OBJ:.o=.d) $(PLC_CATALOG_OBJ:.o=.d) $(PLC_CORE_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(BUILD)/Serial.d $(BUILD)/ModbusMaster.d $(BUILD)/flash.d $(BUILD)/flashdb_port.d $(BUILD)/sdram.d $(BUILD)/fdb.d $(BUILD)/fdb_kvdb.d $(BUILD)/fdb_utils.d $(U8G2_OBJS:.o=.d)
 
 CFLAGS=-march=rv32im -mabi=ilp32 \
        -Wall \
@@ -152,7 +154,7 @@ $(BUILD):
 $(U8G2_CACHE):
 	mkdir -p $@
 
-$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(NODENET_OBJ) $(NODENETCORE_OBJ) $(PLC_CATALOG_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(MODBUS_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_TEST_OBJ) $(U8G2_LIB) | $(BUILD)
+$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(NODENET_OBJ) $(NODENETCORE_OBJ) $(PLC_CATALOG_OBJ) $(PLC_CORE_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(MODBUS_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_TEST_OBJ) $(U8G2_LIB) | $(BUILD)
 	$(CROSS)g++ $(LDFLAGS) $^ -o $@
 
 $(BUILD)/start.o: start.S | $(BUILD)
@@ -168,6 +170,9 @@ $(NODENETCORE_OBJ): $(NODENETCORE_SRC) | $(BUILD)
 	$(CROSS)g++ -x c++ $(CXXFLAGS) -c $< -o $@
 
 $(PLC_CATALOG_OBJ): $(PLC_CATALOG_SRC) | $(BUILD)
+	$(CROSS)g++ -x c++ $(CXXFLAGS) -c $< -o $@
+
+$(PLC_CORE_OBJ): $(PLC_CORE_SRC) | $(BUILD)
 	$(CROSS)g++ -x c++ $(CXXFLAGS) -c $< -o $@
 
 $(BUILD)/u8g2_hal.o: lib/u8g2_hal/u8g2_hal.cpp | $(BUILD)
@@ -220,7 +225,7 @@ $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 $(FW_BIN): $(BUILD)/$(TARGET).elf
 	$(CROSS)objcopy -O binary $< $@
 
-$(APP_ELF): $(APP_START_OBJ) $(MAIN_OBJ) $(NODENET_OBJ) $(NODENETCORE_OBJ) $(PLC_CATALOG_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(MODBUS_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_TEST_OBJ) $(U8G2_LIB) | $(BUILD)
+$(APP_ELF): $(APP_START_OBJ) $(MAIN_OBJ) $(NODENET_OBJ) $(NODENETCORE_OBJ) $(PLC_CATALOG_OBJ) $(PLC_CORE_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(MODBUS_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_TEST_OBJ) $(U8G2_LIB) | $(BUILD)
 	$(CROSS)g++ -march=rv32im -mabi=ilp32 -T $(APP_LINKER) -nostartfiles -Wl,--gc-sections --specs=nano.specs --specs=nosys.specs $^ -o $@
 
 $(APP_START_OBJ): $(APP_START_SRC) | $(BUILD)

@@ -9,7 +9,7 @@
 class ModbusMaster {
 public:
     static constexpr uint32_t kDefaultClockHz = 25000000u;
-    static constexpr uint32_t kDefaultBaudrate = 115200u;
+    static constexpr uint32_t kDefaultBaudrate = 9600u;
     static constexpr uint32_t kDefaultTimeoutMs = 200u;
     static constexpr uint8_t kDefaultRetries = 1u;
     static constexpr uint8_t kDefaultInterframeCharsQ1 = 14u;
