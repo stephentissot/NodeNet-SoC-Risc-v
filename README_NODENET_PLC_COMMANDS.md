@@ -144,6 +144,10 @@ Requests live point states from the local catalog.
 
 With a `deviceId.feature` or `deviceId.feature.pointId` path, the response kind is `points` and the returned array is `pointStates`.
 
+`lastUpdateAgeMs` is the elapsed time in milliseconds since the last poll or write attempt for that point.
+
+`lastGoodUpdateAgeMs` is the elapsed time in milliseconds since the last successful poll or write for that point. It stays `0` if the point has never had a good value yet.
+
 ```json
 {
   "cmd": "pointStatesRes",
@@ -160,8 +164,8 @@ With a `deviceId.feature` or `deviceId.feature.pointId` path, the response kind 
       "feature": "modbus0.eurotherm6100",
       "pointId": "ch1",
       "quality": 1,
-      "lastUpdateMs": 24183,
-      "lastGoodUpdateMs": 24183,
+      "lastUpdateAgeMs": 183,
+      "lastGoodUpdateAgeMs": 183,
       "value": 215
     },
     {
@@ -169,8 +173,8 @@ With a `deviceId.feature` or `deviceId.feature.pointId` path, the response kind 
       "feature": "modbus0.eurotherm6100",
       "pointId": "ch2",
       "quality": 1,
-      "lastUpdateMs": 25186,
-      "lastGoodUpdateMs": 25186,
+      "lastUpdateAgeMs": 1186,
+      "lastGoodUpdateAgeMs": 1186,
       "value": 198
     }
   ]

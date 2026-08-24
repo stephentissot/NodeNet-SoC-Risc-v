@@ -197,13 +197,14 @@ static bool flash_write_erased_bytes(Flash* flash, uint32_t base, const void* da
 
 static void serialize_point_state(JsonObject obj,
                                   const PointDefinition& definition,
-                                  const PointState& state) {
+                                  const PointState& state,
+                                  uint32_t now_ms) {
     obj["deviceId"] = definition.id.device_id;
     obj["feature"] = definition.id.feature;
     obj["pointId"] = definition.id.point_id;
     obj["quality"] = static_cast<uint8_t>(state.quality);
-    obj["lastUpdateMs"] = state.last_update_ms;
-    obj["lastGoodUpdateMs"] = state.last_good_update_ms;
+    obj["lastUpdateAgeMs"] = (state.last_update_ms == 0u) ? 0u : (now_ms - state.last_update_ms);
+    obj["lastGoodUpdateAgeMs"] = (state.last_good_update_ms == 0u) ? 0u : (now_ms - state.last_good_update_ms);
 
     switch (definition.value_type) {
         case PointValueType::Bool:
@@ -1017,6 +1018,7 @@ bool NodeNetCore::handlePointDefinitionsRequest(const JsonDocument& request, Jso
 bool NodeNetCore::handlePointStatesRequest(const JsonDocument& request, JsonDocument& response)
 {
     response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::POINT_STATES_RES);
+    const uint32_t now_ms = millis();
     const char* path = request["path"] | "";
     const uint32_t offset = request["offset"] | 0u;
     const uint32_t limit = request["limit"] | 4u;
@@ -1167,7 +1169,7 @@ bool NodeNetCore::handlePointStatesRequest(const JsonDocument& request, JsonDocu
         }
 
         JsonObject point = points.add<JsonObject>();
-        serialize_point_state(point, definitions[index], states[index]);
+        serialize_point_state(point, definitions[index], states[index], now_ms);
         response["count"] = emitted_points + 1u;
         response["hasMore"] = false;
         if (measureJson(response) > NODENET_MAX_PAYLOAD_SIZE) {
