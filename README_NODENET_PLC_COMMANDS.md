@@ -1,0 +1,353 @@
+# NodeNet PLC Commands
+
+This document describes the NodeNet PLC commands implemented by the firmware for browsing point definitions, browsing point states, creating or updating points, and deleting points.
+
+These commands are handled in the NodeNet core and operate on the local point catalog.
+
+## Overview
+
+Supported commands:
+
+- `pointDefsReq`
+- `pointStatesReq`
+- `pointUpsert`
+- `pointDelete`
+
+The point identity model is hierarchical:
+
+- `deviceId`
+- `feature`
+- `pointId`
+
+The optional `path` field used by `pointDefsReq` and `pointStatesReq` is built like this:
+
+```text
+deviceId.feature.pointId
+```
+
+Examples:
+
+- empty path: browse devices
+- `gb9fao5yk4f`: browse one device and its features
+- `gb9fao5yk4f.modbus0.eurotherm6100`: browse points under one feature
+- `gb9fao5yk4f.modbus0.eurotherm6100.ch1`: browse one exact point
+
+Both browse commands support pagination:
+
+- `offset`: first element to return
+- `limit`: maximum number of elements to return
+- `count`: number of elements returned in this response
+- `total`: total number of matching elements
+- `hasMore`: `true` when more elements are available
+
+## pointDefsReq
+
+Requests point definitions from the local catalog.
+
+### Request
+
+```json
+{
+  "cmd": "pointDefsReq",
+  "from": 5,
+  "to": 4,
+  "path": "",
+  "offset": 0,
+  "limit": 8
+}
+```
+
+### Device-level response
+
+With an empty path, or with a `deviceId`, the response kind is `devices`.
+
+```json
+{
+  "cmd": "pointDefsRes",
+  "to": 5,
+  "path": "",
+  "offset": 0,
+  "kind": "devices",
+  "count": 1,
+  "total": 1,
+  "hasMore": false,
+  "devices": [
+    {
+      "deviceId": "gb9fao5yk4f",
+      "features": [
+        "core",
+        "modbus0",
+        "modbus0.waveshare8ch",
+        "modbus0.eurotherm6100"
+      ]
+    }
+  ]
+}
+```
+
+### Feature-level response
+
+With a `deviceId.feature` path, the response kind is `points`.
+
+```json
+{
+  "cmd": "pointDefsRes",
+  "to": 5,
+  "path": "gb9fao5yk4f.modbus0.eurotherm6100",
+  "offset": 0,
+  "kind": "points",
+  "count": 3,
+  "total": 3,
+  "hasMore": false,
+  "points": [
+    {
+      "deviceId": "gb9fao5yk4f",
+      "feature": "modbus0.eurotherm6100",
+      "pointId": "ch1",
+      "displayName": "Eurotherm CH1 PV",
+      "backend": 1,
+      "direction": 0,
+      "valueType": 2,
+      "refreshMs": 1000,
+      "timeoutMs": 3000,
+      "stringCapacity": 0,
+      "portIndex": 0,
+      "slaveAddress": 2,
+      "address": 41433,
+      "registerCount": 1,
+      "table": 3,
+      "access": 1
+    }
+  ]
+}
+```
+
+## pointStatesReq
+
+Requests live point states from the local catalog.
+
+### Request
+
+```json
+{
+  "cmd": "pointStatesReq",
+  "from": 5,
+  "to": 4,
+  "path": "gb9fao5yk4f.modbus0.eurotherm6100",
+  "offset": 0,
+  "limit": 4
+}
+```
+
+### Point-state response
+
+With a `deviceId.feature` or `deviceId.feature.pointId` path, the response kind is `points` and the returned array is `pointStates`.
+
+```json
+{
+  "cmd": "pointStatesRes",
+  "to": 5,
+  "path": "gb9fao5yk4f.modbus0.eurotherm6100",
+  "offset": 0,
+  "kind": "points",
+  "count": 3,
+  "total": 3,
+  "hasMore": false,
+  "pointStates": [
+    {
+      "deviceId": "gb9fao5yk4f",
+      "feature": "modbus0.eurotherm6100",
+      "pointId": "ch1",
+      "quality": 1,
+      "lastUpdateMs": 24183,
+      "lastGoodUpdateMs": 24183,
+      "value": 215
+    },
+    {
+      "deviceId": "gb9fao5yk4f",
+      "feature": "modbus0.eurotherm6100",
+      "pointId": "ch2",
+      "quality": 1,
+      "lastUpdateMs": 25186,
+      "lastGoodUpdateMs": 25186,
+      "value": 198
+    }
+  ]
+}
+```
+
+### Quality values
+
+`quality` is a numeric `PointQuality` value:
+
+- `0`: `Unknown`
+- `1`: `Good`
+- `2`: `UncertainInitialValue`
+- `3`: `BadNotConnected`
+- `4`: `BadNodeMissing`
+- `5`: `BadTimeout`
+- `6`: `BadProtocolError`
+- `7`: `BadConfigError`
+- `8`: `BadInvalidValue`
+- `9`: `BadWriteRejected`
+
+## pointUpsert
+
+Creates a new point definition or updates an existing one.
+
+### Request
+
+The request payload must contain a `definition` object compatible with the firmware serializer.
+
+```json
+{
+  "cmd": "pointUpsert",
+  "from": 5,
+  "to": 4,
+  "definition": {
+    "deviceId": "gb9fao5yk4f",
+    "feature": "modbus0.waveshare8ch",
+    "pointId": "output1",
+    "displayName": "Output Channel 1",
+    "backend": 1,
+    "direction": 2,
+    "valueType": 0,
+    "refreshMs": 1000,
+    "timeoutMs": 3000,
+    "stringCapacity": 0,
+    "portIndex": 0,
+    "slaveAddress": 1,
+    "address": 0,
+    "registerCount": 1,
+    "table": 1,
+    "access": 3
+  }
+}
+```
+
+### Success response
+
+```json
+{
+  "cmd": "pointUpsert",
+  "ok": true
+}
+```
+
+### Failure response
+
+```json
+{
+  "cmd": "pointUpsert",
+  "ok": false,
+  "error": "invalidDefinition"
+}
+```
+
+Possible `pointUpsert` errors:
+
+- `invalidDefinition`
+- `upsertFailed`
+
+### Numeric enum values used in definition payloads
+
+`backend`:
+
+- `0`: `Local`
+- `1`: `Modbus`
+- `2`: `NodeNet`
+
+`direction`:
+
+- `0`: `Input`
+- `1`: `Output`
+- `2`: `InOut`
+
+`valueType`:
+
+- `0`: `Bool`
+- `1`: `Uint16`
+- `2`: `Int16`
+- `3`: `Uint32`
+- `4`: `Int32`
+- `5`: `Float`
+- `6`: `Enum`
+- `7`: `String`
+
+For `backend = 1` (`Modbus`), the Modbus-specific fields are:
+
+- `portIndex`
+- `slaveAddress`
+- `address`
+- `registerCount`
+- `table`
+- `access`
+
+Modbus `table` values:
+
+- `1`: `Coils`
+- `2`: `DiscreteInputs`
+- `3`: `HoldingRegisters`
+- `4`: `InputRegisters`
+
+Modbus `access` values:
+
+- `1`: `Read`
+- `2`: `Write`
+- `3`: `ReadWrite`
+
+For `backend = 2` (`NodeNet`), use these remote reference fields instead:
+
+- `remoteDeviceId`
+- `remoteFeature`
+- `remotePointId`
+
+## pointDelete
+
+Deletes one point definition by explicit identity.
+
+### Request
+
+```json
+{
+  "cmd": "pointDelete",
+  "from": 5,
+  "to": 4,
+  "deviceId": "gb9fao5yk4f",
+  "feature": "modbus0.waveshare8ch",
+  "pointId": "output8"
+}
+```
+
+### Success response
+
+```json
+{
+  "cmd": "pointDelete",
+  "ok": true
+}
+```
+
+### Failure response
+
+```json
+{
+  "cmd": "pointDelete",
+  "ok": false,
+  "error": "notFound"
+}
+```
+
+Possible `pointDelete` errors:
+
+- `missingIdentity`
+- `notFound`
+- `saveFailed`
+
+## Notes
+
+- `pointDefsReq` returns definitions in the `points` array.
+- `pointStatesReq` returns runtime values in the `pointStates` array.
+- `pointUpsert` persists the updated point catalog.
+- `pointDelete` removes the point from the catalog and then persists the catalog.
+- Responses are size-limited by the NodeNet payload maximum, so large result sets may be split across multiple pages.

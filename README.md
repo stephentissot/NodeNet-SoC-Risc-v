@@ -16,6 +16,12 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 
 ## Features
 
+### NodeNet PLC
+- NodeNet PLC catalog browsing supports `pointDefsReq` and `pointStatesReq` with hierarchical paths of the form `deviceId.feature.pointId`.
+- Point definitions can be created or updated with `pointUpsert`, and removed with `pointDelete`.
+- Modbus-backed points are polled by the PLC runtime and exposed through the same NodeNet command surface.
+- See [README_NODENET_PLC_COMMANDS.md](README_NODENET_PLC_COMMANDS.md) for command details and JSON examples.
+
 ### NodeNet Validation Snapshot (2026-08-20)
 - Automatic heartbeat in HDL validated on hardware at ~10 s period.
 - RX to local address validated (message accepted and decoded).
