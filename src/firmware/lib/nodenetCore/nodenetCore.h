@@ -62,12 +62,22 @@ class NodeNetCore
             doc["deviceId"] = deviceId;
             doc["instrumentName"] = instrumentName;
             doc["master"] = master;
+            JsonObject modbus0 = doc["modbus0"].to<JsonObject>();
+            modbus0["speed"] = modbus0Settings.comSettings.baudrate;
+            modbus0["timeout"] = modbus0Settings.comSettings.timeout_ms;
+            modbus0["retries"] = modbus0Settings.comSettings.retries;
+            modbus0["interframeCharsQ1"] = modbus0Settings.comSettings.interframe_chars_q1;
         }
         void fromJson(const JsonDocument& doc) {
             const uint8_t currentAddr = addr;
             const bool currentMaster = master;
             const char* currentDeviceId = deviceId;
             const char* currentInstrumentName = instrumentName;
+            const uint32_t currentModbus0Speed = modbus0Settings.comSettings.baudrate;
+            const uint32_t currentModbus0Timeout = modbus0Settings.comSettings.timeout_ms;
+            const uint8_t currentModbus0Retries = modbus0Settings.comSettings.retries;
+            const uint8_t currentModbus0Interframe = modbus0Settings.comSettings.interframe_chars_q1;
+            JsonObjectConst modbus0 = doc["modbus0"].as<JsonObjectConst>();
 
             addr = doc["addr"] | currentAddr;
             strncpy(deviceId, doc["deviceId"] | currentDeviceId, sizeof(deviceId) - 1);
@@ -75,6 +85,10 @@ class NodeNetCore
             strncpy(instrumentName, doc["instrumentName"] | currentInstrumentName, sizeof(instrumentName) - 1);
             instrumentName[sizeof(instrumentName) - 1] = '\0';
             master = doc["master"] | currentMaster;
+            modbus0Settings.comSettings.baudrate = modbus0["speed"] | currentModbus0Speed;
+            modbus0Settings.comSettings.timeout_ms = modbus0["timeout"] | currentModbus0Timeout;
+            modbus0Settings.comSettings.retries = modbus0["retries"] | currentModbus0Retries;
+            modbus0Settings.comSettings.interframe_chars_q1 = modbus0["interframeCharsQ1"] | currentModbus0Interframe;
         }
 
         struct Features {

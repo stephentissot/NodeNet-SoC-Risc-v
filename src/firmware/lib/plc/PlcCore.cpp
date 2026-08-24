@@ -5,6 +5,10 @@
 
 namespace {
 
+float apply_numeric_scale(float value, const PointDefinition& definition) {
+    return value * definition.scale;
+}
+
 const char* modbus_error_to_string(ModbusMaster::Error error) {
     switch (error) {
         case ModbusMaster::Error::None:
@@ -166,31 +170,31 @@ bool PlcCore::pollModbusPoint(const PointDefinition& definition, PointState& sta
             state.value.b = ModbusMaster::regsToU16(regs[0]) != 0u;
             break;
         case PointValueType::Uint16:
-            state.value.u16 = ModbusMaster::regsToU16(regs[0]);
+            state.value.u16 = static_cast<uint16_t>(apply_numeric_scale(static_cast<float>(ModbusMaster::regsToU16(regs[0])), definition));
             break;
         case PointValueType::Int16:
-            state.value.i16 = ModbusMaster::regsToI16(regs[0]);
+            state.value.i16 = static_cast<int16_t>(apply_numeric_scale(static_cast<float>(ModbusMaster::regsToI16(regs[0])), definition));
             break;
         case PointValueType::Uint32:
             if (definition.ref.modbus.register_count < 2u) {
                 state.quality = PointQuality::BadConfigError;
                 return false;
             }
-            state.value.u32 = ModbusMaster::regsToU32(regs[0], regs[1]);
+            state.value.u32 = static_cast<uint32_t>(apply_numeric_scale(static_cast<float>(ModbusMaster::regsToU32(regs[0], regs[1])), definition));
             break;
         case PointValueType::Int32:
             if (definition.ref.modbus.register_count < 2u) {
                 state.quality = PointQuality::BadConfigError;
                 return false;
             }
-            state.value.i32 = ModbusMaster::regsToI32(regs[0], regs[1]);
+            state.value.i32 = static_cast<int32_t>(apply_numeric_scale(static_cast<float>(ModbusMaster::regsToI32(regs[0], regs[1])), definition));
             break;
         case PointValueType::Float:
-            if (definition.ref.modbus.register_count < 2u) {
-                state.quality = PointQuality::BadConfigError;
-                return false;
+            if (definition.ref.modbus.register_count >= 2u) {
+                state.value.f32 = apply_numeric_scale(ModbusMaster::regsToFloatABCD(regs[0], regs[1]), definition);
+                break;
             }
-            state.value.f32 = ModbusMaster::regsToFloatABCD(regs[0], regs[1]);
+            state.value.f32 = apply_numeric_scale(static_cast<float>(ModbusMaster::regsToI16(regs[0])), definition);
             break;
         case PointValueType::Enum:
             state.value.enum_value = ModbusMaster::regsToI16(regs[0]);

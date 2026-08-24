@@ -12,6 +12,7 @@ Supported commands:
 - `pointStatesReq`
 - `pointUpsert`
 - `pointDelete`
+- `updateProperty` for writable local properties and writable Modbus coil points
 
 The point identity model is hierarchical:
 
@@ -343,6 +344,62 @@ Possible `pointDelete` errors:
 - `missingIdentity`
 - `notFound`
 - `saveFailed`
+
+## updateProperty for point writes
+
+The existing `updateProperty` command can also be used to write some runtime PLC values.
+
+Two write categories are currently supported:
+
+- local NodeNetCore properties such as `instrumentName`, `master`, and `modbus0.*`
+- Modbus coil points addressed by their full point path
+
+For Modbus point writes, the current implementation is intentionally narrow:
+
+- backend must be `Modbus`
+- table must be `Coils`
+- value type must be `Bool`
+- access must be `Write` or `ReadWrite`
+
+That matches Waveshare outputs such as `output1`.
+
+### Example: set Waveshare output1 ON
+
+```json
+{
+  "cmd": "updateProperty",
+  "from": 5,
+  "to": 4,
+  "propertyName": "gb9fao5yk4f.modbus0.waveshare8ch.output1",
+  "value": true
+}
+```
+
+### Example: set Waveshare output1 OFF
+
+```json
+{
+  "cmd": "updateProperty",
+  "from": 5,
+  "to": 4,
+  "propertyName": "gb9fao5yk4f.modbus0.waveshare8ch.output1",
+  "value": false
+}
+```
+
+When the Modbus write succeeds, the point state is updated locally to the commanded boolean value.
+
+### Example: change Modbus0 speed
+
+```json
+{
+  "cmd": "updateProperty",
+  "from": 5,
+  "to": 4,
+  "propertyName": "modbus0.speed",
+  "value": 9600
+}
+```
 
 ## Notes
 

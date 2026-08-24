@@ -38,6 +38,7 @@ public:
                uint8_t retries = kDefaultRetries,
                uint8_t interFrameCharsQ1 = kDefaultInterframeCharsQ1);
 
+    void setBaudrate(uint32_t baudrate);
     void setTimeoutMs(uint32_t timeout_ms);
     void setRetries(uint8_t retries);
     void setInterframeCharsQ1(uint8_t chars_q1);
@@ -117,8 +118,10 @@ private:
     volatile uint32_t* const rx_data_reg_;
 
     uint32_t clock_hz_;
+    uint32_t baudrate_;
     uint32_t timeout_ms_;
     uint8_t retries_;
+    uint8_t interframe_chars_q1_;
 
     Error last_error_;
     uint8_t last_exception_code_;

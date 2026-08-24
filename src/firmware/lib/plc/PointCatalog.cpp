@@ -36,6 +36,8 @@ static void serialize_common(JsonObject obj, const PointDefinition& definition) 
     obj["refreshMs"] = definition.polling.refresh_ms;
     obj["timeoutMs"] = definition.polling.timeout_ms;
     obj["stringCapacity"] = definition.string_capacity;
+    obj["scale"] = definition.scale;
+    obj["unit"] = definition.unit;
 }
 
 static void serialize_backend_ref(JsonObject obj, const PointDefinition& definition) {
@@ -70,6 +72,8 @@ static void deserialize_common(PointDefinition& definition, JsonObjectConst obj)
     definition.polling.refresh_ms = obj["refreshMs"] | 1000u;
     definition.polling.timeout_ms = obj["timeoutMs"] | 3000u;
     definition.string_capacity = obj["stringCapacity"] | 0u;
+    definition.scale = obj["scale"] | 1.0f;
+    copy_string(definition.unit, sizeof(definition.unit), obj["unit"] | "");
     definition.enum_def = nullptr;
 }
 
@@ -106,6 +110,8 @@ static void serialize_persisted_definition(JsonArray entry, const PointDefinitio
     entry.add(definition.polling.refresh_ms);
     entry.add(definition.polling.timeout_ms);
     entry.add(definition.string_capacity);
+    entry.add(definition.scale);
+    entry.add(definition.unit);
 
     switch (definition.backend) {
         case PointBackend::Modbus:
@@ -142,28 +148,37 @@ static bool deserialize_persisted_definition(PointDefinition& definition, JsonAr
     definition.polling.refresh_ms = entry[7] | 1000u;
     definition.polling.timeout_ms = entry[8] | 3000u;
     definition.string_capacity = entry[9] | 0u;
+    size_t backend_index = 10u;
+    if (entry.size() >= 12u && !entry[10].is<const char*>() && entry[11].is<const char*>()) {
+        definition.scale = entry[10] | 1.0f;
+        copy_string(definition.unit, sizeof(definition.unit), entry[11] | "");
+        backend_index = 12u;
+    } else {
+        definition.scale = 1.0f;
+        definition.unit[0] = '\0';
+    }
     definition.enum_def = nullptr;
 
     std::memset(&definition.ref, 0, sizeof(definition.ref));
     switch (definition.backend) {
         case PointBackend::Modbus:
-            if (entry.size() < 16u) {
+            if (entry.size() < (backend_index + 6u)) {
                 return false;
             }
-            definition.ref.modbus.port_index = entry[10] | 0u;
-            definition.ref.modbus.slave_address = entry[11] | 1u;
-            definition.ref.modbus.address = entry[12] | 0u;
-            definition.ref.modbus.register_count = entry[13] | 1u;
-            definition.ref.modbus.table = static_cast<ModbusTable>(entry[14] | static_cast<uint8_t>(ModbusTable::HoldingRegisters));
-            definition.ref.modbus.access = static_cast<ModbusAccess>(entry[15] | static_cast<uint8_t>(ModbusAccess::Read));
+            definition.ref.modbus.port_index = entry[backend_index + 0u] | 0u;
+            definition.ref.modbus.slave_address = entry[backend_index + 1u] | 1u;
+            definition.ref.modbus.address = entry[backend_index + 2u] | 0u;
+            definition.ref.modbus.register_count = entry[backend_index + 3u] | 1u;
+            definition.ref.modbus.table = static_cast<ModbusTable>(entry[backend_index + 4u] | static_cast<uint8_t>(ModbusTable::HoldingRegisters));
+            definition.ref.modbus.access = static_cast<ModbusAccess>(entry[backend_index + 5u] | static_cast<uint8_t>(ModbusAccess::Read));
             break;
         case PointBackend::NodeNet:
-            if (entry.size() < 13u) {
+            if (entry.size() < (backend_index + 3u)) {
                 return false;
             }
-            copy_string(definition.ref.nodenet.remote_device_id, sizeof(definition.ref.nodenet.remote_device_id), entry[10] | "");
-            copy_string(definition.ref.nodenet.remote_feature, sizeof(definition.ref.nodenet.remote_feature), entry[11] | "");
-            copy_string(definition.ref.nodenet.remote_point_id, sizeof(definition.ref.nodenet.remote_point_id), entry[12] | "");
+            copy_string(definition.ref.nodenet.remote_device_id, sizeof(definition.ref.nodenet.remote_device_id), entry[backend_index + 0u] | "");
+            copy_string(definition.ref.nodenet.remote_feature, sizeof(definition.ref.nodenet.remote_feature), entry[backend_index + 1u] | "");
+            copy_string(definition.ref.nodenet.remote_point_id, sizeof(definition.ref.nodenet.remote_point_id), entry[backend_index + 2u] | "");
             break;
         case PointBackend::Local:
         default:

@@ -15,28 +15,38 @@ ModbusMaster::ModbusMaster(uint32_t base_addr, uint32_t clock_hz)
       rx_len_reg_(reinterpret_cast<volatile uint32_t*>(base_addr + REG_RX_LEN)),
       rx_data_reg_(reinterpret_cast<volatile uint32_t*>(base_addr + REG_RX_DATA)),
       clock_hz_(clock_hz),
+            baudrate_(kDefaultBaudrate),
       timeout_ms_(kDefaultTimeoutMs),
       retries_(kDefaultRetries),
+            interframe_chars_q1_(kDefaultInterframeCharsQ1),
       last_error_(Error::None),
       last_exception_code_(0u),
       last_hw_status_(0u) {
 }
 
 void ModbusMaster::begin(uint32_t baudrate, uint32_t timeout_ms, uint8_t retries, uint8_t interFrameCharsQ1) {
+        baudrate_ = (baudrate == 0u) ? 1u : baudrate;
     timeout_ms_ = timeout_ms;
     retries_ = retries;
+        interframe_chars_q1_ = (interFrameCharsQ1 == 0u) ? 1u : interFrameCharsQ1;
 
-    writeReg(uart_div_reg_, computeDivisor(baudrate));
+        writeReg(uart_div_reg_, computeDivisor(baudrate_));
     writeReg(timeout_reg_, computeTimeoutCycles(timeout_ms_));
-    writeReg(interframe_reg_, computeInterframeCycles(baudrate));
+        writeReg(interframe_reg_, computeInterframeCycles(baudrate_));
     writeReg(retry_reg_, retries_);
     writeReg(control_reg_, CTRL_CLEAR_STATUS);
 
-    setInterframeCharsQ1(interFrameCharsQ1);
+        setInterframeCharsQ1(interframe_chars_q1_);
 
     last_error_ = Error::None;
     last_exception_code_ = 0u;
     last_hw_status_ = 0u;
+}
+
+void ModbusMaster::setBaudrate(uint32_t baudrate) {
+    baudrate_ = (baudrate == 0u) ? 1u : baudrate;
+    writeReg(uart_div_reg_, computeDivisor(baudrate_));
+    writeReg(interframe_reg_, computeInterframeCyclesCharsQ1(baudrate_, interframe_chars_q1_));
 }
 
 void ModbusMaster::setTimeoutMs(uint32_t timeout_ms) {
@@ -50,15 +60,8 @@ void ModbusMaster::setRetries(uint8_t retries) {
 }
 
 void ModbusMaster::setInterframeCharsQ1(uint8_t chars_q1) {
-    const uint32_t div = readReg(uart_div_reg_) & 0x000FFFFFu;
-    uint32_t baudrate = 1u;
-    if (div > 0u) {
-        baudrate = (clock_hz_ + (div / 2u)) / div;
-        if (baudrate == 0u) {
-            baudrate = 1u;
-        }
-    }
-    writeReg(interframe_reg_, computeInterframeCyclesCharsQ1(baudrate, chars_q1));
+    interframe_chars_q1_ = (chars_q1 == 0u) ? 1u : chars_q1;
+    writeReg(interframe_reg_, computeInterframeCyclesCharsQ1(baudrate_, interframe_chars_q1_));
 }
 
 bool ModbusMaster::readCoils(uint8_t slave, uint16_t start_addr, uint16_t quantity, bool* out_values) {

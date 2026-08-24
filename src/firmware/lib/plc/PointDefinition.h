@@ -56,6 +56,8 @@ struct PointDefinition {
     PointValueType value_type = PointValueType::Bool;
     PollingSettings polling = {};
     uint16_t string_capacity = 0u;
+    float scale = 1.0f;
+    char unit[10] = {};
     const EnumDefinition* enum_def = nullptr;
     PointBackendRef ref = {};
 };

@@ -118,6 +118,10 @@ static uint8_t response_destination_from_request(const JsonDocument& request) {
     return dest_addr;
 }
 
+static bool json_variant_is_integer(JsonVariantConst value) {
+    return value.is<int>() || value.is<unsigned int>() || value.is<long>() || value.is<unsigned long>();
+}
+
 static uint32_t point_catalog_checksum(const uint8_t* data, size_t len) {
     uint32_t hash = 2166136261u;
     if (data == nullptr) {
@@ -702,6 +706,119 @@ bool NodeNetCore::updateProperty(const JsonDocument& request)
         publishBuiltinPointStates();
         savePreferences();
         return true;
+    } else if (strcmp(propertyName, "modbus0.speed") == 0) {
+        if (!json_variant_is_integer(value)) {
+            return false;
+        }
+
+        const uint32_t speed = value.as<uint32_t>();
+        modbus0Settings.comSettings.baudrate = speed;
+        if (_modbus0 != nullptr) {
+            _modbus0->setBaudrate(speed);
+        }
+        publishBuiltinPointStates();
+        savePreferences();
+        return true;
+    } else if (strcmp(propertyName, "modbus0.timeout") == 0) {
+        if (!json_variant_is_integer(value)) {
+            return false;
+        }
+
+        const uint32_t timeout_ms = value.as<uint32_t>();
+        modbus0Settings.comSettings.timeout_ms = timeout_ms;
+        if (_modbus0 != nullptr) {
+            _modbus0->setTimeoutMs(timeout_ms);
+        }
+        publishBuiltinPointStates();
+        savePreferences();
+        return true;
+    } else if (strcmp(propertyName, "modbus0.retries") == 0) {
+        if (!json_variant_is_integer(value)) {
+            return false;
+        }
+
+        const uint8_t retries = value.as<uint8_t>();
+        modbus0Settings.comSettings.retries = retries;
+        if (_modbus0 != nullptr) {
+            _modbus0->setRetries(retries);
+        }
+        publishBuiltinPointStates();
+        savePreferences();
+        return true;
+    } else if (strcmp(propertyName, "modbus0.interframeCharsQ1") == 0) {
+        if (!json_variant_is_integer(value)) {
+            return false;
+        }
+
+        const uint8_t interframe_chars_q1 = value.as<uint8_t>();
+        modbus0Settings.comSettings.interframe_chars_q1 = interframe_chars_q1;
+        if (_modbus0 != nullptr) {
+            _modbus0->setInterframeCharsQ1(interframe_chars_q1);
+        }
+        publishBuiltinPointStates();
+        savePreferences();
+        return true;
+    }
+
+    const PointDefinition* definitions = _pointCatalog.entries();
+    for (size_t index = 0; index < _pointCatalog.size(); ++index) {
+        char point_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + sizeof(PointIdentity::point_id) + 3u] = {};
+        build_point_path(definitions[index], point_path, sizeof(point_path));
+        if (!strings_equal(propertyName, point_path)) {
+            continue;
+        }
+
+        const PointDefinition& definition = definitions[index];
+        if (definition.backend != PointBackend::Modbus || _modbus0 == nullptr) {
+            return false;
+        }
+        if (definition.ref.modbus.port_index != kModbus0PortIndex) {
+            return false;
+        }
+        if (definition.ref.modbus.access != ModbusAccess::Write &&
+            definition.ref.modbus.access != ModbusAccess::ReadWrite) {
+            return false;
+        }
+        if (definition.ref.modbus.table != ModbusTable::Coils || definition.value_type != PointValueType::Bool) {
+            return false;
+        }
+        if (!value.is<bool>()) {
+            return false;
+        }
+
+        const bool next_value = value.as<bool>();
+        const bool ok = _modbus0->writeSingleCoil(definition.ref.modbus.slave_address,
+                                                  definition.ref.modbus.address,
+                                                  next_value);
+
+        PointCommandState command_state = {};
+        command_state.last_commanded_value.b = next_value;
+        command_state.last_command_ts_ms = millis();
+        command_state.pending = false;
+
+        PointState next_state = {};
+        const PointState* current_state = _pointCatalog.findState(definition.id);
+        if (current_state != nullptr) {
+            next_state = *current_state;
+        }
+
+        if (ok) {
+            command_state.command_quality = PointCommandQuality::Acked;
+            command_state.last_ack_ts_ms = command_state.last_command_ts_ms;
+            next_state.value.b = next_value;
+            next_state.quality = PointQuality::Good;
+            next_state.last_update_ms = command_state.last_command_ts_ms;
+            next_state.last_good_update_ms = command_state.last_command_ts_ms;
+            (void)updatePointState(definition.id, next_state);
+        } else {
+            command_state.command_quality = PointCommandQuality::ProtocolError;
+            next_state.quality = PointQuality::BadProtocolError;
+            next_state.last_update_ms = command_state.last_command_ts_ms;
+            (void)updatePointState(definition.id, next_state);
+        }
+
+        (void)updatePointCommandState(definition.id, command_state);
+        return ok;
     }
 
     return false;
@@ -1388,6 +1505,48 @@ void NodeNetCore::registerBuiltinPointDefinitions()
     definition.polling.timeout_ms = 0u;
     (void)upsertPointDefinition(definition);
 
+    definition = {};
+    make_point_identity(definition.id, deviceId, "modbus0", "speed");
+    copy_text(definition.display_name, sizeof(definition.display_name), "Modbus0 Speed");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::InOut;
+    definition.value_type = PointValueType::Uint32;
+    copy_text(definition.unit, sizeof(definition.unit), "baud");
+    definition.polling.refresh_ms = 0u;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "modbus0", "timeout");
+    copy_text(definition.display_name, sizeof(definition.display_name), "Modbus0 Timeout");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::InOut;
+    definition.value_type = PointValueType::Uint32;
+    copy_text(definition.unit, sizeof(definition.unit), "ms");
+    definition.polling.refresh_ms = 0u;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "modbus0", "retries");
+    copy_text(definition.display_name, sizeof(definition.display_name), "Modbus0 Retries");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::InOut;
+    definition.value_type = PointValueType::Uint16;
+    definition.polling.refresh_ms = 0u;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "modbus0", "interframeCharsQ1");
+    copy_text(definition.display_name, sizeof(definition.display_name), "Modbus0 Interframe Chars Q1");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::InOut;
+    definition.value_type = PointValueType::Uint16;
+    definition.polling.refresh_ms = 0u;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
     for (uint8_t channel = 0u; channel < 8u; ++channel) {
         char point_id[32] = {};
         char display_name[32] = {};
@@ -1441,7 +1600,9 @@ void NodeNetCore::registerBuiltinPointDefinitions()
         copy_text(definition.display_name, sizeof(definition.display_name), display_name);
         definition.backend = PointBackend::Modbus;
         definition.direction = PointDirection::Input;
-        definition.value_type = PointValueType::Int16;
+        definition.value_type = PointValueType::Float;
+        definition.scale = 0.0001f;
+        copy_text(definition.unit, sizeof(definition.unit), "V");
         definition.polling.refresh_ms = 1000u;
         definition.polling.timeout_ms = 3000u;
         definition.ref.modbus.port_index = kModbus0PortIndex;
@@ -1477,6 +1638,38 @@ void NodeNetCore::publishBuiltinPointStates()
     make_point_identity(id, deviceId, "modbus0", "enabled");
     state = {};
     state.value.b = features.hasModbus0;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = millis();
+    state.last_good_update_ms = state.last_update_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "modbus0", "speed");
+    state = {};
+    state.value.u32 = modbus0Settings.comSettings.baudrate;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = millis();
+    state.last_good_update_ms = state.last_update_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "modbus0", "timeout");
+    state = {};
+    state.value.u32 = modbus0Settings.comSettings.timeout_ms;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = millis();
+    state.last_good_update_ms = state.last_update_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "modbus0", "retries");
+    state = {};
+    state.value.u16 = modbus0Settings.comSettings.retries;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = millis();
+    state.last_good_update_ms = state.last_update_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "modbus0", "interframeCharsQ1");
+    state = {};
+    state.value.u16 = modbus0Settings.comSettings.interframe_chars_q1;
     state.quality = PointQuality::Good;
     state.last_update_ms = millis();
     state.last_good_update_ms = state.last_update_ms;
