@@ -46,6 +46,20 @@ enum PlcRuntimeLastWriterV1 : uint32_t {
     kPlcRuntimeWriterNodeNet = 4u,
 };
 
+enum PlcRuntimeLinkAccessV1 : uint8_t {
+    kPlcRuntimeLinkRead = 0u,
+    kPlcRuntimeLinkWrite = 1u,
+    kPlcRuntimeLinkReadWrite = 2u,
+};
+
+enum PlcRuntimeLinkStatusV1 : uint8_t {
+    kPlcRuntimeLinkResolved = 0u,
+    kPlcRuntimeLinkNotFound = 1u,
+    kPlcRuntimeLinkUnsupportedPointType = 2u,
+    kPlcRuntimeLinkTypeMismatch = 3u,
+    kPlcRuntimeLinkAccessDenied = 4u,
+};
+
 #pragma pack(push, 1)
 struct PlcPointDescriptorV1 {
     uint16_t point_index;
@@ -94,6 +108,19 @@ public:
         bool found;
         bool published;
         uint16_t runtime_point_index;
+    };
+
+    struct LinkRequest {
+        PointIdentity point_id;
+        PointValueType expected_type;
+        PlcRuntimeLinkAccessV1 access;
+    };
+
+    struct LinkResult {
+        PlcRuntimeLinkStatusV1 status;
+        uint16_t runtime_point_index;
+        uint8_t runtime_value_type;
+        uint8_t descriptor_flags;
     };
 
     PlcRuntimePublisherV1() = default;
@@ -162,6 +189,37 @@ public:
 
         const uint16_t runtime_index = runtimeIndexForCatalogIndex(catalog_index);
         return {true, runtime_index != kInvalidPointIndex, runtime_index};
+    }
+
+    LinkResult resolveLinkRequest(const PointCatalog& catalog, const LinkRequest& request) const
+    {
+        const size_t catalog_index = catalog.findIndex(request.point_id);
+        if (catalog_index >= catalog.size()) {
+            return {kPlcRuntimeLinkNotFound, kInvalidPointIndex, kPlcRuntimeTypeInvalid, 0u};
+        }
+
+        const PointDefinition& definition = catalog.entries()[catalog_index];
+        const uint8_t actual_type = mapValueType(definition.value_type);
+        if (actual_type == kPlcRuntimeTypeInvalid) {
+            return {kPlcRuntimeLinkUnsupportedPointType, kInvalidPointIndex, kPlcRuntimeTypeInvalid, 0u};
+        }
+
+        const uint8_t expected_type = mapValueType(request.expected_type);
+        if (expected_type == kPlcRuntimeTypeInvalid || expected_type != actual_type) {
+            return {kPlcRuntimeLinkTypeMismatch, kInvalidPointIndex, actual_type, mapFlags(definition)};
+        }
+
+        const uint8_t flags = mapFlags(definition);
+        if (!accessAllowed(flags, request.access)) {
+            return {kPlcRuntimeLinkAccessDenied, kInvalidPointIndex, actual_type, flags};
+        }
+
+        const uint16_t runtime_index = runtimeIndexForCatalogIndex(catalog_index);
+        if (runtime_index == kInvalidPointIndex) {
+            return {kPlcRuntimeLinkUnsupportedPointType, kInvalidPointIndex, actual_type, flags};
+        }
+
+        return {kPlcRuntimeLinkResolved, runtime_index, actual_type, flags};
     }
 
     PlcRuntimeHeaderV1 headerSnapshot() const
@@ -285,6 +343,23 @@ private:
     static bool isSupported(PointValueType value_type)
     {
         return mapValueType(value_type) != kPlcRuntimeTypeInvalid;
+    }
+
+    static bool accessAllowed(uint8_t descriptor_flags, PlcRuntimeLinkAccessV1 access)
+    {
+        const bool readable = (descriptor_flags & kPlcRuntimeFlagReadable) != 0u;
+        const bool writable = (descriptor_flags & kPlcRuntimeFlagWritable) != 0u;
+
+        switch (access) {
+        case kPlcRuntimeLinkRead:
+            return readable;
+        case kPlcRuntimeLinkWrite:
+            return writable;
+        case kPlcRuntimeLinkReadWrite:
+            return readable && writable;
+        default:
+            return false;
+        }
     }
 
     static uint8_t mapFlags(const PointDefinition& definition)
