@@ -422,6 +422,31 @@ Implementation notes:
 - Large PLC artifacts should prefer the raw PLC package slot over FlashDB.
 - The ASCII `deviceId` is derived from the 64-bit factory UID and contains only `a-z`, `A-Z`, and `0-9`.
 
+Host-side PLC package flow:
+
+```bash
+python src/firmware/tools/pack_plc_linked_package.py \
+    --input linked_code.bin \
+    --output src/firmware/build/plc_linked_package.img \
+    --symbol-count 12 \
+    --relocation-count 12 \
+    --runtime-header-addr 0x20100000 \
+    --store-epoch 1
+
+python src/firmware/tools/verify_plc_linked_package.py \
+    --input src/firmware/build/plc_linked_package.img \
+    --expect-runtime-header-addr 0x20100000 \
+    --expect-store-epoch 1
+
+make plc-package-check PLC_LINKED_CODE_INPUT=linked_code.bin \
+    PLC_PACKAGE_SYMBOL_COUNT=12 PLC_PACKAGE_RELOCATION_COUNT=12 \
+    PLC_PACKAGE_STORE_EPOCH=1
+
+make flash-plc-package PLC_LINKED_CODE_INPUT=linked_code.bin \
+    PLC_PACKAGE_SYMBOL_COUNT=12 PLC_PACKAGE_RELOCATION_COUNT=12 \
+    PLC_PACKAGE_STORE_EPOCH=1
+```
+
 Detailed register-level documentation is available in [../wbDevices/README_FLASH.md](../wbDevices/README_FLASH.md).
 
 ---
