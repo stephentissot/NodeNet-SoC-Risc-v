@@ -216,7 +216,7 @@ int main(void)
     oled_write("v" FIRMWARE_VERSION);
 
     // NodeNet definition and initialization
-    NodeNet myNodeNet(
+    static NodeNet myNodeNet(
         NODENET0_BASE,
         0x04,
         1000000,
@@ -225,7 +225,7 @@ int main(void)
         nullptr);
 
 
-    NodeNetCore nodeNetCore(&myNodeNet);
+    static NodeNetCore nodeNetCore(&myNodeNet);
     nodeNetCore.begin();
     // oled_write("[NN] ctor ok");
     // const bool nodenet_ok = myNodeNet.test(oled_boot_status);

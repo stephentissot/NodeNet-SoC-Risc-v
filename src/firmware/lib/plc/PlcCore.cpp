@@ -9,41 +9,6 @@ float apply_numeric_scale(float value, const PointDefinition& definition) {
     return value * definition.scale;
 }
 
-const char* modbus_error_to_string(ModbusMaster::Error error) {
-    switch (error) {
-        case ModbusMaster::Error::None:
-            return "none";
-        case ModbusMaster::Error::Busy:
-            return "busy";
-        case ModbusMaster::Error::InvalidArg:
-            return "invalidArg";
-        case ModbusMaster::Error::HwTimeout:
-            return "hwTimeout";
-        case ModbusMaster::Error::HwCrc:
-            return "hwCrc";
-        case ModbusMaster::Error::HwFrame:
-            return "hwFrame";
-        case ModbusMaster::Error::HwException:
-            return "hwException";
-        case ModbusMaster::Error::HwOverflow:
-            return "hwOverflow";
-        case ModbusMaster::Error::HwUartFrame:
-            return "hwUartFrame";
-        case ModbusMaster::Error::HwUnknown:
-            return "hwUnknown";
-        case ModbusMaster::Error::ResponseMismatch:
-            return "responseMismatch";
-        case ModbusMaster::Error::ResponseLength:
-            return "responseLength";
-        case ModbusMaster::Error::ResponseFormat:
-            return "responseFormat";
-        case ModbusMaster::Error::DriverTimeout:
-            return "driverTimeout";
-        default:
-            return "unknown";
-    }
-}
-
 }
 
 void PlcCore::begin(PointCatalog* point_catalog, ModbusMaster* modbus0, NodeLogger* logger) {
@@ -92,26 +57,6 @@ void PlcCore::pollNextPoint() {
         const bool ok = pollModbusPoint(definition, next_state, now_ms);
         if (ok) {
             next_state.last_good_update_ms = now_ms;
-            if (logger_ != nullptr && stored_state->quality != PointQuality::Good) {
-                logger_->Info("Modbus poll recovered %s/%s/%s slave=%u addr=%u table=%u",
-                              definition.id.device_id,
-                              definition.id.feature,
-                              definition.id.point_id,
-                              static_cast<unsigned>(definition.ref.modbus.slave_address),
-                              static_cast<unsigned>(definition.ref.modbus.address),
-                              static_cast<unsigned>(definition.ref.modbus.table));
-            }
-        } else if (logger_ != nullptr && stored_state->quality != next_state.quality) {
-            logger_->Warning("Modbus poll failed %s/%s/%s slave=%u addr=%u table=%u err=%s hw=0x%08lx exc=%u",
-                             definition.id.device_id,
-                             definition.id.feature,
-                             definition.id.point_id,
-                             static_cast<unsigned>(definition.ref.modbus.slave_address),
-                             static_cast<unsigned>(definition.ref.modbus.address),
-                             static_cast<unsigned>(definition.ref.modbus.table),
-                             modbus_error_to_string(modbus0_->lastError()),
-                             static_cast<unsigned long>(modbus0_->lastHwStatus()),
-                             static_cast<unsigned>(modbus0_->lastExceptionCode()));
         }
         next_state.last_update_ms = now_ms;
         (void)point_catalog_->updateState(definition.id, next_state);
