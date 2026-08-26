@@ -871,13 +871,25 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
 
     const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
         static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(0u)));
+    const PlcSlotLayoutV1 layout = PlcSlotLoaderV1::slotLayout(0u);
+    const auto* linked_header = reinterpret_cast<const PlcLinkedImageHeaderV1*>(
+        static_cast<uintptr_t>(layout.linked_image_header_addr));
     const uint8_t* linked_code = reinterpret_cast<const uint8_t*>(
-        static_cast<uintptr_t>(PlcSlotLoaderV1::slotBytecodeAddress(0u)));
+        static_cast<uintptr_t>(layout.linked_code_addr));
 
     if (control_block->magic != kPlcProgramControlBlockMagicV1 ||
         control_block->slot_id != 0u ||
         control_block->bytecode_size != code_size ||
-        control_block->bytecode_base != PlcSlotLoaderV1::slotBytecodeAddress(0u)) {
+        control_block->bytecode_base != layout.linked_code_addr ||
+        control_block->stack_base != layout.stack_base ||
+        control_block->timer_base != layout.timer_base) {
+        return result;
+    }
+
+    if (linked_header->magic != kPlcLinkedImageMagicV1 ||
+        linked_header->slot_id != 0u ||
+        linked_header->code_size != code_size ||
+        linked_header->runtime_header_addr != kPlcRuntimeHeaderAddr) {
         return result;
     }
 
