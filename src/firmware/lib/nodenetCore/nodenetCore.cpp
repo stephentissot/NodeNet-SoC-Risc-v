@@ -439,6 +439,11 @@ bool NodeNetCore::updatePointCommandState(const PointIdentity& id, const PointCo
     return _pointCatalog.updateCommandState(id, state);
 }
 
+void NodeNetCore::attachPlcRuntimePublisher(const PlcRuntimePublisherV1* publisher)
+{
+    _plcCore.attachRuntimePublisher(publisher);
+}
+
 
 void NodeNetCore::nodenet_broadcast_callback_trampoline(const NodeNetMessage& msg)
 {

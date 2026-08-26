@@ -29,7 +29,13 @@ static constexpr uint8_t MODBUS1_SLAVE_ADDR_DEFAULT = 0x01u;
 static u8g2_t g_oled;
 static bool g_oled_ready = false;
 static constexpr uint8_t kOledConsoleLines = 5;
-static constexpr uint8_t kOledConsoleCols = 21;
+static constexpr uint8_t kOledConsoleCols = 18;
+static constexpr uint8_t kOledSlotIconCount = 4;
+static constexpr uint8_t kOledSlotIconWidth = 18;
+static constexpr uint8_t kOledSlotIconHeight = 12;
+static constexpr uint8_t kOledSlotIconX = 108;
+static constexpr uint8_t kOledSlotIconY = 0;
+static constexpr uint32_t kOledSlotRefreshMs = 250u;
 static char g_oled_console[kOledConsoleLines][kOledConsoleCols + 1] = {};
 static uint8_t g_oled_console_count = 0;
 static NodeNet* g_nodenet = nullptr;
@@ -44,6 +50,34 @@ static volatile uint32_t g_nodenet_broadcast_count = 0u;
 static volatile uint32_t g_nodenet_message_count = 0u;
 static uint8_t g_nodenet_broadcast_data[kOledConsoleCols + 1] = {};
 static uint8_t g_nodenet_message_data[kOledConsoleCols + 1] = {};
+
+enum class PlcSlotIconSource : uint8_t {
+    None = 0,
+    Flash,
+    Local,
+};
+
+enum class PlcSlotIconState : uint8_t {
+    Hidden = 0,
+    Empty,
+    Loaded,
+    Running,
+    Faulted,
+};
+
+struct PlcSlotIconStatus {
+    bool visible = false;
+    uint8_t slot_id = 0u;
+    PlcSlotIconSource source = PlcSlotIconSource::None;
+    PlcSlotIconState state = PlcSlotIconState::Hidden;
+    uint32_t control_status = 0u;
+    uint32_t cycle_counter = 0u;
+    uint32_t fault_code = 0u;
+    bool activity_pulse = false;
+};
+
+static PlcSlotIconStatus g_oled_slot_icons[kOledSlotIconCount] = {};
+static uint32_t g_oled_slot_refresh_deadline_ms = 0u;
 
 enum class SdramFwTestStage : uint8_t {
     Idle = 0,
@@ -88,6 +122,7 @@ static constexpr uint32_t kSdramRefreshMs = 250u;
 static constexpr uint32_t kSdramOneShotTimeoutMs = 1000u;
 static constexpr bool kEnableSdramBringupTest = false;
 static constexpr bool kEnablePlcLinkerSelfTest = true;
+static constexpr bool kEnablePlcFlashRoundTripSelfTest = false;
 static constexpr uint32_t FLASH0_BASE = 0x10007000u;
 static constexpr uint32_t kSdramFailTimeout = 1u;
 static constexpr uint32_t kSdramFailAck = 2u;
@@ -95,6 +130,174 @@ static constexpr uint32_t kSdramFailMismatch = 3u;
 static constexpr uint32_t kSdramFailCpuMismatch = 4u;
 static constexpr uint32_t kSdramFailGrantM0 = 5u;
 static constexpr uint32_t kSdramFailGrantM1 = 6u;
+
+static char oled_slot_hex_digit(uint8_t value)
+{
+    static const char kHexDigits[] = "0123456789ABCDEF";
+    return kHexDigits[value & 0x0Fu];
+}
+
+static void oled_draw_plc_slot_icons()
+{
+    if (!g_oled_ready) {
+        return;
+    }
+
+    u8g2_SetFont(&g_oled, u8g2_font_6x12_tf);
+    for (uint8_t display_index = 0; display_index < kOledSlotIconCount; ++display_index) {
+        const PlcSlotIconStatus& icon = g_oled_slot_icons[display_index];
+        const uint8_t x = kOledSlotIconX;
+        const uint8_t y = static_cast<uint8_t>(kOledSlotIconY + display_index * (kOledSlotIconHeight + 1u));
+
+        u8g2_SetDrawColor(&g_oled, 0);
+        u8g2_DrawBox(&g_oled, x, y, kOledSlotIconWidth, kOledSlotIconHeight);
+        u8g2_SetDrawColor(&g_oled, 1);
+
+        if (!icon.visible || icon.state == PlcSlotIconState::Hidden) {
+            continue;
+        }
+
+        u8g2_DrawFrame(&g_oled, x, y, kOledSlotIconWidth, kOledSlotIconHeight);
+
+        char slot_label[2] = {oled_slot_hex_digit(icon.slot_id), '\0'};
+        u8g2_DrawStr(&g_oled, static_cast<int16_t>(x + 2u), static_cast<int16_t>(y + 10u), slot_label);
+
+        switch (icon.source) {
+        case PlcSlotIconSource::Flash:
+            u8g2_DrawBox(&g_oled, static_cast<int16_t>(x + 12u), static_cast<int16_t>(y + 2u), 4u, 4u);
+            break;
+        case PlcSlotIconSource::Local:
+            u8g2_DrawFrame(&g_oled, static_cast<int16_t>(x + 12u), static_cast<int16_t>(y + 2u), 4u, 4u);
+            break;
+        case PlcSlotIconSource::None:
+        default:
+            u8g2_DrawPixel(&g_oled, static_cast<int16_t>(x + 14u), static_cast<int16_t>(y + 4u));
+            break;
+        }
+
+        switch (icon.state) {
+        case PlcSlotIconState::Faulted:
+            u8g2_DrawLine(&g_oled, static_cast<int16_t>(x + 11u), static_cast<int16_t>(y + 8u),
+                          static_cast<int16_t>(x + 15u), static_cast<int16_t>(y + 10u));
+            u8g2_DrawLine(&g_oled, static_cast<int16_t>(x + 15u), static_cast<int16_t>(y + 8u),
+                          static_cast<int16_t>(x + 11u), static_cast<int16_t>(y + 10u));
+            break;
+        case PlcSlotIconState::Running:
+            if (icon.activity_pulse) {
+                u8g2_DrawDisc(&g_oled, static_cast<int16_t>(x + 13u), static_cast<int16_t>(y + 9u), 2u, U8G2_DRAW_ALL);
+            } else {
+                u8g2_DrawCircle(&g_oled, static_cast<int16_t>(x + 13u), static_cast<int16_t>(y + 9u), 2u, U8G2_DRAW_ALL);
+            }
+            break;
+        case PlcSlotIconState::Loaded:
+            u8g2_DrawBox(&g_oled, static_cast<int16_t>(x + 11u), static_cast<int16_t>(y + 8u), 5u, 2u);
+            break;
+        case PlcSlotIconState::Empty:
+            u8g2_DrawLine(&g_oled, static_cast<int16_t>(x + 11u), static_cast<int16_t>(y + 9u),
+                          static_cast<int16_t>(x + 15u), static_cast<int16_t>(y + 9u));
+            break;
+        case PlcSlotIconState::Hidden:
+        default:
+            break;
+        }
+    }
+    u8g2_SetDrawColor(&g_oled, 1);
+}
+
+static void oled_send_buffer_with_plc_icons()
+{
+    oled_draw_plc_slot_icons();
+    u8g2_SendBuffer(&g_oled);
+}
+
+static void oled_configure_plc_slot_icon(uint8_t display_index, uint8_t slot_id, PlcSlotIconSource source)
+{
+    if (display_index >= kOledSlotIconCount) {
+        return;
+    }
+
+    PlcSlotIconStatus& icon = g_oled_slot_icons[display_index];
+    icon.visible = true;
+    icon.slot_id = slot_id;
+    icon.source = source;
+    icon.state = PlcSlotIconState::Empty;
+    icon.control_status = 0u;
+    icon.cycle_counter = 0u;
+    icon.fault_code = 0u;
+    icon.activity_pulse = false;
+}
+
+static bool oled_refresh_plc_slot_icon(uint8_t display_index)
+{
+    if (display_index >= kOledSlotIconCount) {
+        return false;
+    }
+
+    PlcSlotIconStatus& icon = g_oled_slot_icons[display_index];
+    if (!icon.visible) {
+        return false;
+    }
+
+    PlcSlotIconStatus next = icon;
+    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(icon.slot_id)));
+
+    if (control_block->magic != kPlcProgramControlBlockMagicV1 ||
+        control_block->slot_id != icon.slot_id ||
+        control_block->bytecode_size == 0u ||
+        control_block->bytecode_base == 0u) {
+        next.state = PlcSlotIconState::Empty;
+        next.control_status = 0u;
+        next.cycle_counter = 0u;
+        next.fault_code = 0u;
+        next.activity_pulse = false;
+    } else {
+        const uint32_t old_cycle_counter = icon.cycle_counter;
+        next.control_status = control_block->status;
+        next.cycle_counter = control_block->cycle_counter;
+        next.fault_code = control_block->fault_code;
+        if ((control_block->status & 0x80000000u) != 0u) {
+            next.state = PlcSlotIconState::Faulted;
+            next.activity_pulse = false;
+        } else if (control_block->status == 2u) {
+            next.state = PlcSlotIconState::Running;
+            if (control_block->cycle_counter != old_cycle_counter) {
+                next.activity_pulse = !icon.activity_pulse;
+            }
+        } else {
+            next.state = PlcSlotIconState::Loaded;
+            next.activity_pulse = false;
+        }
+    }
+
+    const bool changed = next.source != icon.source ||
+                         next.state != icon.state ||
+                         next.control_status != icon.control_status ||
+                         next.cycle_counter != icon.cycle_counter ||
+                         next.fault_code != icon.fault_code ||
+                         next.activity_pulse != icon.activity_pulse;
+    icon = next;
+    return changed;
+}
+
+static void oled_refresh_plc_slot_icons_if_due(uint32_t now_ms)
+{
+    if (!g_oled_ready || (int32_t)(now_ms - g_oled_slot_refresh_deadline_ms) < 0) {
+        return;
+    }
+
+    bool changed = false;
+    for (uint8_t display_index = 0; display_index < kOledSlotIconCount; ++display_index) {
+        if (oled_refresh_plc_slot_icon(display_index)) {
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        oled_send_buffer_with_plc_icons();
+    }
+    g_oled_slot_refresh_deadline_ms = now_ms + kOledSlotRefreshMs;
+}
 
 static bool oled_init(uint8_t addr7 = 0x3C)
 {
@@ -139,7 +342,7 @@ static void oled_write(const char* text)
     for (uint8_t row = 0; row < g_oled_console_count; ++row) {
         u8g2_DrawStr(&g_oled, 2, 10 + row * 13, g_oled_console[row]);
     }
-    u8g2_SendBuffer(&g_oled);
+    oled_send_buffer_with_plc_icons();
 
 }
 
@@ -188,7 +391,7 @@ static void oled_draw_lines(const char* line0,
     for (uint8_t row = 0; row < kOledConsoleLines; ++row) {
         u8g2_DrawStr(&g_oled, 2, 10 + row * 13, lines[row]);
     }
-    u8g2_SendBuffer(&g_oled);
+    oled_send_buffer_with_plc_icons();
 }
 
 static void hex32_to_str(uint32_t value, char* out)
@@ -688,6 +891,27 @@ struct PlcLoaderSelfTestResult {
     PlcSlotLoadResultV1 flash_load_result;
 };
 
+struct PlcMirrorProgramLoadResult {
+    bool load_ok;
+    uint8_t channel;
+    PlcSlotLoadResultV1 load_result;
+};
+
+enum class PlcSlot0BootSource : uint8_t {
+    None = 0,
+    FlashPackage,
+    HardcodedMirror,
+};
+
+struct PlcSlot0BootResult {
+    bool load_ok;
+    bool flash_candidate_valid;
+    uint8_t channel;
+    PlcSlot0BootSource source;
+    PlcSlotLoadResultV1 flash_load_result;
+    PlcSlotLoadResultV1 fallback_load_result;
+};
+
 static bool plc_flash_erase_range(Flash& flash, uint32_t flash_offset, uint32_t size)
 {
     if ((flash_offset % Flash::kSectorSize) != 0u || (size % Flash::kSectorSize) != 0u) {
@@ -807,6 +1031,145 @@ static bool plc_verify_loaded_slot(uint16_t slot_id,
     return true;
 }
 
+static PlcMirrorProgramLoadResult plc_load_hardcoded_mirror_program(const NodeNetCore& node_core,
+                                                                    const PointCatalog& catalog,
+                                                                    const PlcRuntimePublisherV1& publisher,
+                                                                    uint8_t channel)
+{
+    PlcMirrorProgramLoadResult result = {};
+    result.load_ok = false;
+    result.channel = channel;
+
+    if (channel == 0u || channel > 8u) {
+        result.load_result.status = kPlcSlotLoadInvalidArgument;
+        return result;
+    }
+
+    char input_point_id[16] = {};
+    char output_point_id[16] = {};
+    (void)snprintf(input_point_id, sizeof(input_point_id), "input%u", static_cast<unsigned>(channel));
+    (void)snprintf(output_point_id, sizeof(output_point_id), "output%u", static_cast<unsigned>(channel));
+
+    PlcObjectSymbolRecordV1 symbols[2] = {};
+    std::strncpy(symbols[0].point_id.device_id, node_core.deviceId, sizeof(symbols[0].point_id.device_id) - 1u);
+    std::strncpy(symbols[0].point_id.feature, "modbus0.waveshare8ch", sizeof(symbols[0].point_id.feature) - 1u);
+    std::strncpy(symbols[0].point_id.point_id, input_point_id, sizeof(symbols[0].point_id.point_id) - 1u);
+    symbols[0].expected_type = static_cast<uint8_t>(PointValueType::Bool);
+    symbols[0].access = static_cast<uint8_t>(kPlcRuntimeLinkRead);
+
+    std::strncpy(symbols[1].point_id.device_id, node_core.deviceId, sizeof(symbols[1].point_id.device_id) - 1u);
+    std::strncpy(symbols[1].point_id.feature, "modbus0.waveshare8ch", sizeof(symbols[1].point_id.feature) - 1u);
+    std::strncpy(symbols[1].point_id.point_id, output_point_id, sizeof(symbols[1].point_id.point_id) - 1u);
+    symbols[1].expected_type = static_cast<uint8_t>(PointValueType::Bool);
+    symbols[1].access = static_cast<uint8_t>(kPlcRuntimeLinkWrite);
+
+    PlcObjectRelocationRecordV1 relocations[2] = {};
+    relocations[0].code_offset = 1u;
+    relocations[0].symbol_index = 0u;
+    relocations[0].relocation_kind = kPlcRelocationPointIndexU16Le;
+    relocations[1].code_offset = 4u;
+    relocations[1].symbol_index = 1u;
+    relocations[1].relocation_kind = kPlcRelocationPointIndexU16Le;
+
+    uint8_t object_code[] = {
+        0x10u, 0x00u, 0x00u,
+        0x11u, 0x00u, 0x00u,
+        0x00u,
+    };
+
+    PlcObjectImageV1 object_image = {};
+    object_image.code_bytes = object_code;
+    object_image.code_size = static_cast<uint32_t>(sizeof(object_code));
+    object_image.entry_offset = 0u;
+    object_image.symbols = symbols;
+    object_image.symbol_count = 2u;
+    object_image.relocations = relocations;
+    object_image.relocation_count = 2u;
+
+    result.load_result = PlcSlotLoaderV1::loadParsedObjectIntoSlot(publisher,
+                                                                   catalog,
+                                                                   0u,
+                                                                   object_image,
+                                                                   16u,
+                                                                   5000u);
+    result.load_ok = result.load_result.status == kPlcSlotLoadOk;
+    return result;
+}
+
+static bool plc_slot_bytecode_supported_by_firmware_vm(uint16_t slot_id)
+{
+    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+    if (control_block->magic != kPlcProgramControlBlockMagicV1 ||
+        control_block->slot_id != slot_id ||
+        control_block->bytecode_size == 0u ||
+        control_block->bytecode_base == 0u) {
+        return false;
+    }
+
+    const uint8_t* code = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(control_block->bytecode_base));
+    uint32_t pc = 0u;
+    while (pc < control_block->bytecode_size) {
+        const uint8_t opcode = code[pc++];
+        switch (opcode) {
+        case 0x00u:
+            return pc == control_block->bytecode_size;
+
+        case 0x10u:
+        case 0x11u:
+            if ((pc + 1u) >= control_block->bytecode_size) {
+                return false;
+            }
+            pc += 2u;
+            break;
+
+        default:
+            return false;
+        }
+    }
+
+    return false;
+}
+
+static PlcSlot0BootResult plc_boot_slot0_program(const NodeNetCore& node_core,
+                                                 const PointCatalog& catalog,
+                                                 const PlcRuntimePublisherV1& publisher,
+                                                 Flash& flash,
+                                                 uint8_t fallback_channel)
+{
+    PlcSlot0BootResult result = {};
+    result.load_ok = false;
+    result.flash_candidate_valid = false;
+    result.channel = fallback_channel;
+    result.source = PlcSlot0BootSource::None;
+    result.flash_load_result.status = kPlcSlotLoadInvalidArgument;
+    result.fallback_load_result.status = kPlcSlotLoadInvalidArgument;
+
+    result.flash_load_result = PlcSlotLoaderV1::loadLinkedProgramPackageFromFlash(publisher,
+                                                                                   flash,
+                                                                                   0u,
+                                                                                   Flash::kPlcPackageSlotBase,
+                                                                                   Flash::kPlcPackageSlotSize);
+    if (result.flash_load_result.status == kPlcSlotLoadOk &&
+        plc_slot_bytecode_supported_by_firmware_vm(0u)) {
+        result.load_ok = true;
+        result.flash_candidate_valid = true;
+        result.source = PlcSlot0BootSource::FlashPackage;
+        return result;
+    }
+
+    const PlcMirrorProgramLoadResult fallback = plc_load_hardcoded_mirror_program(node_core,
+                                                                                   catalog,
+                                                                                   publisher,
+                                                                                   fallback_channel);
+    result.fallback_load_result = fallback.load_result;
+    result.load_ok = fallback.load_ok;
+    if (fallback.load_ok) {
+        result.source = PlcSlot0BootSource::HardcodedMirror;
+    }
+    return result;
+}
+
 static PlcRuntimeLinkAccessV1 plc_link_access_for_definition(const PointDefinition& definition)
 {
     switch (definition.direction) {
@@ -912,13 +1275,14 @@ static PlcLinkerSelfTestResult plc_run_linker_self_test(const PointCatalog& cata
 }
 
 static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& catalog,
-                                                        const PlcRuntimePublisherV1& publisher)
+                                                        const PlcRuntimePublisherV1& publisher,
+                                                        bool include_flash_roundtrip)
 {
     PlcLoaderSelfTestResult result = {};
     result.parse_ok = false;
     result.load_ok = false;
     result.package_ok = false;
-    result.flash_ok = false;
+    result.flash_ok = !include_flash_roundtrip;
 
     const PointDefinition* definitions = catalog.entries();
     constexpr uint16_t kMaxSampleSymbols = 3u;
@@ -987,7 +1351,7 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
 
     result.load_result = PlcSlotLoaderV1::loadObjectFileIntoSlot(publisher,
                                                                  catalog,
-                                                                 0u,
+                                                                 1u,
                                                                  object_file,
                                                                  object_size,
                                                                  200u,
@@ -996,7 +1360,7 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
         return result;
     }
 
-    if (!plc_verify_loaded_slot(0u,
+    if (!plc_verify_loaded_slot(1u,
                                 code_size,
                                 sample_count,
                                 expected_indices,
@@ -1050,44 +1414,10 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
     std::memcpy(package_bytes + sizeof(package_header), linked_code, code_size);
 
     result.package_load_result = PlcSlotLoaderV1::loadLinkedProgramPackageIntoSlot(publisher,
-                                                                                    1u,
+                                                                                    2u,
                                                                                     package_bytes,
                                                                                     sizeof(package_header) + code_size);
     if (result.package_load_result.status != kPlcSlotLoadOk) {
-        return result;
-    }
-    if (!plc_verify_loaded_slot(1u,
-                                code_size,
-                                sample_count,
-                                expected_indices,
-                                300u,
-                                12000u,
-                                publisher.storeEpoch())) {
-        return result;
-    }
-
-    result.package_ok = true;
-
-    Flash flash(FLASH0_BASE);
-    const size_t flash_package_size = sizeof(PlcLinkedProgramPackageHeaderV1) + code_size;
-    const uint32_t flash_erase_size = static_cast<uint32_t>(((flash_package_size + Flash::kSectorSize - 1u) /
-                                                             Flash::kSectorSize) * Flash::kSectorSize);
-    if (flash_package_size > Flash::kPlcPackageSlotSize ||
-        !plc_flash_erase_range(flash, Flash::kPlcPackageSlotBase, flash_erase_size) ||
-        !plc_flash_write_erased_bytes(flash,
-                                      Flash::kPlcPackageSlotBase,
-                                      package_bytes,
-                                      flash_package_size)) {
-        result.flash_load_result.status = kPlcSlotLoadFlashReadFailed;
-        return result;
-    }
-
-    result.flash_load_result = PlcSlotLoaderV1::loadLinkedProgramPackageFromFlash(publisher,
-                                                                                   flash,
-                                                                                   2u,
-                                                                                   Flash::kPlcPackageSlotBase,
-                                                                                   Flash::kPlcPackageSlotSize);
-    if (result.flash_load_result.status != kPlcSlotLoadOk) {
         return result;
     }
     if (!plc_verify_loaded_slot(2u,
@@ -1100,7 +1430,44 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
         return result;
     }
 
-    result.flash_ok = true;
+    result.package_ok = true;
+
+    if (include_flash_roundtrip) {
+        Flash flash(FLASH0_BASE);
+        const size_t flash_package_size = sizeof(PlcLinkedProgramPackageHeaderV1) + code_size;
+        const uint32_t flash_erase_size = static_cast<uint32_t>(((flash_package_size + Flash::kSectorSize - 1u) /
+                                                                 Flash::kSectorSize) * Flash::kSectorSize);
+        if (flash_package_size > Flash::kPlcPackageSlotSize ||
+            !plc_flash_erase_range(flash, Flash::kPlcPackageSlotBase, flash_erase_size) ||
+            !plc_flash_write_erased_bytes(flash,
+                                          Flash::kPlcPackageSlotBase,
+                                          package_bytes,
+                                          flash_package_size)) {
+            result.flash_load_result.status = kPlcSlotLoadFlashReadFailed;
+            return result;
+        }
+
+        result.flash_load_result = PlcSlotLoaderV1::loadLinkedProgramPackageFromFlash(publisher,
+                                                                                       flash,
+                                                                                       3u,
+                                                                                       Flash::kPlcPackageSlotBase,
+                                                                                       Flash::kPlcPackageSlotSize);
+        if (result.flash_load_result.status != kPlcSlotLoadOk) {
+            return result;
+        }
+        if (!plc_verify_loaded_slot(3u,
+                                    code_size,
+                                    sample_count,
+                                    expected_indices,
+                                    300u,
+                                    12000u,
+                                    publisher.storeEpoch())) {
+            return result;
+        }
+
+        result.flash_ok = true;
+    }
+
     return result;
 }
 
@@ -1122,6 +1489,7 @@ int main(void)
     sdramFwTest.stage = SdramFwTestStage::Idle;
     sdramFwTest.fail_stage = SdramFwTestStage::Idle;
     sdramFwTest.next_oled_refresh_ms = millis();
+    g_oled_slot_refresh_deadline_ms = millis();
 
     *LED_D2 = 1u;
     oled_init(0x3C);
@@ -1150,6 +1518,8 @@ int main(void)
     const bool plcRuntimeAbiReady = plcRuntimePublisher.begin();
     if (plcRuntimeAbiReady) {
         (void)plcRuntimePublisher.publish(nodeNetCore.pointCatalog(), millis());
+        nodeNetCore.attachPlcRuntimePublisher(&plcRuntimePublisher);
+        oled_configure_plc_slot_icon(0u, 0u, PlcSlotIconSource::None);
         const PlcRuntimeHeaderV1 plcRuntimeHeader = plcRuntimePublisher.headerSnapshot();
         oled_print("[PLC] ABI %u/%u e%lu",
                    static_cast<unsigned>(plcRuntimeHeader.descriptor_count),
@@ -1163,9 +1533,12 @@ int main(void)
                            static_cast<unsigned>(link_test.resolved_points),
                            static_cast<unsigned>(link_test.sample_relocations));
                 const PlcLoaderSelfTestResult load_test =
-                    plc_run_loader_self_test(nodeNetCore.pointCatalog(), plcRuntimePublisher);
+                    plc_run_loader_self_test(nodeNetCore.pointCatalog(),
+                                             plcRuntimePublisher,
+                                             kEnablePlcFlashRoundTripSelfTest);
                 if (load_test.parse_ok && load_test.load_ok && load_test.package_ok && load_test.flash_ok) {
-                    oled_print("[PLC] SLOT0-2 %u ok",
+                    oled_print(kEnablePlcFlashRoundTripSelfTest ? "[PLC] SLOT1-3 %u ok"
+                                                                : "[PLC] SLOT1-2 %u ok",
                                static_cast<unsigned>(load_test.sample_symbols));
                 } else {
                     oled_print("[PLC] SLOT %u/%u/%u",
@@ -1178,6 +1551,32 @@ int main(void)
                            static_cast<unsigned>(link_test.link_result.status),
                            static_cast<unsigned>(link_test.link_result.resolve_status));
             }
+        }
+
+        Flash plcFlash(FLASH0_BASE);
+        const PlcSlot0BootResult slot0_boot = plc_boot_slot0_program(nodeNetCore,
+                                                                     nodeNetCore.pointCatalog(),
+                                                                     plcRuntimePublisher,
+                                                                     plcFlash,
+                                                                     1u);
+        g_oled_slot_icons[0].source = (slot0_boot.source == PlcSlot0BootSource::FlashPackage)
+                                          ? PlcSlotIconSource::Flash
+                                          : ((slot0_boot.source == PlcSlot0BootSource::HardcodedMirror)
+                                                 ? PlcSlotIconSource::Local
+                                                 : PlcSlotIconSource::None);
+        (void)oled_refresh_plc_slot_icon(0u);
+        if (slot0_boot.load_ok) {
+            if (slot0_boot.source == PlcSlot0BootSource::FlashPackage) {
+                oled_print("[PLC] VM S0 flash ok");
+            } else {
+                oled_print("[PLC] VM S0 in%u>out%u",
+                           static_cast<unsigned>(slot0_boot.channel),
+                           static_cast<unsigned>(slot0_boot.channel));
+            }
+        } else {
+            oled_print("[PLC] VM S0 err %u/%u",
+                       static_cast<unsigned>(slot0_boot.flash_load_result.status),
+                       static_cast<unsigned>(slot0_boot.fallback_load_result.status));
         }
     } else {
         oled_write("[PLC] ABI region bad");
@@ -1289,6 +1688,7 @@ int main(void)
 
     while (1) {
         nodeNetCore.loop();
+        oled_refresh_plc_slot_icons_if_due(millis());
         if (plcRuntimeAbiReady) {
             (void)plcRuntimePublisher.publishIfDue(nodeNetCore.pointCatalog(), millis());
         }

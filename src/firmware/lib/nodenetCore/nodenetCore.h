@@ -16,6 +16,8 @@
 #include "flash.h"
 #include "flashdb_port.h"
 
+class PlcRuntimePublisherV1;
+
 class NodeNetCore
 {
     public:
@@ -47,6 +49,7 @@ class NodeNetCore
         bool upsertPointDefinition(const PointDefinition& definition);
         bool updatePointState(const PointIdentity& id, const PointState& state);
         bool updatePointCommandState(const PointIdentity& id, const PointCommandState& state);
+        void attachPlcRuntimePublisher(const PlcRuntimePublisherV1* publisher);
 
         HardwareType hardwareType = HardwareType::UNDEFINED;
 

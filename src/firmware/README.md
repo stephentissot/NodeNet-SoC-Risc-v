@@ -25,6 +25,45 @@ make firmware-app-build   # SDRAM application ELF only
 
 The build fails if HEX payload exceeds configured ROM capacity.
 
+## PLC Mini-VM Package Flow
+
+The firmware mini-VM currently understands a small linked bytecode subset for
+bool mirror programs:
+
+- `LOAD_POINT_BOOL runtime_index`
+- `STORE_POINT_BOOL runtime_index`
+- `HALT`
+
+You can build a flashable linked package for that runtime directly from runtime
+point indexes.
+
+From the project root:
+
+```bash
+make plc-mirror-package \
+    PLC_MIRROR_PAIRS=0:1 \
+    PLC_PACKAGE_STORE_EPOCH=1
+
+make plc-package-check
+make flash-plc-package
+```
+
+`PLC_MIRROR_PAIRS` is a comma-separated list of `input_runtime_index:output_runtime_index`
+pairs. The generated package is written to `src/firmware/build/plc_linked_package.img`
+by default and is compatible with the firmware slot-0 flash boot path.
+
+If you want to call the tool directly:
+
+```bash
+python src/firmware/tools/pack_plc_mirror_program.py \
+    --pair 0:1 \
+    --output src/firmware/build/plc_linked_package.img \
+    --store-epoch 1
+```
+
+Use the current ABI `store_epoch` published by the firmware when packaging, or
+the loader will reject the package as stale.
+
 After cloning, fetch the u8g2 submodule first:
 ```bash
 git submodule update --init

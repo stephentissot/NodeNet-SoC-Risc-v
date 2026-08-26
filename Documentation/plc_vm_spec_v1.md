@@ -1274,6 +1274,11 @@ Objective:
 
 - connect PC-side design tools to the CPU linker/loader flow
 
+Entry gate:
+
+- defer the NodeNet deployment transport until after phase 4 validates that one
+  minimal program really runs end-to-end on slot `0`
+
 Tasks:
 
 1. Define the PLC object file emitted by the compiler.
@@ -1290,7 +1295,32 @@ Exit criteria:
 
 - end-to-end PC to CPU to `plc_vm` program deployment works
 
-### 12.9 Phase 8: Scale To 16 Slots
+### 12.8 Phase 8: NodeNet PLC Upload Transport
+
+Objective:
+
+- add remote deployment of raw PLC objects over NodeNet only after slot `0`
+  execution is already validated locally
+
+Tasks:
+
+1. Define a chunked NodeNet upload session for raw PLC object bytes.
+2. Stage received object bytes into the dedicated raw PLC flash slot.
+3. Verify size and checksum before CPU-side link.
+4. Link from raw object flash staging into a slot-ready SDRAM image.
+5. Expose slot load and fault status through NodeNet responses.
+
+Validation:
+
+1. A PLC object larger than one NodeNet frame can be uploaded reliably.
+2. Corrupted or truncated uploads are rejected cleanly.
+3. A valid upload ends with a loaded slot image identical to local deployment.
+
+Exit criteria:
+
+- NodeNet can deploy a PLC object into flash, link it, and arm a runtime slot
+
+### 12.9 Phase 9: Scale To 16 Slots
 
 Objective:
 
@@ -1313,7 +1343,7 @@ Exit criteria:
 
 - `16` implemented slots validated as the first official platform target
 
-### 12.10 Phase 9: Evaluate 64-Slot Scalability
+### 12.10 Phase 10: Evaluate 64-Slot Scalability
 
 Objective:
 

@@ -31,8 +31,10 @@ FW_IMAGE_VERIFY_TOOL=src/firmware/tools/verify_firmware_image.py
 FW_IMAGE_TEST_TOOL=src/firmware/tools/make_boot_test_images.py
 PLC_PACKAGE_PACK_TOOL=src/firmware/tools/pack_plc_linked_package.py
 PLC_PACKAGE_VERIFY_TOOL=src/firmware/tools/verify_plc_linked_package.py
+PLC_MIRROR_PACKAGE_TOOL=src/firmware/tools/pack_plc_mirror_program.py
 PLC_LINKED_CODE_INPUT ?=
 PLC_PACKAGE_IMAGE ?= src/firmware/build/plc_linked_package.img
+PLC_MIRROR_PAIRS ?=
 PLC_PACKAGE_FLASH_OFFSET ?= 0x204000
 PLC_PACKAGE_SLOT_BYTES ?= 0x20000
 PLC_PACKAGE_ABI_VERSION ?= 1
@@ -85,7 +87,7 @@ SOURCES += $(LITEDRAM_RTL)
 SOURCES := $(sort $(SOURCES))
 
 
-.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw-check-image flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc plc-package plc-package-check flash-plc-package flash-plc-package-write bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only litedram-gen litedram-copy litedram-refresh
+.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw-check-image flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc plc-package plc-mirror-package plc-package-check plc-package-build-check plc-mirror-package-check flash-plc-package flash-plc-package-write bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only litedram-gen litedram-copy litedram-refresh
 
 all: firmware-build $(BUILD)/$(TOP).bit
 
@@ -263,7 +265,25 @@ plc-package:
 		--runtime-header-addr $(PLC_PACKAGE_RUNTIME_HEADER_ADDR) \
 		--store-epoch $(PLC_PACKAGE_STORE_EPOCH)
 
-plc-package-check: plc-package
+plc-mirror-package:
+	@if [ -z "$(PLC_MIRROR_PAIRS)" ]; then \
+		echo "[PLCMIRROR][ERROR] PLC_MIRROR_PAIRS is empty (expected INPUT:OUTPUT[,INPUT:OUTPUT...])"; \
+		exit 2; \
+	fi
+	@pair_args=$$(printf '%s' "$(PLC_MIRROR_PAIRS)" | awk -F',' '{for (i = 1; i <= NF; ++i) printf " --pair %s", $$i}'); \
+	$(PYTHON) $(PLC_MIRROR_PACKAGE_TOOL) $$pair_args \
+		--output $(PLC_PACKAGE_IMAGE) \
+		--abi-version $(PLC_PACKAGE_ABI_VERSION) \
+		--flags $(PLC_PACKAGE_FLAGS) \
+		--entry-offset $(PLC_PACKAGE_ENTRY_OFFSET) \
+		--symbol-count 0 \
+		--relocation-count $(PLC_PACKAGE_RELOCATION_COUNT) \
+		--max-instructions-per-scan $(PLC_PACKAGE_MAX_INSTRUCTIONS) \
+		--max-scan-time-us $(PLC_PACKAGE_MAX_SCAN_US) \
+		--runtime-header-addr $(PLC_PACKAGE_RUNTIME_HEADER_ADDR) \
+		--store-epoch $(PLC_PACKAGE_STORE_EPOCH)
+
+plc-package-check:
 	@if [ ! -f $(PLC_PACKAGE_IMAGE) ]; then \
 		echo "[PLCPKG][ERROR] Missing package: $(PLC_PACKAGE_IMAGE)"; \
 		exit 2; \
@@ -286,6 +306,10 @@ plc-package-check: plc-package
 		--slot-size $(PLC_PACKAGE_SLOT_BYTES) \
 		--expect-runtime-header-addr $(PLC_PACKAGE_RUNTIME_HEADER_ADDR) \
 		--expect-store-epoch $(PLC_PACKAGE_STORE_EPOCH)
+
+plc-package-build-check: plc-package plc-package-check
+
+plc-mirror-package-check: plc-mirror-package plc-package-check
 
 flash-plc-package: plc-package-check
 	$(MAKE) IMAGE_TO_FLASH=$(PLC_PACKAGE_IMAGE) FLASH_IMAGE_OFFSET=$(PLC_PACKAGE_FLASH_OFFSET) FLASH_IMAGE_SLOT_BYTES=$(PLC_PACKAGE_SLOT_BYTES) flash-plc-package-write

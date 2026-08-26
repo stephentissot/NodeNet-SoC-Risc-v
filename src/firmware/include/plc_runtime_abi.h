@@ -103,6 +103,7 @@ static_assert(sizeof(PlcRuntimeHeaderV1) == 28u, "Unexpected header size");
 class PlcRuntimePublisherV1 {
 public:
     static constexpr uint16_t kInvalidPointIndex = 0xFFFFu;
+    static constexpr size_t kInvalidCatalogIndex = PointCatalog::kMaxPoints;
 
     struct ResolveResult {
         bool found;
@@ -178,6 +179,14 @@ public:
             return kInvalidPointIndex;
         }
         return runtimeIndexForCatalogIndex(catalog_index);
+    }
+
+    size_t catalogIndexForRuntimeIndex(uint16_t runtime_index) const
+    {
+        if (runtime_index >= PointCatalog::kMaxPoints) {
+            return kInvalidCatalogIndex;
+        }
+        return runtime_to_catalog_[runtime_index];
     }
 
     ResolveResult resolvePoint(const PointCatalog& catalog, const PointIdentity& id) const
@@ -275,6 +284,7 @@ private:
     uint16_t published_count_ = 0u;
     uint16_t skipped_count_ = 0u;
     uint16_t catalog_to_runtime_[PointCatalog::kMaxPoints] = {};
+    size_t runtime_to_catalog_[PointCatalog::kMaxPoints] = {};
     uint32_t definition_hash_ = 0u;
     uint32_t store_epoch_ = 0u;
     uint32_t next_publish_ms_ = 0u;
@@ -489,6 +499,7 @@ private:
 
         for (size_t i = 0; i < PointCatalog::kMaxPoints; ++i) {
             catalog_to_runtime_[i] = kInvalidPointIndex;
+            runtime_to_catalog_[i] = kInvalidCatalogIndex;
         }
 
         for (size_t i = 0; i < catalog.size(); ++i) {
@@ -507,6 +518,7 @@ private:
 
             writeDescriptor(descriptors[published_count_], descriptor);
             catalog_to_runtime_[i] = published_count_;
+            runtime_to_catalog_[published_count_] = i;
             ++published_count_;
         }
     }
