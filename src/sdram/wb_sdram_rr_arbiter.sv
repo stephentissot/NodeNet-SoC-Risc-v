@@ -29,7 +29,18 @@ module wb_sdram_rr_arbiter (
     output reg         s_cyc_o,
     output reg         s_stb_o,
     input  wire [31:0] s_dat_i,
-    input  wire        s_ack_i
+    input  wire        s_ack_i,
+
+    output reg  [2:0]  dbg_state_o,
+    output reg         dbg_last_grant_o,
+    output reg         dbg_rr_prefer_m1_o,
+    output reg         dbg_m0_req_o,
+    output reg         dbg_m1_req_o,
+    output reg  [31:0] dbg_m0_grant_count_o,
+    output reg  [31:0] dbg_m1_grant_count_o,
+    output reg  [31:0] dbg_m0_stall_count_o,
+    output reg  [31:0] dbg_m1_stall_count_o,
+    output reg  [31:0] dbg_ack_count_o
 );
 
     localparam [2:0] ST_IDLE       = 3'd0;
@@ -58,9 +69,28 @@ module wb_sdram_rr_arbiter (
             s_we_o <= 1'b0;
             s_cyc_o <= 1'b0;
             s_stb_o <= 1'b0;
+            dbg_state_o <= ST_IDLE;
+            dbg_last_grant_o <= 1'b0;
+            dbg_rr_prefer_m1_o <= 1'b0;
+            dbg_m0_req_o <= 1'b0;
+            dbg_m1_req_o <= 1'b0;
+            dbg_m0_grant_count_o <= 32'd0;
+            dbg_m1_grant_count_o <= 32'd0;
+            dbg_m0_stall_count_o <= 32'd0;
+            dbg_m1_stall_count_o <= 32'd0;
+            dbg_ack_count_o <= 32'd0;
         end else begin
             m0_ack_o <= 1'b0;
             m1_ack_o <= 1'b0;
+            dbg_state_o <= state;
+            dbg_rr_prefer_m1_o <= rr_prefer_m1;
+            dbg_m0_req_o <= m0_req;
+            dbg_m1_req_o <= m1_req;
+
+            if (m0_req && (state != ST_M0) && (state != ST_M0_RELEASE))
+                dbg_m0_stall_count_o <= dbg_m0_stall_count_o + 32'd1;
+            if (m1_req && (state != ST_M1) && (state != ST_M1_RELEASE))
+                dbg_m1_stall_count_o <= dbg_m1_stall_count_o + 32'd1;
 
             case (state)
                 ST_IDLE: begin
@@ -74,6 +104,8 @@ module wb_sdram_rr_arbiter (
                         s_we_o <= m0_we_i;
                         s_cyc_o <= 1'b1;
                         s_stb_o <= 1'b1;
+                        dbg_last_grant_o <= 1'b0;
+                        dbg_m0_grant_count_o <= dbg_m0_grant_count_o + 32'd1;
                         state <= ST_M0;
                     end else if (m1_req) begin
                         s_adr_o <= m1_adr_i;
@@ -82,6 +114,8 @@ module wb_sdram_rr_arbiter (
                         s_we_o <= m1_we_i;
                         s_cyc_o <= 1'b1;
                         s_stb_o <= 1'b1;
+                        dbg_last_grant_o <= 1'b1;
+                        dbg_m1_grant_count_o <= dbg_m1_grant_count_o + 32'd1;
                         state <= ST_M1;
                     end
                 end
@@ -96,6 +130,7 @@ module wb_sdram_rr_arbiter (
                     if (s_ack_i) begin
                         m0_dat_o <= s_dat_i;
                         m0_ack_o <= 1'b1;
+                        dbg_ack_count_o <= dbg_ack_count_o + 32'd1;
                         s_cyc_o <= 1'b0;
                         s_stb_o <= 1'b0;
                         rr_prefer_m1 <= 1'b1;
@@ -118,6 +153,7 @@ module wb_sdram_rr_arbiter (
                     if (s_ack_i) begin
                         m1_dat_o <= s_dat_i;
                         m1_ack_o <= 1'b1;
+                        dbg_ack_count_o <= dbg_ack_count_o + 32'd1;
                         s_cyc_o <= 1'b0;
                         s_stb_o <= 1'b0;
                         rr_prefer_m1 <= 1'b0;

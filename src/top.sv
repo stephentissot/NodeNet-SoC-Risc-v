@@ -44,6 +44,7 @@ module top (
     localparam [31:0] STATUS_ADDR = 32'h1000_0020;
     localparam [31:0] STATUS_RMW_READ_ADDR  = 32'h1000_0024;
     localparam [31:0] STATUS_RMW_WRITE_ADDR = 32'h1000_0028;
+    localparam [31:0] SDRAM_TEST_BASE = 32'h1000_3000;
     localparam [31:0] UART1_BASE  = 32'h1000_4000;
     localparam [31:0] I2C0_BASE   = 32'h1000_5000;  // 4 KB page, 8 regs @ +0x00..+0x1C
     localparam [31:0] NODENET_BASE = 32'h1000_6000;  // NodeNet485 Wishbone slave (1 Mb/s RS-485)
@@ -140,7 +141,27 @@ module top (
     wire        status_ack;
     wire        status_rmw_read_ack;
     wire        status_rmw_write_ack;
+    wire [31:0] sdram_test_dat;
+    wire        sdram_test_ack;
     wire        sdram_cpu_wait_live;
+    wire [31:0] sdram_test_adr;
+    wire [31:0] sdram_test_dat_w;
+    wire [3:0]  sdram_test_sel;
+    wire        sdram_test_we;
+    wire        sdram_test_cyc;
+    wire        sdram_test_stb;
+    wire [31:0] sdram_test_rsp_dat;
+    wire        sdram_test_rsp_ack;
+    wire [2:0]  sdram_arb_dbg_state;
+    wire        sdram_arb_dbg_last_grant;
+    wire        sdram_arb_dbg_rr_prefer_m1;
+    wire        sdram_arb_dbg_m0_req;
+    wire        sdram_arb_dbg_m1_req;
+    wire [31:0] sdram_arb_dbg_m0_grants;
+    wire [31:0] sdram_arb_dbg_m1_grants;
+    wire [31:0] sdram_arb_dbg_m0_stalls;
+    wire [31:0] sdram_arb_dbg_m1_stalls;
+    wire [31:0] sdram_arb_dbg_ack_count;
 
     // Debug: latch if a Wishbone transaction stalls too long without ACK.
     reg [23:0] wb_stall_ctr = 24'd0;
@@ -164,6 +185,7 @@ module top (
     wire wb_status_sel;
     wire wb_status_rmw_read_sel;
     wire wb_status_rmw_write_sel;
+    wire wb_sdram_test_sel;
     wire wb_uart1_sel;
     wire wb_i2c0_sel;
     wire wb_nodenet_sel;
@@ -179,6 +201,7 @@ module top (
     assign wb_status_sel = wb_cyc && wb_stb && (wb_adr == STATUS_ADDR);
     assign wb_status_rmw_read_sel = wb_cyc && wb_stb && (wb_adr == STATUS_RMW_READ_ADDR);
     assign wb_status_rmw_write_sel = wb_cyc && wb_stb && (wb_adr == STATUS_RMW_WRITE_ADDR);
+    assign wb_sdram_test_sel = wb_cyc && wb_stb && (wb_adr[31:8] == SDRAM_TEST_BASE[31:8]);
     assign wb_uart1_sel  = wb_cyc && wb_stb && (wb_adr[31:12] == UART1_BASE[31:12]);
     assign wb_i2c0_sel   = wb_cyc && wb_stb && (wb_adr[31:12] == I2C0_BASE[31:12]);
     assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12]);
@@ -219,6 +242,7 @@ module top (
                       wb_status_sel  ? status_dat  :
                       wb_status_rmw_read_sel ? status_rmw_read_dat :
                       wb_status_rmw_write_sel ? status_rmw_write_dat :
+                      wb_sdram_test_sel ? sdram_test_dat :
                       wb_uart1_sel   ? uart1_dat   :
                       wb_sdram_sel   ? sdram_cpu_dat :
                       32'h0000_0000;
@@ -234,6 +258,7 @@ module top (
                     (wb_status_sel  && status_ack)  ||
                     (wb_status_rmw_read_sel && status_rmw_read_ack) ||
                     (wb_status_rmw_write_sel && status_rmw_write_ack) ||
+                    (wb_sdram_test_sel && sdram_test_ack) ||
                     (wb_uart1_sel   && uart1_ack)   ||
                     (wb_sdram_sel   && sdram_cpu_ack);
 
@@ -544,6 +569,42 @@ module top (
         .wbs_ack_o(ram_ack)
     );
 
+    wb_sdram_test_master #(
+        .ADDR(SDRAM_TEST_BASE)
+    ) sdram_test_master (
+        .clk(sys_clk),
+        .rst(reset),
+
+        .wb_adr_i(wb_adr),
+        .wb_dat_i(wb_dat_o),
+        .wb_sel_i(wb_sel),
+        .wb_we_i(wb_we),
+        .wb_cyc_i(wb_sdram_test_sel),
+        .wb_stb_i(wb_sdram_test_sel),
+        .wb_dat_o(sdram_test_dat),
+        .wb_ack_o(sdram_test_ack),
+
+        .m_adr_o(sdram_test_adr),
+        .m_dat_o(sdram_test_dat_w),
+        .m_sel_o(sdram_test_sel),
+        .m_we_o(sdram_test_we),
+        .m_cyc_o(sdram_test_cyc),
+        .m_stb_o(sdram_test_stb),
+        .m_dat_i(sdram_test_rsp_dat),
+        .m_ack_i(sdram_test_rsp_ack),
+
+        .arb_state_i(sdram_arb_dbg_state),
+        .arb_last_grant_i(sdram_arb_dbg_last_grant),
+        .arb_rr_prefer_m1_i(sdram_arb_dbg_rr_prefer_m1),
+        .arb_m0_req_i(sdram_arb_dbg_m0_req),
+        .arb_m1_req_i(sdram_arb_dbg_m1_req),
+        .arb_m0_grant_count_i(sdram_arb_dbg_m0_grants),
+        .arb_m1_grant_count_i(sdram_arb_dbg_m1_grants),
+        .arb_m0_stall_count_i(sdram_arb_dbg_m0_stalls),
+        .arb_m1_stall_count_i(sdram_arb_dbg_m1_stalls),
+        .arb_ack_count_i(sdram_arb_dbg_ack_count)
+    );
+
     wb_sdram_rr_arbiter sdram_arbiter (
         .clk(sys_clk),
         .rst(reset),
@@ -557,14 +618,14 @@ module top (
         .m0_dat_o(sdram_cpu_dat),
         .m0_ack_o(sdram_cpu_ack),
 
-        .m1_adr_i(32'd0),
-        .m1_dat_i(32'd0),
-        .m1_sel_i(4'd0),
-        .m1_we_i(1'b0),
-        .m1_cyc_i(1'b0),
-        .m1_stb_i(1'b0),
-        .m1_dat_o(),
-        .m1_ack_o(),
+        .m1_adr_i(sdram_test_adr),
+        .m1_dat_i(sdram_test_dat_w),
+        .m1_sel_i(sdram_test_sel),
+        .m1_we_i(sdram_test_we),
+        .m1_cyc_i(sdram_test_cyc),
+        .m1_stb_i(sdram_test_stb),
+        .m1_dat_o(sdram_test_rsp_dat),
+        .m1_ack_o(sdram_test_rsp_ack),
 
         .s_adr_o(sdram_arb_adr),
         .s_dat_o(sdram_arb_dat_w),
@@ -573,7 +634,18 @@ module top (
         .s_cyc_o(sdram_arb_cyc),
         .s_stb_o(sdram_arb_stb),
         .s_dat_i(sdram_dat),
-        .s_ack_i(sdram_ack)
+        .s_ack_i(sdram_ack),
+
+        .dbg_state_o(sdram_arb_dbg_state),
+        .dbg_last_grant_o(sdram_arb_dbg_last_grant),
+        .dbg_rr_prefer_m1_o(sdram_arb_dbg_rr_prefer_m1),
+        .dbg_m0_req_o(sdram_arb_dbg_m0_req),
+        .dbg_m1_req_o(sdram_arb_dbg_m1_req),
+        .dbg_m0_grant_count_o(sdram_arb_dbg_m0_grants),
+        .dbg_m1_grant_count_o(sdram_arb_dbg_m1_grants),
+        .dbg_m0_stall_count_o(sdram_arb_dbg_m0_stalls),
+        .dbg_m1_stall_count_o(sdram_arb_dbg_m1_stalls),
+        .dbg_ack_count_o(sdram_arb_dbg_ack_count)
     );
 
     wb_sdram_litedram #(
