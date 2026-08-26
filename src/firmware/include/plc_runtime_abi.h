@@ -120,6 +120,42 @@ public:
         return published_count_;
     }
 
+    bool headerWritten() const
+    {
+        return header_written_;
+    }
+
+    uint16_t runtimeIndexForCatalogIndex(size_t catalog_index) const
+    {
+        if (catalog_index >= PointCatalog::kMaxPoints) {
+            return kInvalidPointIndex;
+        }
+        return catalog_to_runtime_[catalog_index];
+    }
+
+    uint16_t runtimeIndexForIdentity(const PointCatalog& catalog, const PointIdentity& id) const
+    {
+        const size_t catalog_index = catalog.findIndex(id);
+        if (catalog_index >= catalog.size()) {
+            return kInvalidPointIndex;
+        }
+        return runtimeIndexForCatalogIndex(catalog_index);
+    }
+
+    PlcRuntimeHeaderV1 headerSnapshot() const
+    {
+        PlcRuntimeHeaderV1 header = {};
+        header.magic = kPlcRuntimeAbiV1Magic;
+        header.version = kPlcRuntimeAbiV1Version;
+        header.flags = 0u;
+        header.descriptor_count = published_count_;
+        header.descriptor_base = kPlcRuntimeDescriptorBase;
+        header.value_base = kPlcRuntimeValueBase;
+        header.status_base = kPlcRuntimeStatusBase;
+        header.store_epoch = store_epoch_;
+        return header;
+    }
+
     bool publish(const PointCatalog& catalog, uint32_t now_ms)
     {
         if (!ready_) {

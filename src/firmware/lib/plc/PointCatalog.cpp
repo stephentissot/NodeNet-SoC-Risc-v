@@ -246,6 +246,15 @@ const PointDefinition* PointCatalog::find(const PointIdentity& id) const {
     return nullptr;
 }
 
+size_t PointCatalog::findIndex(const PointIdentity& id) const {
+    for (size_t index = 0; index < count_; ++index) {
+        if (identitiesEqual(entries_[index].id, id)) {
+            return index;
+        }
+    }
+    return count_;
+}
+
 PointState* PointCatalog::findState(const PointIdentity& id) {
     for (size_t index = 0; index < count_; ++index) {
         if (identitiesEqual(entries_[index].id, id)) {

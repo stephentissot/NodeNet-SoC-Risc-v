@@ -28,6 +28,7 @@ public:
     const PointCommandState* commandStates() const;
 
     const PointDefinition* find(const PointIdentity& id) const;
+    size_t findIndex(const PointIdentity& id) const;
     PointState* findState(const PointIdentity& id);
     const PointState* findState(const PointIdentity& id) const;
     PointCommandState* findCommandState(const PointIdentity& id);
