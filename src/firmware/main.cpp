@@ -1080,9 +1080,8 @@ int main(void)
                 const PlcLoaderSelfTestResult load_test =
                     plc_run_loader_self_test(nodeNetCore.pointCatalog(), plcRuntimePublisher);
                 if (load_test.parse_ok && load_test.load_ok && load_test.package_ok) {
-                    oled_print("[PLC] SLOT %u/%u ok",
-                               static_cast<unsigned>(load_test.sample_symbols),
-                               1u + 1u);
+                    oled_print("[PLC] SLOT0-1 %u ok",
+                               static_cast<unsigned>(load_test.sample_symbols));
                 } else {
                     oled_print("[PLC] SLOT %u/%u/%u",
                                static_cast<unsigned>(load_test.load_result.status),
