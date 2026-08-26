@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "sdram.h"
+#include "plc_linker_v1.h"
 #include "plc_runtime_abi.h"
 #include <ArduinoJson.h>
 #include "bigsister.h"
@@ -84,6 +85,7 @@ static constexpr uint32_t kSdramFastRunMs = 2000u;
 static constexpr uint32_t kSdramRefreshMs = 250u;
 static constexpr uint32_t kSdramOneShotTimeoutMs = 1000u;
 static constexpr bool kEnableSdramBringupTest = false;
+static constexpr bool kEnablePlcLinkerSelfTest = true;
 static constexpr uint32_t kSdramFailTimeout = 1u;
 static constexpr uint32_t kSdramFailAck = 2u;
 static constexpr uint32_t kSdramFailMismatch = 3u;
@@ -664,6 +666,118 @@ static void sdram_update_test(SdramFwTestContext* ctx,
     }
 }
 
+struct PlcLinkerSelfTestResult {
+    bool resolve_ok;
+    bool link_ok;
+    uint16_t resolved_points;
+    uint16_t sample_relocations;
+    PlcObjectLinkResultV1 link_result;
+};
+
+static PlcRuntimeLinkAccessV1 plc_link_access_for_definition(const PointDefinition& definition)
+{
+    switch (definition.direction) {
+    case PointDirection::Output:
+        return kPlcRuntimeLinkWrite;
+    case PointDirection::InOut:
+        return kPlcRuntimeLinkReadWrite;
+    case PointDirection::Input:
+    default:
+        return kPlcRuntimeLinkRead;
+    }
+}
+
+static PlcLinkerSelfTestResult plc_run_linker_self_test(const PointCatalog& catalog,
+                                                        const PlcRuntimePublisherV1& publisher)
+{
+    PlcLinkerSelfTestResult result = {};
+    result.resolve_ok = true;
+    result.link_ok = false;
+    result.link_result.status = kPlcObjectLinkInvalidArgument;
+    result.link_result.resolve_status = kPlcRuntimeLinkResolved;
+
+    const PointDefinition* definitions = catalog.entries();
+    constexpr uint16_t kMaxSampleSymbols = 3u;
+    PlcObjectSymbolRecordV1 symbols[kMaxSampleSymbols] = {};
+    PlcObjectRelocationRecordV1 relocations[kMaxSampleSymbols] = {};
+    uint16_t expected_indices[kMaxSampleSymbols] = {};
+    uint8_t object_code[kMaxSampleSymbols * 2u] = {};
+    uint8_t linked_code[kMaxSampleSymbols * 2u] = {};
+
+    uint16_t sample_count = 0u;
+    uint16_t skipped_points = 0u;
+    for (size_t index = 0; index < catalog.size(); ++index) {
+        const PointDefinition& definition = definitions[index];
+        PlcRuntimePublisherV1::LinkRequest request = {};
+        request.point_id = definition.id;
+        request.expected_type = definition.value_type;
+        request.access = plc_link_access_for_definition(definition);
+
+        const PlcRuntimePublisherV1::LinkResult link_result = publisher.resolveLinkRequest(catalog, request);
+        if (link_result.status == kPlcRuntimeLinkResolved) {
+            ++result.resolved_points;
+            if (sample_count < kMaxSampleSymbols) {
+                symbols[sample_count].point_id = definition.id;
+                symbols[sample_count].expected_type = static_cast<uint8_t>(definition.value_type);
+                symbols[sample_count].access = static_cast<uint8_t>(request.access);
+                relocations[sample_count].code_offset = static_cast<uint32_t>(sample_count * 2u);
+                relocations[sample_count].symbol_index = sample_count;
+                relocations[sample_count].relocation_kind = kPlcRelocationPointIndexU16Le;
+                expected_indices[sample_count] = link_result.runtime_point_index;
+                ++sample_count;
+            }
+            continue;
+        }
+
+        if (link_result.status == kPlcRuntimeLinkUnsupportedPointType) {
+            ++skipped_points;
+            continue;
+        }
+
+        result.resolve_ok = false;
+        return result;
+    }
+
+    if (result.resolved_points != publisher.publishedCount() ||
+        skipped_points != publisher.skippedCount() ||
+        sample_count == 0u) {
+        result.resolve_ok = false;
+        return result;
+    }
+
+    PlcObjectImageV1 object_image = {};
+    object_image.code_bytes = object_code;
+    object_image.code_size = static_cast<uint32_t>(sample_count * 2u);
+    object_image.entry_offset = 0u;
+    object_image.symbols = symbols;
+    object_image.symbol_count = sample_count;
+    object_image.relocations = relocations;
+    object_image.relocation_count = sample_count;
+
+    result.link_result = PlcObjectLinkerV1::linkObjectImage(publisher,
+                                                            catalog,
+                                                            object_image,
+                                                            linked_code,
+                                                            sizeof(linked_code));
+    if (result.link_result.status != kPlcObjectLinkOk) {
+        return result;
+    }
+
+    for (uint16_t i = 0u; i < sample_count; ++i) {
+        const uint16_t patched_index = static_cast<uint16_t>(linked_code[i * 2u]) |
+                                       static_cast<uint16_t>(linked_code[i * 2u + 1u] << 8u);
+        if (patched_index != expected_indices[i]) {
+            result.link_result.status = kPlcObjectLinkResolveFailed;
+            result.resolve_ok = false;
+            return result;
+        }
+    }
+
+    result.link_ok = true;
+    result.sample_relocations = sample_count;
+    return result;
+}
+
 int main(void)
 {
     // Initial startup LED blink to indicate booting.
@@ -715,6 +829,19 @@ int main(void)
                    static_cast<unsigned>(plcRuntimeHeader.descriptor_count),
                    static_cast<unsigned>(plcRuntimePublisher.skippedCount()),
                    static_cast<unsigned long>(plcRuntimeHeader.store_epoch));
+        if (kEnablePlcLinkerSelfTest) {
+            const PlcLinkerSelfTestResult link_test =
+                plc_run_linker_self_test(nodeNetCore.pointCatalog(), plcRuntimePublisher);
+            if (link_test.resolve_ok && link_test.link_ok) {
+                oled_print("[PLC] LNK %u r/%u ok",
+                           static_cast<unsigned>(link_test.resolved_points),
+                           static_cast<unsigned>(link_test.sample_relocations));
+            } else {
+                oled_print("[PLC] LNK fail s%u r%u",
+                           static_cast<unsigned>(link_test.link_result.status),
+                           static_cast<unsigned>(link_test.link_result.resolve_status));
+            }
+        }
     } else {
         oled_write("[PLC] ABI region bad");
     }

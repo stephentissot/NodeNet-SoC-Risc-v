@@ -1,0 +1,196 @@
+#ifndef PLC_LINKER_V1_H
+#define PLC_LINKER_V1_H
+
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+
+#include "plc_runtime_abi.h"
+
+static constexpr uint32_t kPlcObjectFileMagicV1 = 0x314A424Fu;
+static constexpr uint16_t kPlcObjectFileVersionV1 = 1u;
+
+enum PlcObjectRelocationKindV1 : uint8_t {
+    kPlcRelocationPointIndexU16Le = 0u,
+    kPlcRelocationPointIndexU32Le = 1u,
+};
+
+enum PlcObjectLinkStatusV1 : uint8_t {
+    kPlcObjectLinkOk = 0u,
+    kPlcObjectLinkInvalidArgument = 1u,
+    kPlcObjectLinkOutputTooSmall = 2u,
+    kPlcObjectLinkEntryOffsetOutOfRange = 3u,
+    kPlcObjectLinkSymbolIndexOutOfRange = 4u,
+    kPlcObjectLinkRelocationOutOfRange = 5u,
+    kPlcObjectLinkUnsupportedRelocationKind = 6u,
+    kPlcObjectLinkResolveFailed = 7u,
+};
+
+#pragma pack(push, 1)
+struct PlcObjectFileHeaderV1 {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t flags;
+    uint32_t code_size;
+    uint32_t entry_offset;
+    uint16_t symbol_count;
+    uint16_t relocation_count;
+    uint32_t symbol_table_offset;
+    uint32_t relocation_table_offset;
+    uint32_t reserved0;
+};
+
+struct PlcObjectSymbolRecordV1 {
+    PointIdentity point_id;
+    uint8_t expected_type;
+    uint8_t access;
+    uint16_t reserved0;
+};
+
+struct PlcObjectRelocationRecordV1 {
+    uint32_t code_offset;
+    uint16_t symbol_index;
+    uint8_t relocation_kind;
+    uint8_t reserved0;
+};
+#pragma pack(pop)
+
+static_assert(sizeof(PlcObjectSymbolRecordV1) == 84u, "Unexpected symbol record size");
+static_assert(sizeof(PlcObjectRelocationRecordV1) == 8u, "Unexpected relocation record size");
+
+struct PlcObjectImageV1 {
+    const uint8_t* code_bytes;
+    uint32_t code_size;
+    uint32_t entry_offset;
+    const PlcObjectSymbolRecordV1* symbols;
+    uint16_t symbol_count;
+    const PlcObjectRelocationRecordV1* relocations;
+    uint16_t relocation_count;
+};
+
+struct PlcObjectLinkResultV1 {
+    PlcObjectLinkStatusV1 status;
+    PlcRuntimeLinkStatusV1 resolve_status;
+    uint16_t failing_symbol_index;
+    uint16_t failing_relocation_index;
+    uint16_t resolved_relocation_count;
+    uint32_t linked_code_size;
+    uint32_t entry_offset;
+};
+
+class PlcObjectLinkerV1 {
+public:
+    static PlcObjectLinkResultV1 linkObjectImage(const PlcRuntimePublisherV1& publisher,
+                                                 const PointCatalog& catalog,
+                                                 const PlcObjectImageV1& object_image,
+                                                 uint8_t* linked_code_out,
+                                                 size_t linked_code_capacity)
+    {
+        PlcObjectLinkResultV1 result = {};
+        result.status = kPlcObjectLinkInvalidArgument;
+        result.resolve_status = kPlcRuntimeLinkResolved;
+        result.failing_symbol_index = 0xFFFFu;
+        result.failing_relocation_index = 0xFFFFu;
+        result.linked_code_size = object_image.code_size;
+        result.entry_offset = object_image.entry_offset;
+
+        if (object_image.code_bytes == nullptr || linked_code_out == nullptr) {
+            return result;
+        }
+        if ((object_image.symbol_count != 0u && object_image.symbols == nullptr) ||
+            (object_image.relocation_count != 0u && object_image.relocations == nullptr)) {
+            return result;
+        }
+        if (object_image.code_size > linked_code_capacity) {
+            result.status = kPlcObjectLinkOutputTooSmall;
+            return result;
+        }
+        if (object_image.entry_offset > object_image.code_size) {
+            result.status = kPlcObjectLinkEntryOffsetOutOfRange;
+            return result;
+        }
+
+        std::memcpy(linked_code_out, object_image.code_bytes, object_image.code_size);
+
+        for (uint16_t relocation_index = 0u;
+             relocation_index < object_image.relocation_count;
+             ++relocation_index) {
+            const PlcObjectRelocationRecordV1& relocation = object_image.relocations[relocation_index];
+            result.failing_relocation_index = relocation_index;
+
+            if (relocation.symbol_index >= object_image.symbol_count) {
+                result.status = kPlcObjectLinkSymbolIndexOutOfRange;
+                result.failing_symbol_index = relocation.symbol_index;
+                return result;
+            }
+
+            const size_t patch_size = relocationPatchSize(relocation.relocation_kind);
+            if (patch_size == 0u) {
+                result.status = kPlcObjectLinkUnsupportedRelocationKind;
+                return result;
+            }
+            if ((static_cast<size_t>(relocation.code_offset) + patch_size) > object_image.code_size) {
+                result.status = kPlcObjectLinkRelocationOutOfRange;
+                return result;
+            }
+
+            const PlcObjectSymbolRecordV1& symbol = object_image.symbols[relocation.symbol_index];
+            result.failing_symbol_index = relocation.symbol_index;
+
+            PlcRuntimePublisherV1::LinkRequest request = {};
+            request.point_id = symbol.point_id;
+            request.expected_type = static_cast<PointValueType>(symbol.expected_type);
+            request.access = static_cast<PlcRuntimeLinkAccessV1>(symbol.access);
+
+            const PlcRuntimePublisherV1::LinkResult link_result = publisher.resolveLinkRequest(catalog, request);
+            result.resolve_status = link_result.status;
+            if (link_result.status != kPlcRuntimeLinkResolved) {
+                result.status = kPlcObjectLinkResolveFailed;
+                return result;
+            }
+
+            applyRelocation(linked_code_out + relocation.code_offset,
+                            relocation.relocation_kind,
+                            link_result.runtime_point_index);
+            ++result.resolved_relocation_count;
+        }
+
+        result.status = kPlcObjectLinkOk;
+        result.failing_symbol_index = 0xFFFFu;
+        result.failing_relocation_index = 0xFFFFu;
+        return result;
+    }
+
+private:
+    static size_t relocationPatchSize(uint8_t relocation_kind)
+    {
+        switch (relocation_kind) {
+        case kPlcRelocationPointIndexU16Le:
+            return 2u;
+        case kPlcRelocationPointIndexU32Le:
+            return 4u;
+        default:
+            return 0u;
+        }
+    }
+
+    static void applyRelocation(uint8_t* dst, uint8_t relocation_kind, uint16_t runtime_point_index)
+    {
+        switch (relocation_kind) {
+        case kPlcRelocationPointIndexU16Le:
+            dst[0] = static_cast<uint8_t>(runtime_point_index & 0xFFu);
+            dst[1] = static_cast<uint8_t>((runtime_point_index >> 8) & 0xFFu);
+            break;
+        case kPlcRelocationPointIndexU32Le:
+            dst[0] = static_cast<uint8_t>(runtime_point_index & 0xFFu);
+            dst[1] = static_cast<uint8_t>((runtime_point_index >> 8) & 0xFFu);
+            dst[2] = 0u;
+            dst[3] = 0u;
+            break;
+        default:
+            break;
+        }
+    }
+};
+
+#endif
