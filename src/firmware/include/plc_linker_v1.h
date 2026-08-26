@@ -26,6 +26,18 @@ enum PlcObjectLinkStatusV1 : uint8_t {
     kPlcObjectLinkResolveFailed = 7u,
 };
 
+enum PlcObjectParseStatusV1 : uint8_t {
+    kPlcObjectParseOk = 0u,
+    kPlcObjectParseInvalidArgument = 1u,
+    kPlcObjectParseHeaderOutOfRange = 2u,
+    kPlcObjectParseBadMagic = 3u,
+    kPlcObjectParseBadVersion = 4u,
+    kPlcObjectParseCodeOutOfRange = 5u,
+    kPlcObjectParseEntryOffsetOutOfRange = 6u,
+    kPlcObjectParseSymbolTableOutOfRange = 7u,
+    kPlcObjectParseRelocationTableOutOfRange = 8u,
+};
+
 #pragma pack(push, 1)
 struct PlcObjectFileHeaderV1 {
     uint32_t magic;
@@ -78,8 +90,74 @@ struct PlcObjectLinkResultV1 {
     uint32_t entry_offset;
 };
 
+struct PlcObjectParseResultV1 {
+    PlcObjectParseStatusV1 status;
+    PlcObjectImageV1 object_image;
+};
+
 class PlcObjectLinkerV1 {
 public:
+    static PlcObjectParseResultV1 parseObjectFile(const uint8_t* object_file_bytes, size_t object_file_size)
+    {
+        PlcObjectParseResultV1 result = {};
+        result.status = kPlcObjectParseInvalidArgument;
+
+        if (object_file_bytes == nullptr) {
+            return result;
+        }
+        if (object_file_size < sizeof(PlcObjectFileHeaderV1)) {
+            result.status = kPlcObjectParseHeaderOutOfRange;
+            return result;
+        }
+
+        const PlcObjectFileHeaderV1* header =
+            reinterpret_cast<const PlcObjectFileHeaderV1*>(object_file_bytes);
+        if (header->magic != kPlcObjectFileMagicV1) {
+            result.status = kPlcObjectParseBadMagic;
+            return result;
+        }
+        if (header->version != kPlcObjectFileVersionV1) {
+            result.status = kPlcObjectParseBadVersion;
+            return result;
+        }
+        if (header->entry_offset > header->code_size) {
+            result.status = kPlcObjectParseEntryOffsetOutOfRange;
+            return result;
+        }
+
+        const size_t code_offset = sizeof(PlcObjectFileHeaderV1);
+        if ((code_offset + static_cast<size_t>(header->code_size)) > object_file_size) {
+            result.status = kPlcObjectParseCodeOutOfRange;
+            return result;
+        }
+
+        const size_t symbol_table_end = static_cast<size_t>(header->symbol_table_offset) +
+                                        static_cast<size_t>(header->symbol_count) * sizeof(PlcObjectSymbolRecordV1);
+        if (symbol_table_end > object_file_size) {
+            result.status = kPlcObjectParseSymbolTableOutOfRange;
+            return result;
+        }
+
+        const size_t relocation_table_end = static_cast<size_t>(header->relocation_table_offset) +
+                                            static_cast<size_t>(header->relocation_count) * sizeof(PlcObjectRelocationRecordV1);
+        if (relocation_table_end > object_file_size) {
+            result.status = kPlcObjectParseRelocationTableOutOfRange;
+            return result;
+        }
+
+        result.object_image.code_bytes = object_file_bytes + code_offset;
+        result.object_image.code_size = header->code_size;
+        result.object_image.entry_offset = header->entry_offset;
+        result.object_image.symbols = reinterpret_cast<const PlcObjectSymbolRecordV1*>(
+            object_file_bytes + header->symbol_table_offset);
+        result.object_image.symbol_count = header->symbol_count;
+        result.object_image.relocations = reinterpret_cast<const PlcObjectRelocationRecordV1*>(
+            object_file_bytes + header->relocation_table_offset);
+        result.object_image.relocation_count = header->relocation_count;
+        result.status = kPlcObjectParseOk;
+        return result;
+    }
+
     static PlcObjectLinkResultV1 linkObjectImage(const PlcRuntimePublisherV1& publisher,
                                                  const PointCatalog& catalog,
                                                  const PlcObjectImageV1& object_image,

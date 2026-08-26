@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include "sdram.h"
 #include "plc_linker_v1.h"
+#include "plc_loader_v1.h"
 #include "plc_runtime_abi.h"
 #include <ArduinoJson.h>
 #include "bigsister.h"
@@ -674,6 +675,13 @@ struct PlcLinkerSelfTestResult {
     PlcObjectLinkResultV1 link_result;
 };
 
+struct PlcLoaderSelfTestResult {
+    bool parse_ok;
+    bool load_ok;
+    uint16_t sample_symbols;
+    PlcSlotLoadResultV1 load_result;
+};
+
 static PlcRuntimeLinkAccessV1 plc_link_access_for_definition(const PointDefinition& definition)
 {
     switch (definition.direction) {
@@ -778,6 +786,113 @@ static PlcLinkerSelfTestResult plc_run_linker_self_test(const PointCatalog& cata
     return result;
 }
 
+static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& catalog,
+                                                        const PlcRuntimePublisherV1& publisher)
+{
+    PlcLoaderSelfTestResult result = {};
+    result.parse_ok = false;
+    result.load_ok = false;
+
+    const PointDefinition* definitions = catalog.entries();
+    constexpr uint16_t kMaxSampleSymbols = 3u;
+    PlcObjectSymbolRecordV1 symbols[kMaxSampleSymbols] = {};
+    PlcObjectRelocationRecordV1 relocations[kMaxSampleSymbols] = {};
+    uint16_t expected_indices[kMaxSampleSymbols] = {};
+    uint16_t sample_count = 0u;
+
+    for (size_t index = 0; index < catalog.size() && sample_count < kMaxSampleSymbols; ++index) {
+        const PointDefinition& definition = definitions[index];
+        PlcRuntimePublisherV1::LinkRequest request = {};
+        request.point_id = definition.id;
+        request.expected_type = definition.value_type;
+        request.access = plc_link_access_for_definition(definition);
+
+        const PlcRuntimePublisherV1::LinkResult link_result = publisher.resolveLinkRequest(catalog, request);
+        if (link_result.status != kPlcRuntimeLinkResolved) {
+            continue;
+        }
+
+        symbols[sample_count].point_id = definition.id;
+        symbols[sample_count].expected_type = static_cast<uint8_t>(definition.value_type);
+        symbols[sample_count].access = static_cast<uint8_t>(request.access);
+        relocations[sample_count].code_offset = static_cast<uint32_t>(sample_count * 2u);
+        relocations[sample_count].symbol_index = sample_count;
+        relocations[sample_count].relocation_kind = kPlcRelocationPointIndexU16Le;
+        expected_indices[sample_count] = link_result.runtime_point_index;
+        ++sample_count;
+    }
+
+    if (sample_count == 0u) {
+        return result;
+    }
+
+    const size_t code_size = static_cast<size_t>(sample_count) * 2u;
+    const size_t symbol_offset = sizeof(PlcObjectFileHeaderV1) + code_size;
+    const size_t relocation_offset = symbol_offset + static_cast<size_t>(sample_count) * sizeof(PlcObjectSymbolRecordV1);
+    const size_t object_size = relocation_offset + static_cast<size_t>(sample_count) * sizeof(PlcObjectRelocationRecordV1);
+    uint8_t object_file[sizeof(PlcObjectFileHeaderV1) + (kMaxSampleSymbols * 2u) +
+                        (kMaxSampleSymbols * sizeof(PlcObjectSymbolRecordV1)) +
+                        (kMaxSampleSymbols * sizeof(PlcObjectRelocationRecordV1))] = {};
+
+    PlcObjectFileHeaderV1 header = {};
+    header.magic = kPlcObjectFileMagicV1;
+    header.version = kPlcObjectFileVersionV1;
+    header.code_size = static_cast<uint32_t>(code_size);
+    header.entry_offset = 0u;
+    header.symbol_count = sample_count;
+    header.relocation_count = sample_count;
+    header.symbol_table_offset = static_cast<uint32_t>(symbol_offset);
+    header.relocation_table_offset = static_cast<uint32_t>(relocation_offset);
+    std::memcpy(object_file, &header, sizeof(header));
+    std::memcpy(object_file + symbol_offset, symbols, static_cast<size_t>(sample_count) * sizeof(PlcObjectSymbolRecordV1));
+    std::memcpy(object_file + relocation_offset,
+                relocations,
+                static_cast<size_t>(sample_count) * sizeof(PlcObjectRelocationRecordV1));
+
+    const PlcObjectParseResultV1 parse_result = PlcObjectLinkerV1::parseObjectFile(object_file, object_size);
+    result.parse_ok = parse_result.status == kPlcObjectParseOk;
+    result.sample_symbols = sample_count;
+    if (!result.parse_ok) {
+        result.load_result.parse_status = parse_result.status;
+        result.load_result.status = kPlcSlotLoadParseFailed;
+        return result;
+    }
+
+    result.load_result = PlcSlotLoaderV1::loadObjectFileIntoSlot(publisher,
+                                                                 catalog,
+                                                                 0u,
+                                                                 object_file,
+                                                                 object_size,
+                                                                 200u,
+                                                                 10000u);
+    if (result.load_result.status != kPlcSlotLoadOk) {
+        return result;
+    }
+
+    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(0u)));
+    const uint8_t* linked_code = reinterpret_cast<const uint8_t*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotBytecodeAddress(0u)));
+
+    if (control_block->magic != kPlcProgramControlBlockMagicV1 ||
+        control_block->slot_id != 0u ||
+        control_block->bytecode_size != code_size ||
+        control_block->bytecode_base != PlcSlotLoaderV1::slotBytecodeAddress(0u)) {
+        return result;
+    }
+
+    for (uint16_t i = 0u; i < sample_count; ++i) {
+        const uint16_t patched_index = static_cast<uint16_t>(linked_code[i * 2u]) |
+                                       static_cast<uint16_t>(linked_code[i * 2u + 1u] << 8u);
+        if (patched_index != expected_indices[i]) {
+            return result;
+        }
+    }
+
+    result.load_ok = true;
+    return result;
+}
+
 int main(void)
 {
     // Initial startup LED blink to indicate booting.
@@ -833,9 +948,19 @@ int main(void)
             const PlcLinkerSelfTestResult link_test =
                 plc_run_linker_self_test(nodeNetCore.pointCatalog(), plcRuntimePublisher);
             if (link_test.resolve_ok && link_test.link_ok) {
-                oled_print("[PLC] LNK %u r/%u ok",
+                oled_print("[PLC] LINK %u r/%u ok",
                            static_cast<unsigned>(link_test.resolved_points),
                            static_cast<unsigned>(link_test.sample_relocations));
+                const PlcLoaderSelfTestResult load_test =
+                    plc_run_loader_self_test(nodeNetCore.pointCatalog(), plcRuntimePublisher);
+                if (load_test.parse_ok && load_test.load_ok) {
+                    oled_print("[PLC] SLOT0 %u ok",
+                               static_cast<unsigned>(load_test.sample_symbols));
+                } else {
+                    oled_print("[PLC] SLOT0 %u/%u",
+                               static_cast<unsigned>(load_test.load_result.status),
+                               static_cast<unsigned>(load_test.load_result.parse_status));
+                }
             } else {
                 oled_print("[PLC] LNK fail s%u r%u",
                            static_cast<unsigned>(link_test.link_result.status),
