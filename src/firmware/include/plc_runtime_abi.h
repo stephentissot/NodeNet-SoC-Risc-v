@@ -90,6 +90,12 @@ class PlcRuntimePublisherV1 {
 public:
     static constexpr uint16_t kInvalidPointIndex = 0xFFFFu;
 
+    struct ResolveResult {
+        bool found;
+        bool published;
+        uint16_t runtime_point_index;
+    };
+
     PlcRuntimePublisherV1() = default;
 
     bool begin()
@@ -120,6 +126,11 @@ public:
         return published_count_;
     }
 
+    uint16_t skippedCount() const
+    {
+        return skipped_count_;
+    }
+
     bool headerWritten() const
     {
         return header_written_;
@@ -140,6 +151,17 @@ public:
             return kInvalidPointIndex;
         }
         return runtimeIndexForCatalogIndex(catalog_index);
+    }
+
+    ResolveResult resolvePoint(const PointCatalog& catalog, const PointIdentity& id) const
+    {
+        const size_t catalog_index = catalog.findIndex(id);
+        if (catalog_index >= catalog.size()) {
+            return {false, false, kInvalidPointIndex};
+        }
+
+        const uint16_t runtime_index = runtimeIndexForCatalogIndex(catalog_index);
+        return {true, runtime_index != kInvalidPointIndex, runtime_index};
     }
 
     PlcRuntimeHeaderV1 headerSnapshot() const
@@ -193,6 +215,7 @@ private:
     bool ready_ = false;
     bool header_written_ = false;
     uint16_t published_count_ = 0u;
+    uint16_t skipped_count_ = 0u;
     uint16_t catalog_to_runtime_[PointCatalog::kMaxPoints] = {};
     uint32_t definition_hash_ = 0u;
     uint32_t store_epoch_ = 0u;
@@ -387,6 +410,7 @@ private:
         volatile PlcPointDescriptorV1* descriptors = descriptorPtr();
         const PointDefinition* definitions = catalog.entries();
         published_count_ = 0u;
+        skipped_count_ = 0u;
 
         for (size_t i = 0; i < PointCatalog::kMaxPoints; ++i) {
             catalog_to_runtime_[i] = kInvalidPointIndex;
@@ -395,6 +419,7 @@ private:
         for (size_t i = 0; i < catalog.size(); ++i) {
             const PointDefinition& definition = definitions[i];
             if (!isSupported(definition.value_type)) {
+                ++skipped_count_;
                 continue;
             }
 

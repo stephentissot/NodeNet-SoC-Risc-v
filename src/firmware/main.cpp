@@ -711,8 +711,9 @@ int main(void)
     if (plcRuntimeAbiReady) {
         (void)plcRuntimePublisher.publish(nodeNetCore.pointCatalog(), millis());
         const PlcRuntimeHeaderV1 plcRuntimeHeader = plcRuntimePublisher.headerSnapshot();
-        oled_print("[PLC] ABI %u pts e%lu",
+        oled_print("[PLC] ABI %u/%u e%lu",
                    static_cast<unsigned>(plcRuntimeHeader.descriptor_count),
+                   static_cast<unsigned>(plcRuntimePublisher.skippedCount()),
                    static_cast<unsigned long>(plcRuntimeHeader.store_epoch));
     } else {
         oled_write("[PLC] ABI region bad");
