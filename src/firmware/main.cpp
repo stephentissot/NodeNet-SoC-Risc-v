@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "sdram.h"
+#include "plc_runtime_abi.h"
 #include <ArduinoJson.h>
 #include "bigsister.h"
 #include "led.h"
@@ -704,6 +705,14 @@ int main(void)
 
     static NodeNetCore nodeNetCore(&myNodeNet);
     nodeNetCore.begin();
+
+    PlcRuntimePublisherV1 plcRuntimePublisher;
+    const bool plcRuntimeAbiReady = plcRuntimePublisher.begin();
+    if (plcRuntimeAbiReady) {
+        (void)plcRuntimePublisher.publish(nodeNetCore.pointCatalog(), millis());
+    } else {
+        oled_write("[PLC] ABI region bad");
+    }
     // oled_write("[NN] ctor ok");
     // const bool nodenet_ok = myNodeNet.test(oled_boot_status);
 
@@ -811,6 +820,9 @@ int main(void)
 
     while (1) {
         nodeNetCore.loop();
+        if (plcRuntimeAbiReady) {
+            (void)plcRuntimePublisher.publishIfDue(nodeNetCore.pointCatalog(), millis());
+        }
         if (kEnableSdramBringupTest) {
             sdram_update_test(&sdramFwTest,
                               sdramMasterTest,
