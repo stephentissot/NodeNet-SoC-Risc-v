@@ -78,6 +78,20 @@ struct PlcSlotIconStatus {
 
 static PlcSlotIconStatus g_oled_slot_icons[kOledSlotIconCount] = {};
 static uint32_t g_oled_slot_refresh_deadline_ms = 0u;
+static constexpr uint32_t kPlcSlotDiagRefreshMs = 5000u;
+static void oled_write(const char* text);
+
+struct PlcSlotDiagnosticContext {
+    bool enabled = false;
+    uint8_t slot_id = 0u;
+    uint8_t channel = 0u;
+    PlcSlotIconSource source = PlcSlotIconSource::None;
+    uint16_t input_runtime_index = PlcRuntimePublisherV1::kInvalidPointIndex;
+    uint16_t output_runtime_index = PlcRuntimePublisherV1::kInvalidPointIndex;
+    uint32_t next_refresh_ms = 0u;
+};
+
+static PlcSlotDiagnosticContext g_plc_slot0_diag = {};
 
 enum class SdramFwTestStage : uint8_t {
     Idle = 0,
@@ -135,6 +149,33 @@ static char oled_slot_hex_digit(uint8_t value)
 {
     static const char kHexDigits[] = "0123456789ABCDEF";
     return kHexDigits[value & 0x0Fu];
+}
+
+static char plc_source_short_name(PlcSlotIconSource source)
+{
+    switch (source) {
+    case PlcSlotIconSource::Flash:
+        return 'F';
+    case PlcSlotIconSource::Local:
+        return 'L';
+    case PlcSlotIconSource::None:
+    default:
+        return '-';
+    }
+}
+
+static char plc_status_short_name(uint32_t status)
+{
+    if ((status & 0x80000000u) != 0u) {
+        return 'X';
+    }
+    if (status == 2u) {
+        return 'R';
+    }
+    if (status == 1u) {
+        return 'L';
+    }
+    return 'E';
 }
 
 static void oled_draw_plc_slot_icons()
@@ -297,6 +338,91 @@ static void oled_refresh_plc_slot_icons_if_due(uint32_t now_ms)
         oled_send_buffer_with_plc_icons();
     }
     g_oled_slot_refresh_deadline_ms = now_ms + kOledSlotRefreshMs;
+}
+
+static bool plc_runtime_indices_for_channel(const NodeNetCore& node_core,
+                                            const PointCatalog& catalog,
+                                            const PlcRuntimePublisherV1& publisher,
+                                            uint8_t channel,
+                                            uint16_t* input_runtime_index,
+                                            uint16_t* output_runtime_index)
+{
+    if (input_runtime_index == nullptr || output_runtime_index == nullptr || channel == 0u || channel > 8u) {
+        return false;
+    }
+
+    char input_point_id[16] = {};
+    char output_point_id[16] = {};
+    (void)snprintf(input_point_id, sizeof(input_point_id), "input%u", static_cast<unsigned>(channel));
+    (void)snprintf(output_point_id, sizeof(output_point_id), "output%u", static_cast<unsigned>(channel));
+
+    PointIdentity input_id = {};
+    PointIdentity output_id = {};
+    std::strncpy(input_id.device_id, node_core.deviceId, sizeof(input_id.device_id) - 1u);
+    std::strncpy(input_id.feature, "modbus0.waveshare8ch", sizeof(input_id.feature) - 1u);
+    std::strncpy(input_id.point_id, input_point_id, sizeof(input_id.point_id) - 1u);
+    std::strncpy(output_id.device_id, node_core.deviceId, sizeof(output_id.device_id) - 1u);
+    std::strncpy(output_id.feature, "modbus0.waveshare8ch", sizeof(output_id.feature) - 1u);
+    std::strncpy(output_id.point_id, output_point_id, sizeof(output_id.point_id) - 1u);
+
+    const uint16_t input_index = publisher.runtimeIndexForIdentity(catalog, input_id);
+    const uint16_t output_index = publisher.runtimeIndexForIdentity(catalog, output_id);
+    if (input_index == PlcRuntimePublisherV1::kInvalidPointIndex ||
+        output_index == PlcRuntimePublisherV1::kInvalidPointIndex) {
+        return false;
+    }
+
+    *input_runtime_index = input_index;
+    *output_runtime_index = output_index;
+    return true;
+}
+
+static void plc_slot_diag_begin(uint8_t slot_id,
+                                uint8_t channel,
+                                PlcSlotIconSource source,
+                                uint16_t input_runtime_index,
+                                uint16_t output_runtime_index,
+                                uint32_t now_ms)
+{
+    g_plc_slot0_diag.enabled = true;
+    g_plc_slot0_diag.slot_id = slot_id;
+    g_plc_slot0_diag.channel = channel;
+    g_plc_slot0_diag.source = source;
+    g_plc_slot0_diag.input_runtime_index = input_runtime_index;
+    g_plc_slot0_diag.output_runtime_index = output_runtime_index;
+    g_plc_slot0_diag.next_refresh_ms = now_ms + kPlcSlotDiagRefreshMs;
+}
+
+static void plc_slot_diag_report_if_due(uint32_t now_ms)
+{
+    if (!g_plc_slot0_diag.enabled || (int32_t)(now_ms - g_plc_slot0_diag.next_refresh_ms) < 0) {
+        return;
+    }
+
+    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(g_plc_slot0_diag.slot_id)));
+    char line[32] = {};
+    if (control_block->magic != kPlcProgramControlBlockMagicV1 ||
+        control_block->slot_id != g_plc_slot0_diag.slot_id ||
+        control_block->bytecode_size == 0u ||
+        control_block->bytecode_base == 0u) {
+        (void)snprintf(line,
+                       sizeof(line),
+                       "[PLC] S%u %c empty",
+                       static_cast<unsigned>(g_plc_slot0_diag.slot_id),
+                       plc_source_short_name(g_plc_slot0_diag.source));
+    } else {
+        (void)snprintf(line,
+                       sizeof(line),
+                       "[PLC] S%u %c %c%lu f%lu",
+                       static_cast<unsigned>(g_plc_slot0_diag.slot_id),
+                       plc_source_short_name(g_plc_slot0_diag.source),
+                       plc_status_short_name(control_block->status),
+                       static_cast<unsigned long>(control_block->cycle_counter),
+                       static_cast<unsigned long>(control_block->fault_code));
+    }
+    oled_write(line);
+    g_plc_slot0_diag.next_refresh_ms = now_ms + kPlcSlotDiagRefreshMs;
 }
 
 static bool oled_init(uint8_t addr7 = 0x3C)
@@ -1667,7 +1793,8 @@ int main(void)
     PlcRuntimePublisherV1 plcRuntimePublisher;
     const bool plcRuntimeAbiReady = plcRuntimePublisher.begin();
     if (plcRuntimeAbiReady) {
-        (void)plcRuntimePublisher.publish(nodeNetCore.pointCatalog(), millis());
+        const uint32_t boot_now_ms = millis();
+        (void)plcRuntimePublisher.publish(nodeNetCore.pointCatalog(), boot_now_ms);
         nodeNetCore.attachPlcRuntimePublisher(&plcRuntimePublisher);
         oled_configure_plc_slot_icon(0u, 0u, PlcSlotIconSource::None);
         const PlcRuntimeHeaderV1 plcRuntimeHeader = plcRuntimePublisher.headerSnapshot();
@@ -1716,6 +1843,24 @@ int main(void)
                                                  : PlcSlotIconSource::None);
         (void)oled_refresh_plc_slot_icon(0u);
         if (slot0_boot.load_ok) {
+            uint16_t input_runtime_index = PlcRuntimePublisherV1::kInvalidPointIndex;
+            uint16_t output_runtime_index = PlcRuntimePublisherV1::kInvalidPointIndex;
+            if (plc_runtime_indices_for_channel(nodeNetCore,
+                                                nodeNetCore.pointCatalog(),
+                                                plcRuntimePublisher,
+                                                slot0_boot.channel,
+                                                &input_runtime_index,
+                                                &output_runtime_index)) {
+                oled_print("[PLC] IDX %u>%u",
+                           static_cast<unsigned>(input_runtime_index),
+                           static_cast<unsigned>(output_runtime_index));
+                plc_slot_diag_begin(0u,
+                                    slot0_boot.channel,
+                                    g_oled_slot_icons[0].source,
+                                    input_runtime_index,
+                                    output_runtime_index,
+                                    boot_now_ms);
+            }
             if (slot0_boot.source == PlcSlot0BootSource::FlashPackage) {
                 oled_print(slot0_boot.flash_seeded ? "[PLC] VM S0 flash seed"
                                                    : "[PLC] VM S0 flash ok");
@@ -1839,21 +1984,22 @@ int main(void)
 
     while (1) {
         nodeNetCore.loop();
-        oled_refresh_plc_slot_icons_if_due(millis());
+        const uint32_t now_ms = millis();
+        oled_refresh_plc_slot_icons_if_due(now_ms);
+        plc_slot_diag_report_if_due(now_ms);
         if (plcRuntimeAbiReady) {
-            (void)plcRuntimePublisher.publishIfDue(nodeNetCore.pointCatalog(), millis());
+            (void)plcRuntimePublisher.publishIfDue(nodeNetCore.pointCatalog(), now_ms);
         }
         if (kEnableSdramBringupTest) {
             sdram_update_test(&sdramFwTest,
                               sdramMasterTest,
                               sdram_probe_addr0,
                               sdram_probe_addr1,
-                              millis(),
+                              now_ms,
                               ledGreen,
                               ledYellow);
         }
         //nodenet_process_pending_events();
-        uint32_t now_ms = millis();
         if ((int32_t)(now_ms - next_toggle_ms) >= 0) {
             // const uint16_t coil_addr = static_cast<uint16_t>(modbus_channel - 1u);
             // const uint8_t idx = static_cast<uint8_t>(modbus_channel - 1u);
