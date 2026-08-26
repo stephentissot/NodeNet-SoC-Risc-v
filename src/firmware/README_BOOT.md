@@ -13,8 +13,11 @@ This document defines the stage0 image format used by `src/bootloader/boot_stage
 ## Flash Layout (current)
 
 - `0x000000-0x1FFFFF`: FPGA configuration area (reserved)
-- `0x200000-0x203FFF`: parameter area
-- `0x204000-0x243FFF`: FlashDB KV area
+- `0x200000-0x202FFF`: raw point-catalog slot
+- `0x203000-0x203FFF`: reserved gap
+- `0x204000-0x223FFF`: raw PLC linked-package slot
+- `0x224000-0x242FFF`: FlashDB KV area
+- `0x243000-0x243FFF`: flash low-level self-test scratch sector
 - `0x244000-...`: stage0 application image slot (64-byte header + SDRAM payload)
 
 Stage0 currently reads the image header from `0x244000`.
@@ -72,6 +75,7 @@ make flash-fw-run     # flash-fw + FPGA RAM reload (stage0 restart)
 - On validation failure, stage0 enters a LED blink fault loop.
 - Running firmware from SDRAM requires the application to be linked for SDRAM addresses.
 - Runtime SDRAM self-tests must avoid destructive writes at `SDRAM_BASE`; the current firmware uses a dedicated scratch area for that.
+- Large PLC deployment artifacts should use the raw PLC flash slot directly instead of FlashDB.
 - Current hardware status: stage0 handoff and full `main()` execution from SDRAM are validated.
 
 ## Stage0 Blink Codes

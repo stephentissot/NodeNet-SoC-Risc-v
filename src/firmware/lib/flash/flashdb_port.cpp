@@ -13,10 +13,10 @@ static Flash* g_flash = nullptr;
 static fdb_kvdb g_kvdb;
 static bool g_kvdb_ready = false;
 
-// Keep FlashDB strictly inside firmware runtime data window and reserve
-// one sector for low-level flash self-test scratch.
-static constexpr uint32_t kFlashDbOffset = Flash::kRuntimeDataBase;
-static constexpr uint32_t kFlashDbSize = Flash::kRuntimeDataSize - Flash::kSectorSize;
+// Keep FlashDB away from the raw point-catalog and PLC package slots.
+// One sector at the end remains reserved for low-level flash self-test scratch.
+static constexpr uint32_t kFlashDbOffset = Flash::kFlashDbBase;
+static constexpr uint32_t kFlashDbSize = Flash::kFlashDbSize;
 static constexpr const char* kFlashDbPartitionName = "nodenet_kv";
 
 static bool read_span_raw(uint32_t flash_offset, uint8_t* out, size_t len) {

@@ -9,6 +9,7 @@
 #include <ArduinoJson.h>
 #include "bigsister.h"
 #include "led.h"
+#include "flash.h"
 #include "wb_sdram_test_master.h"
 #include "i2c.h"
 #include "u8g2.h"
@@ -87,6 +88,7 @@ static constexpr uint32_t kSdramRefreshMs = 250u;
 static constexpr uint32_t kSdramOneShotTimeoutMs = 1000u;
 static constexpr bool kEnableSdramBringupTest = false;
 static constexpr bool kEnablePlcLinkerSelfTest = true;
+static constexpr uint32_t FLASH0_BASE = 0x10007000u;
 static constexpr uint32_t kSdramFailTimeout = 1u;
 static constexpr uint32_t kSdramFailAck = 2u;
 static constexpr uint32_t kSdramFailMismatch = 3u;
@@ -679,10 +681,58 @@ struct PlcLoaderSelfTestResult {
     bool parse_ok;
     bool load_ok;
     bool package_ok;
+    bool flash_ok;
     uint16_t sample_symbols;
     PlcSlotLoadResultV1 load_result;
     PlcSlotLoadResultV1 package_load_result;
+    PlcSlotLoadResultV1 flash_load_result;
 };
+
+static bool plc_flash_erase_range(Flash& flash, uint32_t flash_offset, uint32_t size)
+{
+    if ((flash_offset % Flash::kSectorSize) != 0u || (size % Flash::kSectorSize) != 0u) {
+        return false;
+    }
+
+    for (uint32_t offset = 0u; offset < size; offset += Flash::kSectorSize) {
+        if (!flash.eraseSector(flash_offset + offset)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool plc_flash_write_erased_bytes(Flash& flash, uint32_t flash_offset, const uint8_t* data, size_t size)
+{
+    if (data == nullptr) {
+        return false;
+    }
+
+    uint8_t page[Flash::kPageSize] = {};
+    const uint32_t first_page_base = flash_offset & ~(Flash::kPageSize - 1u);
+    const uint32_t first_page_offset = flash_offset - first_page_base;
+    size_t consumed = 0u;
+    uint32_t page_base = first_page_base;
+
+    while (consumed < size) {
+        std::memset(page, 0xFF, sizeof(page));
+        const uint32_t page_offset = (page_base == first_page_base) ? first_page_offset : 0u;
+        size_t chunk = Flash::kPageSize - page_offset;
+        if (chunk > (size - consumed)) {
+            chunk = size - consumed;
+        }
+
+        std::memcpy(page + page_offset, data + consumed, chunk);
+        if (!flash.writePage(page_base, page)) {
+            return false;
+        }
+
+        consumed += chunk;
+        page_base += Flash::kPageSize;
+    }
+
+    return true;
+}
 
 static bool plc_verify_loaded_slot(uint16_t slot_id,
                                    size_t code_size,
@@ -868,6 +918,7 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
     result.parse_ok = false;
     result.load_ok = false;
     result.package_ok = false;
+    result.flash_ok = false;
 
     const PointDefinition* definitions = catalog.entries();
     constexpr uint16_t kMaxSampleSymbols = 3u;
@@ -1016,6 +1067,40 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
     }
 
     result.package_ok = true;
+
+    Flash flash(FLASH0_BASE);
+    const size_t flash_package_size = sizeof(PlcLinkedProgramPackageHeaderV1) + code_size;
+    const uint32_t flash_erase_size = static_cast<uint32_t>(((flash_package_size + Flash::kSectorSize - 1u) /
+                                                             Flash::kSectorSize) * Flash::kSectorSize);
+    if (flash_package_size > Flash::kPlcPackageSlotSize ||
+        !plc_flash_erase_range(flash, Flash::kPlcPackageSlotBase, flash_erase_size) ||
+        !plc_flash_write_erased_bytes(flash,
+                                      Flash::kPlcPackageSlotBase,
+                                      package_bytes,
+                                      flash_package_size)) {
+        result.flash_load_result.status = kPlcSlotLoadFlashReadFailed;
+        return result;
+    }
+
+    result.flash_load_result = PlcSlotLoaderV1::loadLinkedProgramPackageFromFlash(publisher,
+                                                                                   flash,
+                                                                                   2u,
+                                                                                   Flash::kPlcPackageSlotBase,
+                                                                                   Flash::kPlcPackageSlotSize);
+    if (result.flash_load_result.status != kPlcSlotLoadOk) {
+        return result;
+    }
+    if (!plc_verify_loaded_slot(2u,
+                                code_size,
+                                sample_count,
+                                expected_indices,
+                                300u,
+                                12000u,
+                                publisher.storeEpoch())) {
+        return result;
+    }
+
+    result.flash_ok = true;
     return result;
 }
 
@@ -1079,14 +1164,14 @@ int main(void)
                            static_cast<unsigned>(link_test.sample_relocations));
                 const PlcLoaderSelfTestResult load_test =
                     plc_run_loader_self_test(nodeNetCore.pointCatalog(), plcRuntimePublisher);
-                if (load_test.parse_ok && load_test.load_ok && load_test.package_ok) {
-                    oled_print("[PLC] SLOT0-1 %u ok",
+                if (load_test.parse_ok && load_test.load_ok && load_test.package_ok && load_test.flash_ok) {
+                    oled_print("[PLC] SLOT0-2 %u ok",
                                static_cast<unsigned>(load_test.sample_symbols));
                 } else {
                     oled_print("[PLC] SLOT %u/%u/%u",
                                static_cast<unsigned>(load_test.load_result.status),
                                static_cast<unsigned>(load_test.package_load_result.status),
-                               static_cast<unsigned>(load_test.load_result.parse_status));
+                               static_cast<unsigned>(load_test.flash_load_result.status));
                 }
             } else {
                 oled_print("[PLC] LNK fail s%u r%u",

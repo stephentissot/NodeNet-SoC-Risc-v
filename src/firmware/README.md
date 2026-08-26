@@ -415,7 +415,11 @@ flash.readUniqueIdAscii(device_id, sizeof(device_id));
 Implementation notes:
 - SPI SCK uses the ECP5 dedicated USRMCLK path (not a normal GPIO pin).
 - Firmware-side protection keeps writes/erases out of the boot region.
-- FlashDB uses partition `nodenet_kv` at `0x204000–0x243FFF`.
+- Raw point catalog uses `0x200000-0x202FFF`.
+- Raw PLC linked-package storage uses `0x204000-0x223FFF`.
+- FlashDB uses partition `nodenet_kv` at `0x224000-0x242FFF`.
+- `0x243000-0x243FFF` stays reserved for low-level flash self-test scratch.
+- Large PLC artifacts should prefer the raw PLC package slot over FlashDB.
 - The ASCII `deviceId` is derived from the 64-bit factory UID and contains only `a-z`, `A-Z`, and `0-9`.
 
 Detailed register-level documentation is available in [../wbDevices/README_FLASH.md](../wbDevices/README_FLASH.md).

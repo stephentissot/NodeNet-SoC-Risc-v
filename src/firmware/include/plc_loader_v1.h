@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "flash.h"
 #include "plc_linker_v1.h"
 
 static constexpr uint32_t kPlcSlotBytecodeRegionBaseV1 = SDRAM_BASE + 0x00130000u;
@@ -34,6 +35,7 @@ enum PlcSlotLoadStatusV1 : uint8_t {
     kPlcSlotLoadLinkFailed = 6u,
     kPlcSlotLoadAbiMismatch = 7u,
     kPlcSlotLoadChecksumMismatch = 8u,
+    kPlcSlotLoadFlashReadFailed = 9u,
 };
 
 #pragma pack(push, 1)
@@ -333,6 +335,91 @@ public:
         return result;
     }
 
+    static PlcSlotLoadResultV1 loadLinkedProgramPackageFromFlash(const PlcRuntimePublisherV1& publisher,
+                                                                 const Flash& flash,
+                                                                 uint16_t slot_id,
+                                                                 uint32_t flash_offset,
+                                                                 uint32_t flash_capacity)
+    {
+        PlcSlotLoadResultV1 result = {};
+        result.status = kPlcSlotLoadInvalidArgument;
+        result.parse_status = kPlcObjectParseOk;
+        result.link_result.status = kPlcObjectLinkOk;
+        result.link_result.resolve_status = kPlcRuntimeLinkResolved;
+
+        if (!regionAvailable()) {
+            result.status = kPlcSlotLoadRegionUnavailable;
+            return result;
+        }
+        if (slot_id >= kPlcSlotCountV1) {
+            result.status = kPlcSlotLoadSlotOutOfRange;
+            return result;
+        }
+        if (flash_capacity < sizeof(PlcLinkedProgramPackageHeaderV1)) {
+            result.status = kPlcSlotLoadParseFailed;
+            return result;
+        }
+
+        PlcLinkedProgramPackageHeaderV1 package_header = {};
+        if (!flashReadBytes(flash, flash_offset, &package_header, sizeof(package_header))) {
+            result.status = kPlcSlotLoadFlashReadFailed;
+            return result;
+        }
+        result.status = validateLinkedProgramPackageHeader(package_header, flash_capacity);
+        if (result.status != kPlcSlotLoadOk) {
+            return result;
+        }
+
+        const PlcRuntimeHeaderV1 runtime_header = publisher.headerSnapshot();
+        if (package_header.abi_version != kPlcRuntimeAbiV1Version ||
+            package_header.runtime_header_addr != kPlcRuntimeHeaderAddr ||
+            package_header.store_epoch != runtime_header.store_epoch) {
+            result.status = kPlcSlotLoadAbiMismatch;
+            return result;
+        }
+
+        result.slot_bytecode_addr = slotBytecodeAddress(slot_id);
+        result.slot_manifest_addr = slotManifestAddress(slot_id);
+        result.slot_control_addr = slotControlAddress(slot_id);
+        result.layout = slotLayout(slot_id);
+        if (package_header.code_size > result.layout.linked_code_capacity) {
+            result.status = kPlcSlotLoadBytecodeTooLarge;
+            return result;
+        }
+
+        uint8_t* linked_bytecode = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(result.layout.linked_code_addr));
+        if (!flashReadBytes(flash,
+                            flash_offset + static_cast<uint32_t>(sizeof(PlcLinkedProgramPackageHeaderV1)),
+                            linked_bytecode,
+                            package_header.code_size)) {
+            result.status = kPlcSlotLoadFlashReadFailed;
+            return result;
+        }
+        if (checksum32(linked_bytecode, package_header.code_size) != package_header.linked_code_checksum) {
+            result.status = kPlcSlotLoadChecksumMismatch;
+            return result;
+        }
+
+        result.link_result.linked_code_size = package_header.code_size;
+        result.link_result.entry_offset = package_header.entry_offset;
+        writeLoadedSlotMetadata(slot_id,
+                                result.slot_manifest_addr,
+                                result.slot_control_addr,
+                                result.layout,
+                                package_header.code_size,
+                                package_header.entry_offset,
+                                package_header.symbol_count,
+                                package_header.relocation_count,
+                                package_header.max_instructions_per_scan,
+                                package_header.max_scan_time_us,
+                                package_header.runtime_header_addr,
+                                package_header.store_epoch,
+                                package_header.linked_code_checksum);
+
+        result.status = kPlcSlotLoadOk;
+        return result;
+    }
+
     static PlcSlotLoadResultV1 loadObjectFileIntoSlot(const PlcRuntimePublisherV1& publisher,
                                                       const PointCatalog& catalog,
                                                       uint16_t slot_id,
@@ -371,21 +458,61 @@ private:
         }
 
         const auto* header = reinterpret_cast<const PlcLinkedProgramPackageHeaderV1*>(package_bytes);
-        if (header->magic != kPlcLinkedProgramPackageMagicV1 || header->version != kPlcRuntimeAbiV1Version) {
-            return kPlcSlotLoadParseFailed;
-        }
-        if (header->entry_offset > header->code_size) {
-            return kPlcSlotLoadParseFailed;
-        }
-
-        const size_t code_offset = sizeof(PlcLinkedProgramPackageHeaderV1);
-        if ((code_offset + static_cast<size_t>(header->code_size)) > package_size) {
-            return kPlcSlotLoadParseFailed;
+        const PlcSlotLoadStatusV1 header_status =
+            validateLinkedProgramPackageHeader(*header, static_cast<uint32_t>(package_size));
+        if (header_status != kPlcSlotLoadOk) {
+            return header_status;
         }
 
         package_header = *header;
-        linked_code_bytes = package_bytes + code_offset;
+        linked_code_bytes = package_bytes + sizeof(PlcLinkedProgramPackageHeaderV1);
         return kPlcSlotLoadOk;
+    }
+
+    static PlcSlotLoadStatusV1 validateLinkedProgramPackageHeader(const PlcLinkedProgramPackageHeaderV1& header,
+                                                                  uint32_t package_capacity)
+    {
+        if (header.magic != kPlcLinkedProgramPackageMagicV1 ||
+            header.version != kPlcRuntimeAbiV1Version) {
+            return kPlcSlotLoadParseFailed;
+        }
+        if (header.entry_offset > header.code_size) {
+            return kPlcSlotLoadParseFailed;
+        }
+
+        const uint32_t code_offset = static_cast<uint32_t>(sizeof(PlcLinkedProgramPackageHeaderV1));
+        if ((code_offset + header.code_size) > package_capacity) {
+            return kPlcSlotLoadParseFailed;
+        }
+        return kPlcSlotLoadOk;
+    }
+
+    static bool flashReadBytes(const Flash& flash, uint32_t flash_offset, void* out, uint32_t size)
+    {
+        if (out == nullptr) {
+            return false;
+        }
+
+        uint8_t page[Flash::kPageSize] = {};
+        uint8_t* out_bytes = static_cast<uint8_t*>(out);
+        uint32_t copied = 0u;
+        while (copied < size) {
+            const uint32_t pos = flash_offset + copied;
+            const uint32_t page_base = pos & ~(Flash::kPageSize - 1u);
+            const uint32_t page_offset = pos - page_base;
+            if (!flash.readPage(page_base, page)) {
+                return false;
+            }
+
+            uint32_t chunk = Flash::kPageSize - page_offset;
+            if (chunk > (size - copied)) {
+                chunk = size - copied;
+            }
+            std::memcpy(out_bytes + copied, page + page_offset, chunk);
+            copied += chunk;
+        }
+
+        return true;
     }
 
     static void writeLoadedSlotMetadata(uint16_t slot_id,
