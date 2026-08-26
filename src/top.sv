@@ -108,6 +108,14 @@ module top (
     wire        flash_spi_clk;
     wire [31:0] sdram_dat;
     wire        sdram_ack;
+    wire [31:0] sdram_cpu_dat;
+    wire        sdram_cpu_ack;
+    wire [31:0] sdram_arb_adr;
+    wire [31:0] sdram_arb_dat_w;
+    wire [3:0]  sdram_arb_sel;
+    wire        sdram_arb_we;
+    wire        sdram_arb_cyc;
+    wire        sdram_arb_stb;
     wire        sdram_init_done;
     wire        sdram_init_error;
     wire        sdram_dbg_ack;
@@ -212,7 +220,7 @@ module top (
                       wb_status_rmw_read_sel ? status_rmw_read_dat :
                       wb_status_rmw_write_sel ? status_rmw_write_dat :
                       wb_uart1_sel   ? uart1_dat   :
-                      wb_sdram_sel   ? sdram_dat   :
+                      wb_sdram_sel   ? sdram_cpu_dat :
                       32'h0000_0000;
     assign wb_ack = (wb_rom_sel     && rom_ack)     ||
                     (wb_ram_sel     && ram_ack)     ||
@@ -227,7 +235,7 @@ module top (
                     (wb_status_rmw_read_sel && status_rmw_read_ack) ||
                     (wb_status_rmw_write_sel && status_rmw_write_ack) ||
                     (wb_uart1_sel   && uart1_ack)   ||
-                    (wb_sdram_sel   && sdram_ack);
+                    (wb_sdram_sel   && sdram_cpu_ack);
 
     assign status_dat = {
         15'd0,
@@ -536,6 +544,38 @@ module top (
         .wbs_ack_o(ram_ack)
     );
 
+    wb_sdram_rr_arbiter sdram_arbiter (
+        .clk(sys_clk),
+        .rst(reset),
+
+        .m0_adr_i(wb_adr),
+        .m0_dat_i(wb_dat_o),
+        .m0_sel_i(wb_sel),
+        .m0_we_i(wb_we),
+        .m0_cyc_i(wb_sdram_sel),
+        .m0_stb_i(wb_sdram_sel),
+        .m0_dat_o(sdram_cpu_dat),
+        .m0_ack_o(sdram_cpu_ack),
+
+        .m1_adr_i(32'd0),
+        .m1_dat_i(32'd0),
+        .m1_sel_i(4'd0),
+        .m1_we_i(1'b0),
+        .m1_cyc_i(1'b0),
+        .m1_stb_i(1'b0),
+        .m1_dat_o(),
+        .m1_ack_o(),
+
+        .s_adr_o(sdram_arb_adr),
+        .s_dat_o(sdram_arb_dat_w),
+        .s_sel_o(sdram_arb_sel),
+        .s_we_o(sdram_arb_we),
+        .s_cyc_o(sdram_arb_cyc),
+        .s_stb_o(sdram_arb_stb),
+        .s_dat_i(sdram_dat),
+        .s_ack_i(sdram_ack)
+    );
+
     wb_sdram_litedram #(
         .ADDR(SDRAM_BASE),
         .CLK_FREQ_MHZ(25),
@@ -545,12 +585,12 @@ module top (
         .rst(reset),
         .sdram_clk_i(sdram_clk_phase),
 
-        .wb_adr_i(wb_adr),
-        .wb_dat_i(wb_dat_o),
-        .wb_sel_i(wb_sel),
-        .wb_we_i(wb_we),
-        .wb_cyc_i(wb_sdram_sel),
-        .wb_stb_i(wb_sdram_sel),
+        .wb_adr_i(sdram_arb_adr),
+        .wb_dat_i(sdram_arb_dat_w),
+        .wb_sel_i(sdram_arb_sel),
+        .wb_we_i(sdram_arb_we),
+        .wb_cyc_i(sdram_arb_cyc),
+        .wb_stb_i(sdram_arb_stb),
 
         .wb_dat_o(sdram_dat),
         .wb_ack_o(sdram_ack),

@@ -1119,6 +1119,10 @@ Objective:
 
 - allow CPU and `plc_vm` to access the same SDRAM safely
 
+Reference design note:
+
+- see `Documentation/plc_vm_step1_shared_sdram.md`
+
 Tasks:
 
 1. Introduce a minimal two-master Wishbone arbitration block between SDRAM and
