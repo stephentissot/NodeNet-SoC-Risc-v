@@ -10,11 +10,14 @@
 
 static constexpr uint32_t kPlcRuntimeAbiV1Magic = 0x31564D50u;
 static constexpr uint16_t kPlcRuntimeAbiV1Version = 1u;
-static constexpr uint32_t kPlcRuntimeHeaderAddr = SDRAM_BASE + 0x00050000u;
-static constexpr uint32_t kPlcRuntimeDescriptorBase = SDRAM_BASE + 0x00050100u;
-static constexpr uint32_t kPlcRuntimeValueBase = SDRAM_BASE + 0x00060000u;
-static constexpr uint32_t kPlcRuntimeStatusBase = SDRAM_BASE + 0x00070000u;
+static constexpr uint32_t kPlcRuntimeHeaderAddr = SDRAM_BASE + 0x00100000u;
+static constexpr uint32_t kPlcRuntimeDescriptorBase = SDRAM_BASE + 0x00100100u;
+static constexpr uint32_t kPlcRuntimeValueBase = SDRAM_BASE + 0x00110000u;
+static constexpr uint32_t kPlcRuntimeStatusBase = SDRAM_BASE + 0x00120000u;
 static constexpr uint32_t kPlcRuntimePublishPeriodMs = 100u;
+static constexpr uint32_t kPlcRuntimeDescriptorWindowSize = 0x00010000u;
+static constexpr uint32_t kPlcRuntimeValueWindowSize = 0x00010000u;
+static constexpr uint32_t kPlcRuntimeStatusWindowSize = 0x00010000u;
 
 enum PlcRuntimeValueTypeV1 : uint8_t {
     kPlcRuntimeTypeInvalid = 0u,
@@ -182,7 +185,12 @@ private:
     static bool regionAvailable()
     {
         const uintptr_t sdram_end = reinterpret_cast<uintptr_t>(&_sdram_end);
-        return sdram_end <= static_cast<uintptr_t>(kPlcRuntimeHeaderAddr);
+        const uintptr_t sdram_limit = static_cast<uintptr_t>(SDRAM_BASE + SDRAM_SIZE);
+        const uintptr_t status_limit = static_cast<uintptr_t>(kPlcRuntimeStatusBase + kPlcRuntimeStatusWindowSize);
+        return sdram_end <= static_cast<uintptr_t>(kPlcRuntimeHeaderAddr) &&
+               static_cast<uintptr_t>(kPlcRuntimeDescriptorBase + kPlcRuntimeDescriptorWindowSize) <= sdram_limit &&
+               static_cast<uintptr_t>(kPlcRuntimeValueBase + kPlcRuntimeValueWindowSize) <= sdram_limit &&
+               status_limit <= sdram_limit;
     }
 
     static uint32_t fnv1aAppend(uint32_t hash, const void* data, size_t len)
