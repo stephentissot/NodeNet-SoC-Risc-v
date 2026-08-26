@@ -15,6 +15,7 @@ static constexpr uint16_t kPlcSlotCountV1 = 16u;
 static constexpr uint32_t kPlcSlotBytecodeStrideV1 = kPlcSlotBytecodeRegionSizeV1 / kPlcSlotCountV1;
 static constexpr uint32_t kPlcProgramControlBlockMagicV1 = 0x31424350u;
 static constexpr uint32_t kPlcLinkedImageMagicV1 = 0x31474D49u;
+static constexpr uint32_t kPlcLinkedProgramPackageMagicV1 = 0x31474B50u;
 static constexpr uint32_t kPlcSlotDirectoryMagicV1 = 0x31524453u;
 static constexpr uint32_t kPlcSlotStackSizeBytesV1 = 1024u;
 static constexpr uint32_t kPlcSlotTimerSizeBytesV1 = 512u;
@@ -31,6 +32,8 @@ enum PlcSlotLoadStatusV1 : uint8_t {
     kPlcSlotLoadBytecodeTooLarge = 4u,
     kPlcSlotLoadParseFailed = 5u,
     kPlcSlotLoadLinkFailed = 6u,
+    kPlcSlotLoadAbiMismatch = 7u,
+    kPlcSlotLoadChecksumMismatch = 8u,
 };
 
 #pragma pack(push, 1)
@@ -68,6 +71,23 @@ struct PlcLinkedImageHeaderV1 {
     uint32_t reserved0;
 };
 
+struct PlcLinkedProgramPackageHeaderV1 {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t abi_version;
+    uint32_t flags;
+    uint32_t code_size;
+    uint32_t entry_offset;
+    uint16_t symbol_count;
+    uint16_t relocation_count;
+    uint32_t max_instructions_per_scan;
+    uint32_t max_scan_time_us;
+    uint32_t runtime_header_addr;
+    uint32_t store_epoch;
+    uint32_t linked_code_checksum;
+    uint32_t reserved0;
+};
+
 struct PlcSlotDirectoryHeaderV1 {
     uint32_t magic;
     uint16_t version;
@@ -100,6 +120,7 @@ struct PlcSlotManifestV1 {
 
 static_assert(sizeof(PlcProgramControlBlockV1) == 64u, "Unexpected control block size");
 static_assert(sizeof(PlcLinkedImageHeaderV1) == 36u, "Unexpected linked image header size");
+static_assert(sizeof(PlcLinkedProgramPackageHeaderV1) == 48u, "Unexpected linked program package header size");
 static_assert(sizeof(PlcSlotDirectoryHeaderV1) == 16u, "Unexpected slot directory header size");
 static_assert(sizeof(PlcSlotManifestV1) == 64u, "Unexpected slot manifest size");
 
@@ -222,67 +243,91 @@ public:
             return result;
         }
 
-        auto* linked_header = reinterpret_cast<PlcLinkedImageHeaderV1*>(
-            static_cast<uintptr_t>(result.layout.linked_image_header_addr));
-        PlcLinkedImageHeaderV1 next_header = {};
-        next_header.magic = kPlcLinkedImageMagicV1;
-        next_header.version = kPlcRuntimeAbiV1Version;
-        next_header.slot_id = slot_id;
-        next_header.code_size = object_image.code_size;
-        next_header.entry_offset = object_image.entry_offset;
-        next_header.symbol_count = object_image.symbol_count;
-        next_header.relocation_count = object_image.relocation_count;
-        next_header.runtime_header_addr = kPlcRuntimeHeaderAddr;
-        next_header.linked_code_checksum = checksum32(linked_bytecode, object_image.code_size);
-        std::memcpy(linked_header, &next_header, sizeof(next_header));
+        const PlcRuntimeHeaderV1 runtime_header = publisher.headerSnapshot();
+        writeLoadedSlotMetadata(slot_id,
+                                result.slot_manifest_addr,
+                                result.slot_control_addr,
+                                result.layout,
+                                object_image.code_size,
+                                object_image.entry_offset,
+                                object_image.symbol_count,
+                                object_image.relocation_count,
+                                max_instructions_per_scan,
+                                max_scan_time_us,
+                                kPlcRuntimeHeaderAddr,
+                                runtime_header.store_epoch,
+                                checksum32(linked_bytecode, object_image.code_size));
+
+        result.status = kPlcSlotLoadOk;
+        return result;
+    }
+
+    static PlcSlotLoadResultV1 loadLinkedProgramPackageIntoSlot(const PlcRuntimePublisherV1& publisher,
+                                                                uint16_t slot_id,
+                                                                const uint8_t* package_bytes,
+                                                                size_t package_size)
+    {
+        PlcSlotLoadResultV1 result = {};
+        result.status = kPlcSlotLoadInvalidArgument;
+        result.parse_status = kPlcObjectParseOk;
+        result.link_result.status = kPlcObjectLinkOk;
+        result.link_result.resolve_status = kPlcRuntimeLinkResolved;
+
+        if (!regionAvailable()) {
+            result.status = kPlcSlotLoadRegionUnavailable;
+            return result;
+        }
+        if (slot_id >= kPlcSlotCountV1) {
+            result.status = kPlcSlotLoadSlotOutOfRange;
+            return result;
+        }
+
+        PlcLinkedProgramPackageHeaderV1 package_header = {};
+        const uint8_t* linked_code_bytes = nullptr;
+        result.status = parseLinkedProgramPackage(package_bytes, package_size, package_header, linked_code_bytes);
+        if (result.status != kPlcSlotLoadOk) {
+            return result;
+        }
 
         const PlcRuntimeHeaderV1 runtime_header = publisher.headerSnapshot();
-        auto* directory_header = reinterpret_cast<PlcSlotDirectoryHeaderV1*>(
-            static_cast<uintptr_t>(slotDirectoryHeaderAddress()));
-        PlcSlotDirectoryHeaderV1 next_directory = {};
-        next_directory.magic = kPlcSlotDirectoryMagicV1;
-        next_directory.version = kPlcRuntimeAbiV1Version;
-        next_directory.slot_count = kPlcSlotCountV1;
-        next_directory.entry_size = static_cast<uint16_t>(sizeof(PlcSlotManifestV1));
-        next_directory.directory_epoch = runtime_header.store_epoch;
-        std::memcpy(directory_header, &next_directory, sizeof(next_directory));
+        if (package_header.abi_version != kPlcRuntimeAbiV1Version ||
+            package_header.runtime_header_addr != kPlcRuntimeHeaderAddr ||
+            package_header.store_epoch != runtime_header.store_epoch) {
+            result.status = kPlcSlotLoadAbiMismatch;
+            return result;
+        }
 
-        auto* slot_manifest = reinterpret_cast<PlcSlotManifestV1*>(static_cast<uintptr_t>(result.slot_manifest_addr));
-        PlcSlotManifestV1 next_manifest = {};
-        next_manifest.slot_id = slot_id;
-        next_manifest.version = kPlcRuntimeAbiV1Version;
-        next_manifest.status = kPlcSlotManifestStatusLoadedV1;
-        next_manifest.control_block_addr = result.slot_control_addr;
-        next_manifest.linked_image_header_addr = result.layout.linked_image_header_addr;
-        next_manifest.linked_code_addr = result.layout.linked_code_addr;
-        next_manifest.linked_code_size = object_image.code_size;
-        next_manifest.stack_base = result.layout.stack_base;
-        next_manifest.stack_size = result.layout.stack_size / kPlcSlotStackEntryBytesV1;
-        next_manifest.timer_base = result.layout.timer_base;
-        next_manifest.timer_count = result.layout.timer_size / kPlcSlotTimerEntryBytesV1;
-        next_manifest.scratch_base = result.layout.scratch_base;
-        next_manifest.scratch_size = result.layout.scratch_size;
-        next_manifest.runtime_header_addr = runtime_header.descriptor_count != 0u ? kPlcRuntimeHeaderAddr : 0u;
-        next_manifest.linked_code_checksum = next_header.linked_code_checksum;
-        next_manifest.load_epoch = runtime_header.store_epoch;
-        std::memcpy(slot_manifest, &next_manifest, sizeof(next_manifest));
+        result.slot_bytecode_addr = slotBytecodeAddress(slot_id);
+        result.slot_manifest_addr = slotManifestAddress(slot_id);
+        result.slot_control_addr = slotControlAddress(slot_id);
+        result.layout = slotLayout(slot_id);
+        if (package_header.code_size > result.layout.linked_code_capacity) {
+            result.status = kPlcSlotLoadBytecodeTooLarge;
+            return result;
+        }
 
-        auto* control_block = reinterpret_cast<PlcProgramControlBlockV1*>(static_cast<uintptr_t>(result.slot_control_addr));
-        PlcProgramControlBlockV1 next = {};
-        next.magic = kPlcProgramControlBlockMagicV1;
-        next.version = kPlcRuntimeAbiV1Version;
-        next.slot_id = slot_id;
-        next.pc = object_image.entry_offset;
-        next.status = 1u;
-        next.bytecode_base = result.layout.linked_code_addr;
-        next.bytecode_size = object_image.code_size;
-        next.stack_base = result.layout.stack_base;
-        next.stack_size = result.layout.stack_size / kPlcSlotStackEntryBytesV1;
-        next.timer_base = result.layout.timer_base;
-        next.timer_count = result.layout.timer_size / kPlcSlotTimerEntryBytesV1;
-        next.max_instructions_per_scan = max_instructions_per_scan;
-        next.max_scan_time_us = max_scan_time_us;
-        std::memcpy(control_block, &next, sizeof(next));
+        uint8_t* linked_bytecode = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(result.layout.linked_code_addr));
+        std::memcpy(linked_bytecode, linked_code_bytes, package_header.code_size);
+        if (checksum32(linked_bytecode, package_header.code_size) != package_header.linked_code_checksum) {
+            result.status = kPlcSlotLoadChecksumMismatch;
+            return result;
+        }
+
+        result.link_result.linked_code_size = package_header.code_size;
+        result.link_result.entry_offset = package_header.entry_offset;
+        writeLoadedSlotMetadata(slot_id,
+                                result.slot_manifest_addr,
+                                result.slot_control_addr,
+                                result.layout,
+                                package_header.code_size,
+                                package_header.entry_offset,
+                                package_header.symbol_count,
+                                package_header.relocation_count,
+                                package_header.max_instructions_per_scan,
+                                package_header.max_scan_time_us,
+                                package_header.runtime_header_addr,
+                                package_header.store_epoch,
+                                package_header.linked_code_checksum);
 
         result.status = kPlcSlotLoadOk;
         return result;
@@ -316,6 +361,109 @@ public:
     }
 
 private:
+    static PlcSlotLoadStatusV1 parseLinkedProgramPackage(const uint8_t* package_bytes,
+                                                         size_t package_size,
+                                                         PlcLinkedProgramPackageHeaderV1& package_header,
+                                                         const uint8_t*& linked_code_bytes)
+    {
+        if (package_bytes == nullptr || package_size < sizeof(PlcLinkedProgramPackageHeaderV1)) {
+            return kPlcSlotLoadParseFailed;
+        }
+
+        const auto* header = reinterpret_cast<const PlcLinkedProgramPackageHeaderV1*>(package_bytes);
+        if (header->magic != kPlcLinkedProgramPackageMagicV1 || header->version != kPlcRuntimeAbiV1Version) {
+            return kPlcSlotLoadParseFailed;
+        }
+        if (header->entry_offset > header->code_size) {
+            return kPlcSlotLoadParseFailed;
+        }
+
+        const size_t code_offset = sizeof(PlcLinkedProgramPackageHeaderV1);
+        if ((code_offset + static_cast<size_t>(header->code_size)) > package_size) {
+            return kPlcSlotLoadParseFailed;
+        }
+
+        package_header = *header;
+        linked_code_bytes = package_bytes + code_offset;
+        return kPlcSlotLoadOk;
+    }
+
+    static void writeLoadedSlotMetadata(uint16_t slot_id,
+                                        uint32_t slot_manifest_addr,
+                                        uint32_t slot_control_addr,
+                                        const PlcSlotLayoutV1& layout,
+                                        uint32_t code_size,
+                                        uint32_t entry_offset,
+                                        uint16_t symbol_count,
+                                        uint16_t relocation_count,
+                                        uint32_t max_instructions_per_scan,
+                                        uint32_t max_scan_time_us,
+                                        uint32_t runtime_header_addr,
+                                        uint32_t runtime_store_epoch,
+                                        uint32_t linked_code_checksum)
+    {
+        auto* linked_header = reinterpret_cast<PlcLinkedImageHeaderV1*>(
+            static_cast<uintptr_t>(layout.linked_image_header_addr));
+        PlcLinkedImageHeaderV1 next_header = {};
+        next_header.magic = kPlcLinkedImageMagicV1;
+        next_header.version = kPlcRuntimeAbiV1Version;
+        next_header.slot_id = slot_id;
+        next_header.code_size = code_size;
+        next_header.entry_offset = entry_offset;
+        next_header.symbol_count = symbol_count;
+        next_header.relocation_count = relocation_count;
+        next_header.runtime_header_addr = runtime_header_addr;
+        next_header.linked_code_checksum = linked_code_checksum;
+        std::memcpy(linked_header, &next_header, sizeof(next_header));
+
+        auto* directory_header = reinterpret_cast<PlcSlotDirectoryHeaderV1*>(
+            static_cast<uintptr_t>(slotDirectoryHeaderAddress()));
+        PlcSlotDirectoryHeaderV1 next_directory = {};
+        next_directory.magic = kPlcSlotDirectoryMagicV1;
+        next_directory.version = kPlcRuntimeAbiV1Version;
+        next_directory.slot_count = kPlcSlotCountV1;
+        next_directory.entry_size = static_cast<uint16_t>(sizeof(PlcSlotManifestV1));
+        next_directory.directory_epoch = runtime_store_epoch;
+        std::memcpy(directory_header, &next_directory, sizeof(next_directory));
+
+        auto* slot_manifest = reinterpret_cast<PlcSlotManifestV1*>(static_cast<uintptr_t>(slot_manifest_addr));
+        PlcSlotManifestV1 next_manifest = {};
+        next_manifest.slot_id = slot_id;
+        next_manifest.version = kPlcRuntimeAbiV1Version;
+        next_manifest.status = kPlcSlotManifestStatusLoadedV1;
+        next_manifest.control_block_addr = slot_control_addr;
+        next_manifest.linked_image_header_addr = layout.linked_image_header_addr;
+        next_manifest.linked_code_addr = layout.linked_code_addr;
+        next_manifest.linked_code_size = code_size;
+        next_manifest.stack_base = layout.stack_base;
+        next_manifest.stack_size = layout.stack_size / kPlcSlotStackEntryBytesV1;
+        next_manifest.timer_base = layout.timer_base;
+        next_manifest.timer_count = layout.timer_size / kPlcSlotTimerEntryBytesV1;
+        next_manifest.scratch_base = layout.scratch_base;
+        next_manifest.scratch_size = layout.scratch_size;
+        next_manifest.runtime_header_addr = runtime_header_addr;
+        next_manifest.linked_code_checksum = linked_code_checksum;
+        next_manifest.load_epoch = runtime_store_epoch;
+        std::memcpy(slot_manifest, &next_manifest, sizeof(next_manifest));
+
+        auto* control_block = reinterpret_cast<PlcProgramControlBlockV1*>(static_cast<uintptr_t>(slot_control_addr));
+        PlcProgramControlBlockV1 next = {};
+        next.magic = kPlcProgramControlBlockMagicV1;
+        next.version = kPlcRuntimeAbiV1Version;
+        next.slot_id = slot_id;
+        next.pc = entry_offset;
+        next.status = 1u;
+        next.bytecode_base = layout.linked_code_addr;
+        next.bytecode_size = code_size;
+        next.stack_base = layout.stack_base;
+        next.stack_size = layout.stack_size / kPlcSlotStackEntryBytesV1;
+        next.timer_base = layout.timer_base;
+        next.timer_count = layout.timer_size / kPlcSlotTimerEntryBytesV1;
+        next.max_instructions_per_scan = max_instructions_per_scan;
+        next.max_scan_time_us = max_scan_time_us;
+        std::memcpy(control_block, &next, sizeof(next));
+    }
+
     static uint32_t slotManifestTableBase()
     {
         return kPlcSlotControlRegionBaseV1 + static_cast<uint32_t>(sizeof(PlcSlotDirectoryHeaderV1));

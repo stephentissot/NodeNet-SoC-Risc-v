@@ -678,9 +678,84 @@ struct PlcLinkerSelfTestResult {
 struct PlcLoaderSelfTestResult {
     bool parse_ok;
     bool load_ok;
+    bool package_ok;
     uint16_t sample_symbols;
     PlcSlotLoadResultV1 load_result;
+    PlcSlotLoadResultV1 package_load_result;
 };
+
+static bool plc_verify_loaded_slot(uint16_t slot_id,
+                                   size_t code_size,
+                                   uint16_t sample_count,
+                                   const uint16_t* expected_indices,
+                                   uint32_t expected_max_instructions_per_scan,
+                                   uint32_t expected_max_scan_time_us,
+                                   uint32_t expected_epoch)
+{
+    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+    const auto* directory_header = reinterpret_cast<const PlcSlotDirectoryHeaderV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotDirectoryHeaderAddress()));
+    const auto* slot_manifest = reinterpret_cast<const PlcSlotManifestV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotManifestAddress(slot_id)));
+    const PlcSlotLayoutV1 layout = PlcSlotLoaderV1::slotLayout(slot_id);
+    const auto* linked_header = reinterpret_cast<const PlcLinkedImageHeaderV1*>(
+        static_cast<uintptr_t>(layout.linked_image_header_addr));
+    const uint8_t* linked_code = reinterpret_cast<const uint8_t*>(
+        static_cast<uintptr_t>(layout.linked_code_addr));
+
+    if (control_block->magic != kPlcProgramControlBlockMagicV1 ||
+        control_block->slot_id != slot_id ||
+        control_block->bytecode_size != code_size ||
+        control_block->bytecode_base != layout.linked_code_addr ||
+        control_block->stack_base != layout.stack_base ||
+        control_block->timer_base != layout.timer_base ||
+        control_block->max_instructions_per_scan != expected_max_instructions_per_scan ||
+        control_block->max_scan_time_us != expected_max_scan_time_us) {
+        return false;
+    }
+
+    if (linked_header->magic != kPlcLinkedImageMagicV1 ||
+        linked_header->slot_id != slot_id ||
+        linked_header->code_size != code_size ||
+        linked_header->symbol_count != sample_count ||
+        linked_header->relocation_count != sample_count ||
+        linked_header->runtime_header_addr != kPlcRuntimeHeaderAddr) {
+        return false;
+    }
+
+    if (directory_header->magic != kPlcSlotDirectoryMagicV1 ||
+        directory_header->slot_count != kPlcSlotCountV1 ||
+        directory_header->entry_size != sizeof(PlcSlotManifestV1) ||
+        directory_header->directory_epoch != expected_epoch) {
+        return false;
+    }
+
+    if (slot_manifest->slot_id != slot_id ||
+        slot_manifest->status != kPlcSlotManifestStatusLoadedV1 ||
+        slot_manifest->control_block_addr != PlcSlotLoaderV1::slotControlAddress(slot_id) ||
+        slot_manifest->linked_image_header_addr != layout.linked_image_header_addr ||
+        slot_manifest->linked_code_addr != layout.linked_code_addr ||
+        slot_manifest->linked_code_size != code_size ||
+        slot_manifest->stack_base != layout.stack_base ||
+        slot_manifest->timer_base != layout.timer_base ||
+        slot_manifest->scratch_base != layout.scratch_base ||
+        slot_manifest->runtime_header_addr != kPlcRuntimeHeaderAddr ||
+        slot_manifest->linked_code_checksum != linked_header->linked_code_checksum ||
+        slot_manifest->load_epoch != expected_epoch) {
+        return false;
+    }
+
+    for (uint16_t i = 0u; i < sample_count; ++i) {
+        const uint16_t patched_index = static_cast<uint16_t>(linked_code[i * 2u]) |
+                                       static_cast<uint16_t>(linked_code[i * 2u + 1u] << 8u);
+        if (patched_index != expected_indices[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
 
 static PlcRuntimeLinkAccessV1 plc_link_access_for_definition(const PointDefinition& definition)
 {
@@ -792,6 +867,7 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
     PlcLoaderSelfTestResult result = {};
     result.parse_ok = false;
     result.load_ok = false;
+    result.package_ok = false;
 
     const PointDefinition* definitions = catalog.entries();
     constexpr uint16_t kMaxSampleSymbols = 3u;
@@ -869,63 +945,77 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
         return result;
     }
 
-    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
-        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(0u)));
-    const auto* directory_header = reinterpret_cast<const PlcSlotDirectoryHeaderV1*>(
-        static_cast<uintptr_t>(PlcSlotLoaderV1::slotDirectoryHeaderAddress()));
-    const auto* slot_manifest = reinterpret_cast<const PlcSlotManifestV1*>(
-        static_cast<uintptr_t>(PlcSlotLoaderV1::slotManifestAddress(0u)));
-    const PlcSlotLayoutV1 layout = PlcSlotLoaderV1::slotLayout(0u);
-    const auto* linked_header = reinterpret_cast<const PlcLinkedImageHeaderV1*>(
-        static_cast<uintptr_t>(layout.linked_image_header_addr));
-    const uint8_t* linked_code = reinterpret_cast<const uint8_t*>(
-        static_cast<uintptr_t>(layout.linked_code_addr));
-
-    if (control_block->magic != kPlcProgramControlBlockMagicV1 ||
-        control_block->slot_id != 0u ||
-        control_block->bytecode_size != code_size ||
-        control_block->bytecode_base != layout.linked_code_addr ||
-        control_block->stack_base != layout.stack_base ||
-        control_block->timer_base != layout.timer_base) {
+    if (!plc_verify_loaded_slot(0u,
+                                code_size,
+                                sample_count,
+                                expected_indices,
+                                200u,
+                                10000u,
+                                publisher.storeEpoch())) {
         return result;
-    }
-
-    if (linked_header->magic != kPlcLinkedImageMagicV1 ||
-        linked_header->slot_id != 0u ||
-        linked_header->code_size != code_size ||
-        linked_header->runtime_header_addr != kPlcRuntimeHeaderAddr) {
-        return result;
-    }
-
-    if (directory_header->magic != kPlcSlotDirectoryMagicV1 ||
-        directory_header->slot_count != kPlcSlotCountV1 ||
-        directory_header->entry_size != sizeof(PlcSlotManifestV1)) {
-        return result;
-    }
-
-    if (slot_manifest->slot_id != 0u ||
-        slot_manifest->status != kPlcSlotManifestStatusLoadedV1 ||
-        slot_manifest->control_block_addr != PlcSlotLoaderV1::slotControlAddress(0u) ||
-        slot_manifest->linked_image_header_addr != layout.linked_image_header_addr ||
-        slot_manifest->linked_code_addr != layout.linked_code_addr ||
-        slot_manifest->linked_code_size != code_size ||
-        slot_manifest->stack_base != layout.stack_base ||
-        slot_manifest->timer_base != layout.timer_base ||
-        slot_manifest->scratch_base != layout.scratch_base ||
-        slot_manifest->runtime_header_addr != kPlcRuntimeHeaderAddr ||
-        slot_manifest->linked_code_checksum != linked_header->linked_code_checksum) {
-        return result;
-    }
-
-    for (uint16_t i = 0u; i < sample_count; ++i) {
-        const uint16_t patched_index = static_cast<uint16_t>(linked_code[i * 2u]) |
-                                       static_cast<uint16_t>(linked_code[i * 2u + 1u] << 8u);
-        if (patched_index != expected_indices[i]) {
-            return result;
-        }
     }
 
     result.load_ok = true;
+
+    uint8_t linked_code[kMaxSampleSymbols * 2u] = {};
+    PlcObjectImageV1 object_image = {};
+    object_image.code_bytes = object_file + sizeof(PlcObjectFileHeaderV1);
+    object_image.code_size = static_cast<uint32_t>(code_size);
+    object_image.entry_offset = 0u;
+    object_image.symbols = symbols;
+    object_image.symbol_count = sample_count;
+    object_image.relocations = relocations;
+    object_image.relocation_count = sample_count;
+
+    const PlcObjectLinkResultV1 package_link_result = PlcObjectLinkerV1::linkObjectImage(publisher,
+                                                                                          catalog,
+                                                                                          object_image,
+                                                                                          linked_code,
+                                                                                          sizeof(linked_code));
+    if (package_link_result.status != kPlcObjectLinkOk) {
+        result.package_load_result.link_result = package_link_result;
+        return result;
+    }
+
+    uint8_t package_bytes[sizeof(PlcLinkedProgramPackageHeaderV1) + (kMaxSampleSymbols * 2u)] = {};
+    PlcLinkedProgramPackageHeaderV1 package_header = {};
+    package_header.magic = kPlcLinkedProgramPackageMagicV1;
+    package_header.version = kPlcRuntimeAbiV1Version;
+    package_header.abi_version = kPlcRuntimeAbiV1Version;
+    package_header.code_size = static_cast<uint32_t>(code_size);
+    package_header.entry_offset = 0u;
+    package_header.symbol_count = sample_count;
+    package_header.relocation_count = sample_count;
+    package_header.max_instructions_per_scan = 300u;
+    package_header.max_scan_time_us = 12000u;
+    package_header.runtime_header_addr = kPlcRuntimeHeaderAddr;
+    package_header.store_epoch = publisher.storeEpoch();
+    package_header.linked_code_checksum = 2166136261u;
+    for (size_t i = 0u; i < code_size; ++i) {
+        package_header.linked_code_checksum ^= linked_code[i];
+        package_header.linked_code_checksum *= 16777619u;
+    }
+    std::memcpy(package_bytes, &package_header, sizeof(package_header));
+    std::memcpy(package_bytes + sizeof(package_header), linked_code, code_size);
+
+    result.package_load_result = PlcSlotLoaderV1::loadLinkedProgramPackageIntoSlot(publisher,
+                                                                                    1u,
+                                                                                    package_bytes,
+                                                                                    sizeof(package_header) + code_size);
+    if (result.package_load_result.status != kPlcSlotLoadOk) {
+        return result;
+    }
+    if (!plc_verify_loaded_slot(1u,
+                                code_size,
+                                sample_count,
+                                expected_indices,
+                                300u,
+                                12000u,
+                                publisher.storeEpoch())) {
+        return result;
+    }
+
+    result.package_ok = true;
     return result;
 }
 
@@ -989,12 +1079,14 @@ int main(void)
                            static_cast<unsigned>(link_test.sample_relocations));
                 const PlcLoaderSelfTestResult load_test =
                     plc_run_loader_self_test(nodeNetCore.pointCatalog(), plcRuntimePublisher);
-                if (load_test.parse_ok && load_test.load_ok) {
-                    oled_print("[PLC] SLOT0 %u ok",
-                               static_cast<unsigned>(load_test.sample_symbols));
+                if (load_test.parse_ok && load_test.load_ok && load_test.package_ok) {
+                    oled_print("[PLC] SLOT %u/%u ok",
+                               static_cast<unsigned>(load_test.sample_symbols),
+                               1u + 1u);
                 } else {
-                    oled_print("[PLC] SLOT0 %u/%u",
+                    oled_print("[PLC] SLOT %u/%u/%u",
                                static_cast<unsigned>(load_test.load_result.status),
+                               static_cast<unsigned>(load_test.package_load_result.status),
                                static_cast<unsigned>(load_test.load_result.parse_status));
                 }
             } else {
