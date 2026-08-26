@@ -871,6 +871,10 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
 
     const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
         static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(0u)));
+    const auto* directory_header = reinterpret_cast<const PlcSlotDirectoryHeaderV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotDirectoryHeaderAddress()));
+    const auto* slot_manifest = reinterpret_cast<const PlcSlotManifestV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotManifestAddress(0u)));
     const PlcSlotLayoutV1 layout = PlcSlotLoaderV1::slotLayout(0u);
     const auto* linked_header = reinterpret_cast<const PlcLinkedImageHeaderV1*>(
         static_cast<uintptr_t>(layout.linked_image_header_addr));
@@ -890,6 +894,26 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
         linked_header->slot_id != 0u ||
         linked_header->code_size != code_size ||
         linked_header->runtime_header_addr != kPlcRuntimeHeaderAddr) {
+        return result;
+    }
+
+    if (directory_header->magic != kPlcSlotDirectoryMagicV1 ||
+        directory_header->slot_count != kPlcSlotCountV1 ||
+        directory_header->entry_size != sizeof(PlcSlotManifestV1)) {
+        return result;
+    }
+
+    if (slot_manifest->slot_id != 0u ||
+        slot_manifest->status != kPlcSlotManifestStatusLoadedV1 ||
+        slot_manifest->control_block_addr != PlcSlotLoaderV1::slotControlAddress(0u) ||
+        slot_manifest->linked_image_header_addr != layout.linked_image_header_addr ||
+        slot_manifest->linked_code_addr != layout.linked_code_addr ||
+        slot_manifest->linked_code_size != code_size ||
+        slot_manifest->stack_base != layout.stack_base ||
+        slot_manifest->timer_base != layout.timer_base ||
+        slot_manifest->scratch_base != layout.scratch_base ||
+        slot_manifest->runtime_header_addr != kPlcRuntimeHeaderAddr ||
+        slot_manifest->linked_code_checksum != linked_header->linked_code_checksum) {
         return result;
     }
 
