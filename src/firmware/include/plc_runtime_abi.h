@@ -355,6 +355,37 @@ private:
         return mapValueType(value_type) != kPlcRuntimeTypeInvalid;
     }
 
+    static bool stringsEqual(const char* lhs, const char* rhs)
+    {
+        return lhs != nullptr && rhs != nullptr && std::strcmp(lhs, rhs) == 0;
+    }
+
+    static bool startsWith(const char* text, const char* prefix)
+    {
+        if (text == nullptr || prefix == nullptr) {
+            return false;
+        }
+
+        const size_t prefix_len = std::strlen(prefix);
+        return std::strncmp(text, prefix, prefix_len) == 0;
+    }
+
+    static bool shouldPublishDefinition(const PointDefinition& definition)
+    {
+        if (!isSupported(definition.value_type)) {
+            return false;
+        }
+
+        if (stringsEqual(definition.id.feature, "core") ||
+            stringsEqual(definition.id.feature, "modbus0") ||
+            stringsEqual(definition.id.feature, "plc") ||
+            startsWith(definition.id.feature, "plc.slot")) {
+            return false;
+        }
+
+        return true;
+    }
+
     static bool accessAllowed(uint8_t descriptor_flags, PlcRuntimeLinkAccessV1 access)
     {
         const bool readable = (descriptor_flags & kPlcRuntimeFlagReadable) != 0u;
@@ -476,7 +507,7 @@ private:
         const size_t count = catalog.size();
         for (size_t i = 0; i < count; ++i) {
             const PointDefinition& definition = definitions[i];
-            if (!isSupported(definition.value_type)) {
+            if (!shouldPublishDefinition(definition)) {
                 continue;
             }
 
@@ -504,7 +535,7 @@ private:
 
         for (size_t i = 0; i < catalog.size(); ++i) {
             const PointDefinition& definition = definitions[i];
-            if (!isSupported(definition.value_type)) {
+            if (!shouldPublishDefinition(definition)) {
                 ++skipped_count_;
                 continue;
             }
