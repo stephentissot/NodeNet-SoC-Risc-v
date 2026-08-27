@@ -531,6 +531,55 @@ Possible errors:
 - `loadFailed`
 - `flashPersistFailed`
 
+## PLC point model
+
+The firmware also exposes PLC state and control through normal point definitions.
+
+Available local features now include:
+
+- `plc`
+- `plc.slot0` to `plc.slot15`
+
+The global `plc` feature exposes read-only points such as:
+
+- `slotCount`
+- `activeSlotCount`
+- `faultedSlotCount`
+- `runtimeStoreEpoch`
+- `runtimePublishedCount`
+
+Each `plc.slotN` feature exposes read-only points such as:
+
+- `loaded`
+- `state`
+- `runEnabled`
+- `status`
+- `cycleCounter`
+- `faultCode`
+- `faultInfo`
+- `bytecodeSize`
+- `source`
+- `programType`
+- `paramsSummary`
+- `inputChannel`
+- `outputChannel`
+- `runtimeMapOk`
+
+Each `plc.slotN` feature also exposes command-like boolean points:
+
+- `start`
+- `stop`
+- `reset`
+- `clearFault`
+
+Current slot state values are:
+
+- `empty`
+- `loaded`
+- `running`
+- `stopped`
+- `faulted`
+
 ## updateProperty for point writes
 
 The existing `updateProperty` command can also be used to write some runtime PLC values.
@@ -539,6 +588,7 @@ Two write categories are currently supported:
 
 - local NodeNetCore properties such as `instrumentName`, `master`, and `modbus0.*`
 - Modbus coil points addressed by their full point path
+- PLC slot control points addressed by their full point path
 
 For Modbus point writes, the current implementation is intentionally narrow:
 
@@ -548,6 +598,24 @@ For Modbus point writes, the current implementation is intentionally narrow:
 - access must be `Write` or `ReadWrite`
 
 That matches Waveshare outputs such as `output1`.
+
+For PLC control-point writes, the current implementation supports only local points under `plc.slotN`:
+
+- `start`
+- `stop`
+- `reset`
+- `clearFault`
+
+These points behave like impulse commands:
+
+- write `true` to request the action
+- the runtime point state is republished back to `false`
+
+`start` and `stop` toggle the slot paused state.
+
+`reset` clears runtime counters and faults and rewinds the slot PC to its entry offset.
+
+`clearFault` only clears the current fault state.
 
 ### Example: set Waveshare output1 ON
 
@@ -584,6 +652,42 @@ When the Modbus write succeeds, the point state is updated locally to the comman
   "to": 4,
   "propertyName": "modbus0.speed",
   "value": 9600
+}
+```
+
+### Example: stop PLC slot0
+
+```json
+{
+  "cmd": "updateProperty",
+  "from": 255,
+  "to": 4,
+  "propertyName": "gb9fao5yk4f.plc.slot0.stop",
+  "value": true
+}
+```
+
+### Example: restart PLC slot0
+
+```json
+{
+  "cmd": "updateProperty",
+  "from": 255,
+  "to": 4,
+  "propertyName": "gb9fao5yk4f.plc.slot0.start",
+  "value": true
+}
+```
+
+### Example: clear a PLC slot0 fault
+
+```json
+{
+  "cmd": "updateProperty",
+  "from": 255,
+  "to": 4,
+  "propertyName": "gb9fao5yk4f.plc.slot0.clearFault",
+  "value": true
 }
 ```
 

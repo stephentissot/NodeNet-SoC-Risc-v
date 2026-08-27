@@ -78,21 +78,7 @@ struct PlcSlotIconStatus {
 
 static PlcSlotIconStatus g_oled_slot_icons[kOledSlotIconCount] = {};
 static uint32_t g_oled_slot_refresh_deadline_ms = 0u;
-static constexpr uint32_t kPlcSlotDiagRefreshMs = 5000u;
 static void oled_write(const char* text);
-
-struct PlcSlotDiagnosticContext {
-    bool enabled = false;
-    uint8_t slot_id = 0u;
-    uint8_t input_channel = 0u;
-    uint8_t output_channel = 0u;
-    PlcSlotIconSource source = PlcSlotIconSource::None;
-    uint16_t input_runtime_index = PlcRuntimePublisherV1::kInvalidPointIndex;
-    uint16_t output_runtime_index = PlcRuntimePublisherV1::kInvalidPointIndex;
-    uint32_t next_refresh_ms = 0u;
-};
-
-static PlcSlotDiagnosticContext g_plc_slot0_diag = {};
 
 enum class SdramFwTestStage : uint8_t {
     Idle = 0,
@@ -150,33 +136,6 @@ static char oled_slot_hex_digit(uint8_t value)
 {
     static const char kHexDigits[] = "0123456789ABCDEF";
     return kHexDigits[value & 0x0Fu];
-}
-
-static char plc_source_short_name(PlcSlotIconSource source)
-{
-    switch (source) {
-    case PlcSlotIconSource::Flash:
-        return 'F';
-    case PlcSlotIconSource::Local:
-        return 'L';
-    case PlcSlotIconSource::None:
-    default:
-        return '-';
-    }
-}
-
-static char plc_status_short_name(uint32_t status)
-{
-    if ((status & 0x80000000u) != 0u) {
-        return 'X';
-    }
-    if (status == 2u) {
-        return 'R';
-    }
-    if (status == 1u) {
-        return 'L';
-    }
-    return 'E';
 }
 
 static void oled_draw_plc_slot_icons()
@@ -379,56 +338,6 @@ static bool plc_runtime_indices_for_channel(const NodeNetCore& node_core,
     *input_runtime_index = input_index;
     *output_runtime_index = output_index;
     return true;
-}
-
-static void plc_slot_diag_begin(uint8_t slot_id,
-                                uint8_t input_channel,
-                                uint8_t output_channel,
-                                PlcSlotIconSource source,
-                                uint16_t input_runtime_index,
-                                uint16_t output_runtime_index,
-                                uint32_t now_ms)
-{
-    g_plc_slot0_diag.enabled = true;
-    g_plc_slot0_diag.slot_id = slot_id;
-    g_plc_slot0_diag.input_channel = input_channel;
-    g_plc_slot0_diag.output_channel = output_channel;
-    g_plc_slot0_diag.source = source;
-    g_plc_slot0_diag.input_runtime_index = input_runtime_index;
-    g_plc_slot0_diag.output_runtime_index = output_runtime_index;
-    g_plc_slot0_diag.next_refresh_ms = now_ms + kPlcSlotDiagRefreshMs;
-}
-
-static void plc_slot_diag_report_if_due(uint32_t now_ms)
-{
-    if (!g_plc_slot0_diag.enabled || (int32_t)(now_ms - g_plc_slot0_diag.next_refresh_ms) < 0) {
-        return;
-    }
-
-    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
-        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(g_plc_slot0_diag.slot_id)));
-    char line[32] = {};
-    if (control_block->magic != kPlcProgramControlBlockMagicV1 ||
-        control_block->slot_id != g_plc_slot0_diag.slot_id ||
-        control_block->bytecode_size == 0u ||
-        control_block->bytecode_base == 0u) {
-        (void)snprintf(line,
-                       sizeof(line),
-                       "[PLC] S%u %c empty",
-                       static_cast<unsigned>(g_plc_slot0_diag.slot_id),
-                       plc_source_short_name(g_plc_slot0_diag.source));
-    } else {
-        (void)snprintf(line,
-                       sizeof(line),
-                       "[PLC] S%u %c %c%lu f%lu",
-                       static_cast<unsigned>(g_plc_slot0_diag.slot_id),
-                       plc_source_short_name(g_plc_slot0_diag.source),
-                       plc_status_short_name(control_block->status),
-                       static_cast<unsigned long>(control_block->cycle_counter),
-                       static_cast<unsigned long>(control_block->fault_code));
-    }
-    oled_write(line);
-    g_plc_slot0_diag.next_refresh_ms = now_ms + kPlcSlotDiagRefreshMs;
 }
 
 static bool oled_init(uint8_t addr7 = 0x3C)
@@ -1937,13 +1846,6 @@ int main(void)
                 oled_print("[PLC] IDX %u>%u",
                            static_cast<unsigned>(slot0_params.input_runtime_index),
                            static_cast<unsigned>(slot0_params.output_runtime_index));
-                plc_slot_diag_begin(0u,
-                                    static_cast<uint8_t>(slot0_params.input_channel),
-                                    static_cast<uint8_t>(slot0_params.output_channel),
-                                    g_oled_slot_icons[0].source,
-                                    slot0_params.input_runtime_index,
-                                    slot0_params.output_runtime_index,
-                                    boot_now_ms);
             }
             if (slot0_boot.source == PlcSlot0BootSource::FlashPackage) {
                 oled_print(slot0_boot.flash_seeded ? "[PLC] VM S0 flash seed"
@@ -2068,7 +1970,6 @@ int main(void)
         nodeNetCore.loop();
         const uint32_t now_ms = millis();
         oled_refresh_plc_slot_icons_if_due(now_ms);
-        plc_slot_diag_report_if_due(now_ms);
         if (plcRuntimeAbiReady) {
             (void)plcRuntimePublisher.publishIfDue(nodeNetCore.pointCatalog(), now_ms);
         }
