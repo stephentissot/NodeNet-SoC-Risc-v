@@ -69,6 +69,15 @@ public:
     PLC_SLOTS_RES,
     PLC_LOAD_REQ,
     PLC_LOAD_RES,
+    PLC_UPLOAD_BEGIN_REQ,
+    PLC_UPLOAD_BEGIN_RES,
+    PLC_UPLOAD_STATUS_REQ,
+    PLC_UPLOAD_STATUS_RES,
+    PLC_UPLOAD_COMMIT_REQ,
+    PLC_UPLOAD_COMMIT_RES,
+    PLC_UPLOAD_ABORT_REQ,
+    PLC_UPLOAD_ABORT_RES,
+    PLC_UPLOAD_DATA_RES,
   };
 
   // Parsing string -> enum
@@ -114,6 +123,15 @@ public:
     if(strcmp(cmd, "plcSlotsRes") == 0)   return PLC_SLOTS_RES;
     if(strcmp(cmd, "plcLoadReq") == 0)   return PLC_LOAD_REQ;
     if(strcmp(cmd, "plcLoadRes") == 0)   return PLC_LOAD_RES;
+    if(strcmp(cmd, "plcUploadBeginReq") == 0)   return PLC_UPLOAD_BEGIN_REQ;
+    if(strcmp(cmd, "plcUploadBeginRes") == 0)   return PLC_UPLOAD_BEGIN_RES;
+    if(strcmp(cmd, "plcUploadStatusReq") == 0)   return PLC_UPLOAD_STATUS_REQ;
+    if(strcmp(cmd, "plcUploadStatusRes") == 0)   return PLC_UPLOAD_STATUS_RES;
+    if(strcmp(cmd, "plcUploadCommitReq") == 0)   return PLC_UPLOAD_COMMIT_REQ;
+    if(strcmp(cmd, "plcUploadCommitRes") == 0)   return PLC_UPLOAD_COMMIT_RES;
+    if(strcmp(cmd, "plcUploadAbortReq") == 0)   return PLC_UPLOAD_ABORT_REQ;
+    if(strcmp(cmd, "plcUploadAbortRes") == 0)   return PLC_UPLOAD_ABORT_RES;
+    if(strcmp(cmd, "plcUploadDataRes") == 0)   return PLC_UPLOAD_DATA_RES;
 
     return CMD_UNKNOWN;
   }
@@ -161,6 +179,15 @@ public:
       case PLC_SLOTS_RES: return "plcSlotsRes";
       case PLC_LOAD_REQ: return "plcLoadReq";
       case PLC_LOAD_RES: return "plcLoadRes";
+      case PLC_UPLOAD_BEGIN_REQ: return "plcUploadBeginReq";
+      case PLC_UPLOAD_BEGIN_RES: return "plcUploadBeginRes";
+      case PLC_UPLOAD_STATUS_REQ: return "plcUploadStatusReq";
+      case PLC_UPLOAD_STATUS_RES: return "plcUploadStatusRes";
+      case PLC_UPLOAD_COMMIT_REQ: return "plcUploadCommitReq";
+      case PLC_UPLOAD_COMMIT_RES: return "plcUploadCommitRes";
+      case PLC_UPLOAD_ABORT_REQ: return "plcUploadAbortReq";
+      case PLC_UPLOAD_ABORT_RES: return "plcUploadAbortRes";
+      case PLC_UPLOAD_DATA_RES: return "plcUploadDataRes";
       default:         return "Unknown";
     }
   }

@@ -12,6 +12,13 @@ Supported commands:
 - `pointStatesReq`
 - `pointUpsert`
 - `pointDelete`
+- `plcStatusReq`
+- `plcSlotsReq`
+- `plcLoadReq`
+- `plcUploadBeginReq`
+- `plcUploadStatusReq`
+- `plcUploadCommitReq`
+- `plcUploadAbortReq`
 - `updateProperty` for writable local properties and writable Modbus coil points
 
 The point identity model is hierarchical:
@@ -530,6 +537,234 @@ Possible errors:
 - `flashPersistSlot0Only`
 - `loadFailed`
 - `flashPersistFailed`
+
+## plcUploadBeginReq
+
+Starts a PLC program upload session over NodeNet.
+
+V1 scope:
+
+- one upload session at a time
+- artifact type must be `linkedPackageV1`
+- upload staging uses the existing PLC package flash slot
+- data packets are binary, not JSON
+- `persistToFlash` is currently required
+- `autoLoad` defaults to `true`
+
+### Request
+
+```json
+{
+  "cmd": "plcUploadBeginReq",
+  "from": 255,
+  "to": 4,
+  "slotId": 0,
+  "artifactType": "linkedPackageV1",
+  "totalSize": 1536,
+  "payloadCrc32": 305419896,
+  "persistToFlash": true,
+  "autoLoad": true
+}
+```
+
+### Response
+
+```json
+{
+  "cmd": "plcUploadBeginRes",
+  "to": 255,
+  "ok": true,
+  "uploadId": 1,
+  "acceptedChunkSize": 256,
+  "active": true,
+  "slotId": 0,
+  "artifactType": "linkedPackageV1",
+  "persistToFlash": true,
+  "autoLoad": true,
+  "totalSize": 1536,
+  "bytesReceived": 0,
+  "expectedOffset": 0,
+  "lastErrorStatus": 0
+}
+```
+
+Possible errors:
+
+- `runtimeUnavailable`
+- `uploadBusy`
+- `slotOutOfRange`
+- `persistRequired`
+- `sizeOutOfRange`
+- `unsupportedArtifactType`
+- `stagingEraseFailed`
+
+## PLC upload binary data packets
+
+After `plcUploadBeginReq`, packet payloads must be sent as raw NodeNet binary frames instead of JSON.
+
+Each frame contains a 16-byte header followed by one payload chunk.
+
+### Binary frame header layout
+
+```text
+byte  0 : magic = 0xA5
+byte  1 : version = 1
+byte  2 : reserved low
+byte  3 : reserved high
+byte  4 : uploadId[7:0]
+byte  5 : uploadId[15:8]
+byte  6 : uploadId[23:16]
+byte  7 : uploadId[31:24]
+byte  8 : offset[7:0]
+byte  9 : offset[15:8]
+byte 10 : offset[23:16]
+byte 11 : offset[31:24]
+byte 12 : payloadSize[7:0]
+byte 13 : payloadSize[15:8]
+byte 14 : payloadChecksum[7:0]
+byte 15 : payloadChecksum[15:8]
+byte 16.. : payload bytes
+```
+
+V1 constraints:
+
+- `payloadSize` must be `1..256`
+- `offset` must match the next expected offset exactly
+- `offset` must be aligned on 256 bytes
+- chunks are written as one flash page each
+- the last chunk may be shorter than 256 bytes
+- `payloadChecksum` is the 16-bit sum of payload bytes
+
+### Data-packet response
+
+Each accepted or rejected binary packet generates a JSON acknowledgement.
+
+```json
+{
+  "cmd": "plcUploadDataRes",
+  "to": 255,
+  "ok": true,
+  "uploadId": 1,
+  "offset": 0,
+  "bytesReceived": 256,
+  "expectedOffset": 256
+}
+```
+
+Possible packet errors:
+
+- `uploadIdMismatch`
+- `offsetMismatch`
+- `invalidChunkSize`
+- `invalidOffset`
+- `chunkChecksumMismatch`
+- `flashWriteFailed`
+
+## plcUploadStatusReq
+
+Returns the current upload-session state.
+
+### Request
+
+```json
+{
+  "cmd": "plcUploadStatusReq",
+  "from": 255,
+  "to": 4
+}
+```
+
+### Response
+
+```json
+{
+  "cmd": "plcUploadStatusRes",
+  "to": 255,
+  "ok": true,
+  "active": true,
+  "slotId": 0,
+  "uploadId": 1,
+  "artifactType": "linkedPackageV1",
+  "persistToFlash": true,
+  "autoLoad": true,
+  "totalSize": 1536,
+  "bytesReceived": 512,
+  "expectedOffset": 512,
+  "lastErrorStatus": 0
+}
+```
+
+## plcUploadCommitReq
+
+Finalizes the upload, verifies the whole payload checksum, and loads the package into the target slot when `autoLoad` is enabled.
+
+### Request
+
+```json
+{
+  "cmd": "plcUploadCommitReq",
+  "from": 255,
+  "to": 4,
+  "uploadId": 1
+}
+```
+
+### Response
+
+```json
+{
+  "cmd": "plcUploadCommitRes",
+  "to": 255,
+  "ok": true,
+  "slotId": 0,
+  "loadStatus": 0,
+  "active": true,
+  "uploadId": 1,
+  "bytesReceived": 1536,
+  "expectedOffset": 1536
+}
+```
+
+Possible errors:
+
+- `runtimeUnavailable`
+- `noActiveUpload`
+- `uploadIdMismatch`
+- `uploadIncomplete`
+- `payloadChecksumMismatch`
+- `loadFailed`
+
+When `loadFailed` is returned, `loadStatus` contains the `PlcSlotLoadStatusV1` numeric value.
+
+## plcUploadAbortReq
+
+Cancels the active upload session.
+
+### Request
+
+```json
+{
+  "cmd": "plcUploadAbortReq",
+  "from": 255,
+  "to": 4,
+  "uploadId": 1
+}
+```
+
+### Response
+
+```json
+{
+  "cmd": "plcUploadAbortRes",
+  "to": 255,
+  "ok": true
+}
+```
+
+Possible errors:
+
+- `noActiveUpload`
+- `uploadIdMismatch`
 
 ## PLC point model
 

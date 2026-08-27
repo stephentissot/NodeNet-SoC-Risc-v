@@ -160,6 +160,25 @@ class NodeNetCore
             uint16_t output_runtime_index = 0xFFFFu;
         } _plcSlotRuntimeDiagnostics;
 
+        struct PlcUploadSession {
+            static constexpr uint32_t kMagic = 0x55504C43u;
+
+            bool active = false;
+            uint16_t slot_id = 0u;
+            uint32_t upload_id = 0u;
+            uint32_t total_size = 0u;
+            uint32_t bytes_received = 0u;
+            uint32_t expected_offset = 0u;
+            uint32_t payload_checksum = 2166136261u;
+            uint32_t expected_checksum = 0u;
+            uint32_t last_activity_ms = 0u;
+            bool persist_to_flash = false;
+            bool auto_load = true;
+            uint8_t last_error_status = 0u;
+            char artifact_type[20] = {};
+        } _plcUploadSession;
+        uint32_t _nextPlcUploadId = 1u;
+
         static void nodenet_broadcast_callback_trampoline(const NodeNetMessage& msg);
         static void nodenet_message_callback_trampoline(const NodeNetMessage& msg);
 
@@ -167,7 +186,7 @@ class NodeNetCore
 
         // Writes the common node identity fields into a JSON document.
         // doc: destination JSON document to enrich with node metadata.
-        void nodeHeader(JsonDocument& doc);
+        void nodeHeader(JsonDocument& doc) const;
 
         // Serializes the feature flags into the JSON "features" object.
         // doc: destination JSON document that will receive the feature subtree.
@@ -223,7 +242,14 @@ class NodeNetCore
         bool handlePlcStatusRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePlcSlotsRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePlcLoadRequest(const JsonDocument& request, JsonDocument& response);
+        bool handlePlcUploadBeginRequest(const JsonDocument& request, JsonDocument& response);
+        bool handlePlcUploadStatusRequest(const JsonDocument& request, JsonDocument& response);
+        bool handlePlcUploadCommitRequest(const JsonDocument& request, JsonDocument& response);
+        bool handlePlcUploadAbortRequest(const JsonDocument& request, JsonDocument& response);
         bool handleLocalPlcPointWrite(const PointDefinition& definition, JsonVariantConst value);
+        bool handlePlcUploadDataMessage(const QueuedMessage& msg);
+        void resetPlcUploadSession();
+        void fillPlcUploadStatus(JsonDocument& response, bool include_header) const;
 
         bool ensureFlashDbReady();
         bool savePointCatalog();

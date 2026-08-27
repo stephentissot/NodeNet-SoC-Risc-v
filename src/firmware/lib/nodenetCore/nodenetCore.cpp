@@ -24,6 +24,22 @@ constexpr uint32_t kPointCatalogFlashBase = Flash::kParamBase;
 constexpr uint32_t kPointCatalogFlashSectors = 3u;
 constexpr uint32_t kPointCatalogFlashSize = kPointCatalogFlashSectors * Flash::kSectorSize;
 constexpr uint32_t kPlcBuiltinPublishPeriodMs = 250u;
+constexpr uint32_t kPlcUploadSessionTimeoutMs = 15000u;
+constexpr uint32_t kPlcUploadStagingBase = Flash::kPlcPackageSlotBase;
+constexpr uint32_t kPlcUploadStagingSize = Flash::kPlcPackageSlotSize;
+constexpr uint8_t kPlcUploadDataFrameMagic = 0xA5u;
+
+struct PlcUploadDataFrameHeader {
+    uint8_t magic = 0u;
+    uint8_t version = 0u;
+    uint16_t reserved = 0u;
+    uint32_t upload_id = 0u;
+    uint32_t offset = 0u;
+    uint16_t payload_size = 0u;
+    uint16_t payload_checksum = 0u;
+};
+
+static_assert(sizeof(PlcUploadDataFrameHeader) == 16u, "Unexpected PLC upload data frame header size");
 
 struct PointCatalogFlashHeader {
     uint32_t magic = 0u;
@@ -292,6 +308,32 @@ static PlcMirrorProgramParamsV1 make_mirror_program_params(uint8_t input_channel
 
 static uint32_t point_catalog_checksum(const uint8_t* data, size_t len) {
     uint32_t hash = 2166136261u;
+    if (data == nullptr) {
+        return hash;
+    }
+
+    for (size_t index = 0; index < len; ++index) {
+        hash ^= data[index];
+        hash *= 16777619u;
+    }
+
+    return hash;
+}
+
+static uint16_t payload_checksum16(const uint8_t* data, size_t len) {
+    uint32_t sum = 0u;
+    if (data == nullptr) {
+        return 0u;
+    }
+
+    for (size_t index = 0; index < len; ++index) {
+        sum = (sum + data[index]) & 0xFFFFu;
+    }
+
+    return static_cast<uint16_t>(sum);
+}
+
+static uint32_t checksum32_extend(uint32_t hash, const uint8_t* data, size_t len) {
     if (data == nullptr) {
         return hash;
     }
@@ -596,6 +638,8 @@ NodeNetCore::NodeNetCore(NodeNet* nodeNet) : _nodeNet(nodeNet)
             _logger->Error("SDRAM JSON allocator initialization failed");
         }
     }
+
+    resetPlcUploadSession();
 }
 
 void NodeNetCore::begin()
@@ -650,6 +694,10 @@ void NodeNetCore::loop()
     processOutputQueue();
     _plcCore.loop();
     const uint32_t now_ms = millis();
+    if (_plcUploadSession.active &&
+        static_cast<uint32_t>(now_ms - _plcUploadSession.last_activity_ms) >= kPlcUploadSessionTimeoutMs) {
+        resetPlcUploadSession();
+    }
     if (static_cast<uint32_t>(now_ms - _lastPlcBuiltinPointPublishMs) >= kPlcBuiltinPublishPeriodMs) {
         publishBuiltinPlcPointStates(false);
         _lastPlcBuiltinPointPublishMs = now_ms;
@@ -820,7 +868,7 @@ void NodeNetCore::nodenet_message_callback_trampoline(const NodeNetMessage& msg)
     }
 }
 
-void NodeNetCore::nodeHeader(JsonDocument& doc)
+void NodeNetCore::nodeHeader(JsonDocument& doc) const
 {
     doc["from"] = addr;
     doc["deviceId"] = deviceId;
@@ -937,6 +985,14 @@ void NodeNetCore::processInputQueue()
             continue;
         }
 
+        if (_plcUploadSession.active && msg.len >= sizeof(PlcUploadDataFrameHeader) &&
+            msg.data[0] == kPlcUploadDataFrameMagic) {
+            if (!handlePlcUploadDataMessage(msg)) {
+                _logger->Warning("PLC upload data rejected src=%u len=%u", msg.srcAddr, msg.len);
+            }
+            continue;
+        }
+
         JsonDocument request(&g_sdram_json_allocator);
         const DeserializationError error = deserializeJson(request, msg.data, msg.len);
         if (error != DeserializationError::Ok) {            
@@ -999,6 +1055,18 @@ void NodeNetCore::processInputQueue()
                 break;
             case NodeNetCommands::Cmd::PLC_LOAD_REQ:
                 queueResponse = handlePlcLoadRequest(request, response);
+                break;
+            case NodeNetCommands::Cmd::PLC_UPLOAD_BEGIN_REQ:
+                queueResponse = handlePlcUploadBeginRequest(request, response);
+                break;
+            case NodeNetCommands::Cmd::PLC_UPLOAD_STATUS_REQ:
+                queueResponse = handlePlcUploadStatusRequest(request, response);
+                break;
+            case NodeNetCommands::Cmd::PLC_UPLOAD_COMMIT_REQ:
+                queueResponse = handlePlcUploadCommitRequest(request, response);
+                break;
+            case NodeNetCommands::Cmd::PLC_UPLOAD_ABORT_REQ:
+                queueResponse = handlePlcUploadAbortRequest(request, response);
                 break;
             case NodeNetCommands::UPDATE_PROPERTY:{
                 if (!updateProperty(request)) {
@@ -2020,6 +2088,266 @@ bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument
     response["cycleCounter"] = control_block->cycle_counter;
     response["faultCode"] = control_block->fault_code;
     publishBuiltinPlcPointStates(true);
+    return true;
+}
+
+void NodeNetCore::resetPlcUploadSession()
+{
+    _plcUploadSession = {};
+    _plcUploadSession.payload_checksum = 2166136261u;
+}
+
+void NodeNetCore::fillPlcUploadStatus(JsonDocument& response, bool include_header) const
+{
+    if (include_header) {
+        nodeHeader(response);
+    }
+    response["active"] = _plcUploadSession.active;
+    response["slotId"] = _plcUploadSession.slot_id;
+    response["uploadId"] = _plcUploadSession.upload_id;
+    response["artifactType"] = _plcUploadSession.artifact_type;
+    response["persistToFlash"] = _plcUploadSession.persist_to_flash;
+    response["autoLoad"] = _plcUploadSession.auto_load;
+    response["totalSize"] = _plcUploadSession.total_size;
+    response["bytesReceived"] = _plcUploadSession.bytes_received;
+    response["expectedOffset"] = _plcUploadSession.expected_offset;
+    response["lastErrorStatus"] = _plcUploadSession.last_error_status;
+}
+
+bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonDocument& response)
+{
+    response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_UPLOAD_BEGIN_RES);
+
+    const uint16_t slot_id = static_cast<uint16_t>(request["slotId"] | 0u);
+    const uint32_t total_size = request["totalSize"] | 0u;
+    const uint32_t payload_crc32 = request["payloadCrc32"] | 0u;
+    const bool persist_to_flash = request["persistToFlash"] | true;
+    const bool auto_load = request["autoLoad"] | true;
+    const char* artifact_type = request["artifactType"] | "linkedPackageV1";
+
+    if (_flash == nullptr || _plcRuntimePublisher == nullptr) {
+        response["ok"] = false;
+        response["error"] = "runtimeUnavailable";
+        return true;
+    }
+    if (_plcUploadSession.active) {
+        response["ok"] = false;
+        response["error"] = "uploadBusy";
+        fillPlcUploadStatus(response, false);
+        return true;
+    }
+    if (slot_id >= kPlcSlotCountV1) {
+        response["ok"] = false;
+        response["error"] = "slotOutOfRange";
+        return true;
+    }
+    if (!persist_to_flash) {
+        response["ok"] = false;
+        response["error"] = "persistRequired";
+        return true;
+    }
+    if (total_size < sizeof(PlcLinkedProgramPackageHeaderV1) || total_size > kPlcUploadStagingSize) {
+        response["ok"] = false;
+        response["error"] = "sizeOutOfRange";
+        return true;
+    }
+    if (std::strcmp(artifact_type, "linkedPackageV1") != 0) {
+        response["ok"] = false;
+        response["error"] = "unsupportedArtifactType";
+        return true;
+    }
+    if (!flash_erase_range(_flash,
+                           kPlcUploadStagingBase,
+                           static_cast<uint32_t>(((total_size + Flash::kSectorSize - 1u) / Flash::kSectorSize) * Flash::kSectorSize))) {
+        response["ok"] = false;
+        response["error"] = "stagingEraseFailed";
+        return true;
+    }
+
+    resetPlcUploadSession();
+    _plcUploadSession.active = true;
+    _plcUploadSession.slot_id = slot_id;
+    _plcUploadSession.upload_id = _nextPlcUploadId++;
+    _plcUploadSession.total_size = total_size;
+    _plcUploadSession.expected_checksum = payload_crc32;
+    _plcUploadSession.persist_to_flash = persist_to_flash;
+    _plcUploadSession.auto_load = auto_load;
+    _plcUploadSession.last_activity_ms = millis();
+    copy_text(_plcUploadSession.artifact_type, sizeof(_plcUploadSession.artifact_type), artifact_type);
+
+    response["ok"] = true;
+    response["acceptedChunkSize"] = Flash::kPageSize;
+    response["uploadId"] = _plcUploadSession.upload_id;
+    fillPlcUploadStatus(response, false);
+    return true;
+}
+
+bool NodeNetCore::handlePlcUploadStatusRequest(const JsonDocument& request, JsonDocument& response)
+{
+    (void)request;
+    response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_UPLOAD_STATUS_RES);
+    response["ok"] = true;
+    fillPlcUploadStatus(response, false);
+    return true;
+}
+
+bool NodeNetCore::handlePlcUploadAbortRequest(const JsonDocument& request, JsonDocument& response)
+{
+    response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_UPLOAD_ABORT_RES);
+    const uint32_t upload_id = request["uploadId"] | 0u;
+    if (!_plcUploadSession.active) {
+        response["ok"] = false;
+        response["error"] = "noActiveUpload";
+        return true;
+    }
+    if (upload_id != 0u && upload_id != _plcUploadSession.upload_id) {
+        response["ok"] = false;
+        response["error"] = "uploadIdMismatch";
+        fillPlcUploadStatus(response, false);
+        return true;
+    }
+
+    resetPlcUploadSession();
+    response["ok"] = true;
+    return true;
+}
+
+bool NodeNetCore::handlePlcUploadCommitRequest(const JsonDocument& request, JsonDocument& response)
+{
+    response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_UPLOAD_COMMIT_RES);
+    const uint32_t upload_id = request["uploadId"] | 0u;
+
+    if (_flash == nullptr || _plcRuntimePublisher == nullptr) {
+        response["ok"] = false;
+        response["error"] = "runtimeUnavailable";
+        return true;
+    }
+    if (!_plcUploadSession.active) {
+        response["ok"] = false;
+        response["error"] = "noActiveUpload";
+        return true;
+    }
+    if (upload_id != _plcUploadSession.upload_id) {
+        response["ok"] = false;
+        response["error"] = "uploadIdMismatch";
+        fillPlcUploadStatus(response, false);
+        return true;
+    }
+    if (_plcUploadSession.bytes_received != _plcUploadSession.total_size) {
+        response["ok"] = false;
+        response["error"] = "uploadIncomplete";
+        fillPlcUploadStatus(response, false);
+        return true;
+    }
+    if (_plcUploadSession.payload_checksum != _plcUploadSession.expected_checksum) {
+        response["ok"] = false;
+        response["error"] = "payloadChecksumMismatch";
+        fillPlcUploadStatus(response, false);
+        return true;
+    }
+
+    PlcSlotLoadResultV1 load_result = {};
+    if (_plcUploadSession.auto_load) {
+        load_result = PlcSlotLoaderV1::loadLinkedProgramPackageFromFlash(*_plcRuntimePublisher,
+                                                                         *_flash,
+                                                                         _plcUploadSession.slot_id,
+                                                                         kPlcUploadStagingBase,
+                                                                         _plcUploadSession.total_size);
+        if (load_result.status != kPlcSlotLoadOk) {
+            response["ok"] = false;
+            response["error"] = "loadFailed";
+            response["loadStatus"] = static_cast<uint8_t>(load_result.status);
+            fillPlcUploadStatus(response, false);
+            return true;
+        }
+        publishBuiltinPlcPointStates(true);
+    }
+
+    response["ok"] = true;
+    response["slotId"] = _plcUploadSession.slot_id;
+    response["loadStatus"] = static_cast<uint8_t>(load_result.status);
+    fillPlcUploadStatus(response, false);
+    resetPlcUploadSession();
+    return true;
+}
+
+bool NodeNetCore::handlePlcUploadDataMessage(const QueuedMessage& msg)
+{
+    if (_flash == nullptr || !_plcUploadSession.active || msg.len < sizeof(PlcUploadDataFrameHeader)) {
+        return false;
+    }
+
+    PlcUploadDataFrameHeader header = {};
+    std::memcpy(&header, msg.data, sizeof(header));
+    if (header.magic != kPlcUploadDataFrameMagic || header.version != 1u) {
+        return false;
+    }
+
+    JsonDocument response(&g_sdram_json_allocator);
+    response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_UPLOAD_DATA_RES);
+    response["to"] = msg.srcAddr;
+    nodeHeader(response);
+    response["uploadId"] = header.upload_id;
+    response["offset"] = header.offset;
+
+    if (header.upload_id != _plcUploadSession.upload_id) {
+        response["ok"] = false;
+        response["error"] = "uploadIdMismatch";
+        response["expectedOffset"] = _plcUploadSession.expected_offset;
+    } else if (header.offset != _plcUploadSession.expected_offset) {
+        response["ok"] = false;
+        response["error"] = "offsetMismatch";
+        response["expectedOffset"] = _plcUploadSession.expected_offset;
+    } else if (header.payload_size == 0u ||
+               header.payload_size > Flash::kPageSize ||
+               (sizeof(PlcUploadDataFrameHeader) + header.payload_size) != msg.len) {
+        response["ok"] = false;
+        response["error"] = "invalidChunkSize";
+        response["expectedOffset"] = _plcUploadSession.expected_offset;
+    } else if ((header.offset % Flash::kPageSize) != 0u ||
+               (header.offset + header.payload_size) > _plcUploadSession.total_size) {
+        response["ok"] = false;
+        response["error"] = "invalidOffset";
+        response["expectedOffset"] = _plcUploadSession.expected_offset;
+    } else {
+        const uint8_t* payload = msg.data + sizeof(PlcUploadDataFrameHeader);
+        const uint16_t computed_checksum = payload_checksum16(payload, header.payload_size);
+        if (computed_checksum != header.payload_checksum) {
+            response["ok"] = false;
+            response["error"] = "chunkChecksumMismatch";
+            response["expectedOffset"] = _plcUploadSession.expected_offset;
+        } else {
+            uint8_t page[Flash::kPageSize] = {};
+            std::memset(page, 0xFF, sizeof(page));
+            std::memcpy(page, payload, header.payload_size);
+            if (!_flash->writePage(kPlcUploadStagingBase + header.offset, page)) {
+                response["ok"] = false;
+                response["error"] = "flashWriteFailed";
+                response["expectedOffset"] = _plcUploadSession.expected_offset;
+            } else {
+                _plcUploadSession.bytes_received += header.payload_size;
+                _plcUploadSession.expected_offset += header.payload_size;
+                _plcUploadSession.payload_checksum = checksum32_extend(_plcUploadSession.payload_checksum,
+                                                                       payload,
+                                                                       header.payload_size);
+                _plcUploadSession.last_activity_ms = millis();
+                _plcUploadSession.last_error_status = 0u;
+                response["ok"] = true;
+                response["bytesReceived"] = _plcUploadSession.bytes_received;
+                response["expectedOffset"] = _plcUploadSession.expected_offset;
+            }
+        }
+    }
+
+    if (!(response["ok"] | false)) {
+        _plcUploadSession.last_error_status = 1u;
+    }
+
+    const uint8_t dest_addr = msg.srcAddr == 255u ? 0u : msg.srcAddr;
+    if (!enqueueOutputMessage(dest_addr, response)) {
+        return false;
+    }
+    processOutputQueue();
     return true;
 }
 
