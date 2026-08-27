@@ -343,6 +343,57 @@ static bool plc_slot_paused(const PlcProgramControlBlockV1& control_block)
     return (control_block.control & kPlcSlotControlPausedV1) != 0u;
 }
 
+static volatile uint32_t* plc_reg_ptr(uint32_t offset_bytes)
+{
+    return reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(PLC_BASE + offset_bytes));
+}
+
+static bool plc_engine_enabled()
+{
+    return (*plc_reg_ptr(0x00u) & 0x1u) != 0u;
+}
+
+static bool plc_engine_busy()
+{
+    return (*plc_reg_ptr(0x00u) & 0x2u) != 0u;
+}
+
+static uint16_t plc_engine_active_slot()
+{
+    return static_cast<uint16_t>((*plc_reg_ptr(0x00u) >> 8u) & 0x1Fu);
+}
+
+static uint16_t plc_engine_last_fault_slot()
+{
+    return static_cast<uint16_t>((*plc_reg_ptr(0x00u) >> 16u) & 0x1Fu);
+}
+
+static uint32_t plc_engine_scan_count()
+{
+    return *plc_reg_ptr(0x04u);
+}
+
+static uint32_t plc_engine_last_fault_code()
+{
+    return *plc_reg_ptr(0x08u);
+}
+
+static uint32_t plc_engine_scan_interval_cycles()
+{
+    return *plc_reg_ptr(0x10u);
+}
+
+static void plc_engine_set_enabled(bool enabled)
+{
+    *plc_reg_ptr(0x00u) = enabled ? 0x1u : 0x0u;
+}
+
+static void plc_engine_clear_fault_latch()
+{
+    const uint32_t current = *plc_reg_ptr(0x00u);
+    *plc_reg_ptr(0x00u) = (current & 0x1u) | 0x2u;
+}
+
 static const char* plc_slot_state_name(const PlcProgramControlBlockV1& control_block, uint16_t slot_id) {
     if (!plc_control_block_loaded(control_block, slot_id)) {
         return "empty";
@@ -1489,6 +1540,43 @@ bool NodeNetCore::handleLocalPlcPointWrite(const PointDefinition& definition, Js
 {
     if (!strings_equal(definition.id.device_id, deviceId)) {
         return false;
+    }
+
+    if (strings_equal(definition.id.feature, "plc")) {
+        if (!value.is<bool>()) {
+            return false;
+        }
+
+        const bool requested = value.as<bool>();
+        const uint32_t now_ms = millis();
+        PointCommandState command_state = {};
+        if (const PointCommandState* current = _pointCatalog.findCommandState(definition.id)) {
+            command_state = *current;
+        }
+        command_state.last_commanded_value.b = requested;
+        command_state.last_command_ts_ms = now_ms;
+        command_state.pending = false;
+
+        bool ok = !requested;
+        if (std::strcmp(definition.id.point_id, "engineEnabled") == 0) {
+            plc_engine_set_enabled(requested);
+            ok = (plc_engine_enabled() == requested);
+        } else if (std::strcmp(definition.id.point_id, "engineClearFault") == 0) {
+            if (requested) {
+                plc_engine_clear_fault_latch();
+                ok = plc_engine_last_fault_code() == 0u;
+            }
+        } else {
+            return false;
+        }
+
+        command_state.command_quality = ok ? PointCommandQuality::Acked : PointCommandQuality::Rejected;
+        if (ok) {
+            command_state.last_ack_ts_ms = now_ms;
+        }
+        (void)updatePointCommandState(definition.id, command_state);
+        publishBuiltinPlcPointStates(true);
+        return ok;
     }
 
     uint16_t slot_id = 0u;
@@ -3232,6 +3320,86 @@ void NodeNetCore::registerBuiltinPointDefinitions()
     definition.polling.timeout_ms = 0u;
     (void)upsertPointDefinition(definition);
 
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc", "engineEnabled");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Engine Enabled");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::InOut;
+    definition.value_type = PointValueType::Bool;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc", "engineBusy");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Engine Busy");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Bool;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc", "engineActiveSlot");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Engine Active Slot");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Uint16;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc", "engineScanCount");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Engine Scan Count");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Uint32;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc", "engineLastFaultCode");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Engine Last Fault Code");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Uint32;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc", "engineLastFaultSlot");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Engine Last Fault Slot");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Uint16;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc", "engineScanIntervalCycles");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Engine Scan Interval Cycles");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Uint32;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc", "engineClearFault");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Engine Clear Fault");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::InOut;
+    definition.value_type = PointValueType::Bool;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
     for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
         char feature[32] = {};
         char display_name[32] = {};
@@ -3440,6 +3608,70 @@ void NodeNetCore::publishBuiltinPlcPointStates(bool include_all_slots)
     make_point_identity(id, deviceId, "plc", "faultedSlotCount");
     state = {};
     state.value.u16 = faulted_slot_count;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc", "engineEnabled");
+    state = {};
+    state.value.b = plc_engine_enabled();
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc", "engineBusy");
+    state = {};
+    state.value.b = plc_engine_busy();
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc", "engineActiveSlot");
+    state = {};
+    state.value.u16 = plc_engine_active_slot();
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc", "engineScanCount");
+    state = {};
+    state.value.u32 = plc_engine_scan_count();
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc", "engineLastFaultCode");
+    state = {};
+    state.value.u32 = plc_engine_last_fault_code();
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc", "engineLastFaultSlot");
+    state = {};
+    state.value.u16 = plc_engine_last_fault_slot();
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc", "engineScanIntervalCycles");
+    state = {};
+    state.value.u32 = plc_engine_scan_interval_cycles();
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc", "engineClearFault");
+    state = {};
+    state.value.b = false;
     state.quality = PointQuality::Good;
     state.last_update_ms = now_ms;
     state.last_good_update_ms = now_ms;

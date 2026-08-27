@@ -49,6 +49,7 @@ module top (
     localparam [31:0] I2C0_BASE   = 32'h1000_5000;  // 4 KB page, 8 regs @ +0x00..+0x1C
     localparam [31:0] NODENET_BASE = 32'h1000_6000;  // NodeNet485 Wishbone slave (1 Mb/s RS-485)
     localparam [31:0] FLASH_BASE  = 32'h1000_7000;  // W25Q64 SPI flash (8 MB)
+    localparam [31:0] PLC_BASE    = 32'h1000_8000;  // PLC hardware engine control/status
     localparam [31:0] SDRAM_BASE  = 32'h2000_0000;  // 8MB: 0x20000000–0x207FFFFF
 
     // Hold reset active for a short deterministic startup window after PLL lock.
@@ -106,6 +107,8 @@ module top (
     wire        nodenet_ack;
     wire [31:0] flash_dat;
     wire        flash_ack;
+    wire [31:0] plc_dat;
+    wire        plc_ack;
     wire        flash_spi_clk;
     wire [31:0] sdram_dat;
     wire        sdram_ack;
@@ -152,15 +155,26 @@ module top (
     wire        sdram_test_stb;
     wire [31:0] sdram_test_rsp_dat;
     wire        sdram_test_rsp_ack;
+    wire [31:0] plc_master_adr;
+    wire [31:0] plc_master_dat_w;
+    wire [3:0]  plc_master_sel;
+    wire        plc_master_we;
+    wire        plc_master_cyc;
+    wire        plc_master_stb;
+    wire [31:0] plc_master_rsp_dat;
+    wire        plc_master_rsp_ack;
     wire [2:0]  sdram_arb_dbg_state;
     wire        sdram_arb_dbg_last_grant;
     wire        sdram_arb_dbg_rr_prefer_m1;
     wire        sdram_arb_dbg_m0_req;
     wire        sdram_arb_dbg_m1_req;
+    wire        sdram_arb_dbg_m2_req;
     wire [31:0] sdram_arb_dbg_m0_grants;
     wire [31:0] sdram_arb_dbg_m1_grants;
+    wire [31:0] sdram_arb_dbg_m2_grants;
     wire [31:0] sdram_arb_dbg_m0_stalls;
     wire [31:0] sdram_arb_dbg_m1_stalls;
+    wire [31:0] sdram_arb_dbg_m2_stalls;
     wire [31:0] sdram_arb_dbg_ack_count;
 
     // Debug: latch if a Wishbone transaction stalls too long without ACK.
@@ -190,6 +204,7 @@ module top (
     wire wb_i2c0_sel;
     wire wb_nodenet_sel;
     wire wb_flash_sel;
+    wire wb_plc_sel;
     wire wb_sdram_sel;
 
     assign wb_rom_sel    = wb_cyc && wb_stb && (wb_adr[31:16] == ROM_BASE[31:16]);
@@ -206,6 +221,7 @@ module top (
     assign wb_i2c0_sel   = wb_cyc && wb_stb && (wb_adr[31:12] == I2C0_BASE[31:12]);
     assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12]);
     assign wb_flash_sel  = wb_cyc && wb_stb && (wb_adr[31:12] == FLASH_BASE[31:12]);
+    assign wb_plc_sel    = wb_cyc && wb_stb && (wb_adr[31:12] == PLC_BASE[31:12]);
     assign wb_sdram_sel  = wb_cyc && wb_stb && (wb_adr[31:23] == SDRAM_BASE[31:23]);
 
     // assign wb_dat_i = wb_rom_sel     ? rom_dat     :
@@ -235,6 +251,7 @@ module top (
                       wb_nodenet_sel ? nodenet_dat :
                       wb_i2c0_sel    ? i2c0_dat    :
                       wb_flash_sel   ? flash_dat   :
+                      wb_plc_sel     ? plc_dat     :
                       wb_led_d2_sel  ? led_d2_dat  :
                       wb_led0_sel    ? led0_dat    :
                       wb_led1_sel    ? led1_dat    :
@@ -251,6 +268,7 @@ module top (
                     (wb_nodenet_sel && nodenet_ack) ||
                     (wb_i2c0_sel    && i2c0_ack)    ||
                     (wb_flash_sel   && flash_ack)   ||
+                    (wb_plc_sel     && plc_ack)     ||
                     (wb_led_d2_sel  && led_d2_ack)  ||
                     (wb_led0_sel    && led0_ack)    ||
                     (wb_led1_sel    && led1_ack)    ||
@@ -605,6 +623,33 @@ module top (
         .arb_ack_count_i(sdram_arb_dbg_ack_count)
     );
 
+    wb_plc #(
+        .ADDR(PLC_BASE),
+        .CLK_HZ(25_000_000)
+    ) plc0 (
+        .clk(sys_clk),
+        .rst(reset),
+        .sdram_ready_i(sdram_init_done),
+
+        .wb_adr_i(wb_adr),
+        .wb_dat_i(wb_dat_o),
+        .wb_sel_i(wb_sel),
+        .wb_we_i(wb_we),
+        .wb_cyc_i(wb_plc_sel),
+        .wb_stb_i(wb_plc_sel),
+        .wb_dat_o(plc_dat),
+        .wb_ack_o(plc_ack),
+
+        .m_adr_o(plc_master_adr),
+        .m_dat_o(plc_master_dat_w),
+        .m_sel_o(plc_master_sel),
+        .m_we_o(plc_master_we),
+        .m_cyc_o(plc_master_cyc),
+        .m_stb_o(plc_master_stb),
+        .m_dat_i(plc_master_rsp_dat),
+        .m_ack_i(plc_master_rsp_ack)
+    );
+
     wb_sdram_rr_arbiter sdram_arbiter (
         .clk(sys_clk),
         .rst(reset),
@@ -627,6 +672,15 @@ module top (
         .m1_dat_o(sdram_test_rsp_dat),
         .m1_ack_o(sdram_test_rsp_ack),
 
+        .m2_adr_i(plc_master_adr),
+        .m2_dat_i(plc_master_dat_w),
+        .m2_sel_i(plc_master_sel),
+        .m2_we_i(plc_master_we),
+        .m2_cyc_i(plc_master_cyc),
+        .m2_stb_i(plc_master_stb),
+        .m2_dat_o(plc_master_rsp_dat),
+        .m2_ack_o(plc_master_rsp_ack),
+
         .s_adr_o(sdram_arb_adr),
         .s_dat_o(sdram_arb_dat_w),
         .s_sel_o(sdram_arb_sel),
@@ -641,10 +695,13 @@ module top (
         .dbg_rr_prefer_m1_o(sdram_arb_dbg_rr_prefer_m1),
         .dbg_m0_req_o(sdram_arb_dbg_m0_req),
         .dbg_m1_req_o(sdram_arb_dbg_m1_req),
+        .dbg_m2_req_o(sdram_arb_dbg_m2_req),
         .dbg_m0_grant_count_o(sdram_arb_dbg_m0_grants),
         .dbg_m1_grant_count_o(sdram_arb_dbg_m1_grants),
+        .dbg_m2_grant_count_o(sdram_arb_dbg_m2_grants),
         .dbg_m0_stall_count_o(sdram_arb_dbg_m0_stalls),
         .dbg_m1_stall_count_o(sdram_arb_dbg_m1_stalls),
+        .dbg_m2_stall_count_o(sdram_arb_dbg_m2_stalls),
         .dbg_ack_count_o(sdram_arb_dbg_ack_count)
     );
 

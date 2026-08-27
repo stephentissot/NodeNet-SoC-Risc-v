@@ -23,6 +23,7 @@ static volatile uint32_t* const LED_D2 = reinterpret_cast<volatile uint32_t*>(0x
 #define I2C0_BASE  0x10005000UL
 #define MODBUS1_BASE 0x10004000u
 #define FLASH_BASE 0x10007000u
+#define PLC_BASE 0x10008000u
 static constexpr uint32_t NODENET0_BASE = 0x10006000u;
 
 /**

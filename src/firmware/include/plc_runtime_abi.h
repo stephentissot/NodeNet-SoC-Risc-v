@@ -250,8 +250,6 @@ public:
             return false;
         }
 
-        (void)now_ms;
-
         const uint32_t definition_hash = hashCatalogDefinitions(catalog);
         if (!header_written_ || definition_hash != definition_hash_) {
             rebuildDescriptors(catalog);
@@ -260,6 +258,8 @@ public:
             writeHeader();
             header_written_ = true;
         }
+
+        syncValuesAndStatus(catalog, now_ms);
         return true;
     }
 
@@ -588,6 +588,36 @@ private:
             catalog_to_runtime_[i] = published_count_;
             runtime_to_catalog_[published_count_] = i;
             ++published_count_;
+        }
+    }
+
+    void syncValuesAndStatus(const PointCatalog& catalog, uint32_t now_ms)
+    {
+        volatile PlcPointValueV1* values = valuePtr();
+        volatile PlcPointStatusV1* statuses = statusPtr();
+        const PointDefinition* definitions = catalog.entries();
+        const PointState* states = catalog.states();
+
+        for (size_t i = 0; i < catalog.size(); ++i) {
+            const uint16_t runtime_index = catalog_to_runtime_[i];
+            if (runtime_index == kInvalidPointIndex || runtime_index >= published_count_) {
+                continue;
+            }
+
+            const PointDefinition& definition = definitions[i];
+            const PointState& state = states[i];
+
+            PlcPointValueV1 value = {};
+            value.raw0 = encodeValueRaw0(definition.value_type, state);
+            value.raw1 = 0u;
+            writeValue(values[runtime_index], value);
+
+            PlcPointStatusV1 status = {};
+            status.quality = static_cast<uint32_t>(state.quality);
+            status.last_update_ms = state.last_update_ms != 0u ? state.last_update_ms : now_ms;
+            status.last_writer = mapLastWriter(definition);
+            status.flags = 0u;
+            writeStatus(statuses[runtime_index], status);
         }
     }
 

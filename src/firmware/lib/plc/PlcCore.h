@@ -64,6 +64,8 @@ private:
     void pollNextPoint();
     bool pollBatch(const ModbusPollBatch& batch, uint32_t now_ms);
     bool isBatchDue(const ModbusPollBatch& batch, uint32_t now_ms) const;
+    void syncRuntimeSnapshot(uint32_t now_ms);
+    void consumeRuntimeWrites(uint32_t now_ms);
     bool readBatchBits(const ModbusPollBatch& batch, bool* bit_values);
     bool readBatchRegisters(const ModbusPollBatch& batch, uint16_t* regs_out);
     bool decodeBitState(const PointDefinition& definition, bool bit_value, PointState& state) const;
