@@ -17,6 +17,7 @@ public:
     void begin(PointCatalog* point_catalog, ModbusMaster* modbus0, NodeLogger* logger = nullptr);
     void attachRuntimePublisher(const PlcRuntimePublisherV1* publisher);
     void loop();
+    void resetSlot0ExecutionCache();
 
 private:
     static constexpr size_t kModbusRegisterBufferSize = 2u;

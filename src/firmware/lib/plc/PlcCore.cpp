@@ -17,13 +17,15 @@ enum SlotOpcode : uint8_t {
     kSlotOpStorePointBool = 0x11u,
 };
 
-static constexpr uint32_t kPlcSlotStatusLoaded = 1u;
-static constexpr uint32_t kPlcSlotStatusRunning = 2u;
-static constexpr uint32_t kPlcSlotStatusFaulted = 0x80000000u;
 static constexpr uint32_t kPlcFaultInvalidOpcode = 0x0001u;
 static constexpr uint32_t kPlcFaultPointIndexOutOfRange = 0x0004u;
 static constexpr uint32_t kPlcFaultTypeMismatch = 0x0005u;
 static constexpr uint32_t kPlcFaultWriteRejected = 0x000Du;
+
+static bool plc_slot_paused(const volatile PlcProgramControlBlockV1& control_block)
+{
+    return (control_block.control & kPlcSlotControlPausedV1) != 0u;
+}
 
 }
 
@@ -40,6 +42,12 @@ void PlcCore::begin(PointCatalog* point_catalog, ModbusMaster* modbus0, NodeLogg
 void PlcCore::attachRuntimePublisher(const PlcRuntimePublisherV1* publisher)
 {
     runtime_publisher_ = publisher;
+}
+
+void PlcCore::resetSlot0ExecutionCache()
+{
+    slot0_last_output_valid_ = false;
+    slot0_last_output_value_ = false;
 }
 
 void PlcCore::loop() {
@@ -69,7 +77,8 @@ void PlcCore::runSlot0Program()
         control_block->slot_id != 0u ||
         control_block->bytecode_size == 0u ||
         control_block->bytecode_base == 0u ||
-        (control_block->status & kPlcSlotStatusFaulted) != 0u) {
+        (control_block->status & kPlcSlotStatusFaultedV1) != 0u ||
+        plc_slot_paused(*control_block)) {
         return;
     }
 
@@ -102,7 +111,7 @@ bool PlcCore::executeSlot0Scan(uint32_t control_block_addr, uint32_t now_ms)
 
         switch (opcode) {
         case kSlotOpHalt:
-            control_block.status = kPlcSlotStatusRunning;
+            control_block.status = kPlcSlotStatusRunningV1;
             control_block.pc = entry_pc;
             control_block.cycle_counter += 1u;
             return true;
@@ -233,7 +242,7 @@ void PlcCore::faultSlot0(uint32_t control_block_addr, uint32_t fault_code, uint3
 {
     volatile PlcProgramControlBlockV1& control_block =
         *reinterpret_cast<volatile PlcProgramControlBlockV1*>(static_cast<uintptr_t>(control_block_addr));
-    control_block.status = kPlcSlotStatusFaulted;
+    control_block.status = kPlcSlotStatusFaultedV1;
     control_block.fault_code = fault_code;
     control_block.fault_info = fault_info;
 }

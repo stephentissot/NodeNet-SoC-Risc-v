@@ -26,6 +26,10 @@ static constexpr uint32_t kPlcSlotStackEntryBytesV1 = 8u;
 static constexpr uint32_t kPlcSlotTimerEntryBytesV1 = 8u;
 static constexpr uint32_t kPlcSlotManifestStatusLoadedV1 = 1u;
 static constexpr uint32_t kPlcSlotParamsMagicV1 = 0x31524150u;
+static constexpr uint32_t kPlcSlotControlPausedV1 = 1u << 0;
+static constexpr uint32_t kPlcSlotStatusLoadedV1 = 1u;
+static constexpr uint32_t kPlcSlotStatusRunningV1 = 2u;
+static constexpr uint32_t kPlcSlotStatusFaultedV1 = 0x80000000u;
 
 enum PlcProgramKindV1 : uint16_t {
     kPlcProgramKindUnknown = 0u,
@@ -357,6 +361,34 @@ public:
         }
 
         params_out = *params;
+        return true;
+    }
+
+    static bool readSlotParamsHeader(uint16_t slot_id, PlcSlotParamsHeaderV1& header_out)
+    {
+        if (slot_id >= kPlcSlotCountV1) {
+            return false;
+        }
+
+        const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+            static_cast<uintptr_t>(slotControlAddress(slot_id)));
+        if (control_block->magic != kPlcProgramControlBlockMagicV1 ||
+            control_block->slot_id != slot_id ||
+            control_block->params_base == 0u ||
+            control_block->params_size < sizeof(PlcSlotParamsHeaderV1)) {
+            return false;
+        }
+
+        const auto* params_header = reinterpret_cast<const PlcSlotParamsHeaderV1*>(
+            static_cast<uintptr_t>(control_block->params_base));
+        if (params_header->magic != kPlcSlotParamsMagicV1 ||
+            params_header->version != kPlcRuntimeAbiV1Version ||
+            params_header->payload_size < sizeof(PlcSlotParamsHeaderV1) ||
+            params_header->payload_size > control_block->params_size) {
+            return false;
+        }
+
+        header_out = *params_header;
         return true;
     }
 

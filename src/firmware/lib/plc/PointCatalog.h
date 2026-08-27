@@ -16,7 +16,7 @@ extern "C" void* realloc(void*, size_t);
 
 class PointCatalog {
 public:
-    static constexpr size_t kMaxPoints = 64u;
+    static constexpr size_t kMaxPoints = 384u;
     static constexpr size_t kMaxSerializedSize = 8192u;
 
     PointCatalog() = default;
