@@ -16,30 +16,66 @@ public:
 
     void begin(PointCatalog* point_catalog, ModbusMaster* modbus0, NodeLogger* logger = nullptr);
     void attachRuntimePublisher(const PlcRuntimePublisherV1* publisher);
+    void setModbusBatchMaxGap(uint16_t max_gap);
     void loop();
     void resetSlot0ExecutionCache();
 
 private:
     static constexpr size_t kModbusRegisterBufferSize = 2u;
+    static constexpr size_t kMaxModbusPollBatches = PointCatalog::kMaxPoints;
+    static constexpr size_t kMaxModbusBatchMembers = PointCatalog::kMaxPoints;
+    static constexpr uint16_t kMaxModbusBatchRegisters = 125u;
+    static constexpr uint16_t kMaxModbusBatchBits = 256u;
     static constexpr uint32_t kVmScanPeriodMs = 50u;
+
+    struct ModbusPollBatchMember {
+        uint16_t catalog_index = 0u;
+        uint16_t address_offset = 0u;
+    };
+
+    struct ModbusPollBatch {
+        bool valid = false;
+        uint8_t port_index = 0u;
+        uint8_t slave_address = 0u;
+        ModbusTable table = ModbusTable::HoldingRegisters;
+        uint16_t start_address = 0u;
+        uint16_t quantity = 0u;
+        uint16_t member_start = 0u;
+        uint16_t member_count = 0u;
+    };
 
     PointCatalog* point_catalog_ = nullptr;
     ModbusMaster* modbus0_ = nullptr;
     NodeLogger* logger_ = nullptr;
     const PlcRuntimePublisherV1* runtime_publisher_ = nullptr;
-    size_t next_point_index_ = 0u;
+    ModbusPollBatch batches_[kMaxModbusPollBatches] = {};
+    ModbusPollBatchMember batch_members_[kMaxModbusBatchMembers] = {};
+    size_t batch_count_ = 0u;
+    size_t next_batch_index_ = 0u;
+    uint32_t modbus_plan_hash_ = 0u;
+    uint16_t modbus_batch_max_gap_ = 6u;
     uint32_t next_vm_scan_ms_ = 0u;
     bool slot0_last_output_valid_ = false;
     bool slot0_last_output_value_ = false;
 
+    void rebuildPollPlanIfNeeded();
+    void rebuildPollPlan();
+    uint32_t computeModbusPlanHash() const;
     void pollNextPoint();
+    bool pollBatch(const ModbusPollBatch& batch, uint32_t now_ms);
+    bool isBatchDue(const ModbusPollBatch& batch, uint32_t now_ms) const;
+    bool readBatchBits(const ModbusPollBatch& batch, bool* bit_values);
+    bool readBatchRegisters(const ModbusPollBatch& batch, uint16_t* regs_out);
+    bool decodeBitState(const PointDefinition& definition, bool bit_value, PointState& state) const;
+    bool decodeRegisterState(const PointDefinition& definition,
+                             const uint16_t* regs,
+                             uint16_t available_regs,
+                             PointState& state) const;
     void runSlot0Program();
     bool executeSlot0Scan(uint32_t control_block_addr, uint32_t now_ms);
     bool readRuntimeBool(uint16_t runtime_index, bool& value_out) const;
     bool commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now_ms);
     void faultSlot0(uint32_t control_block_addr, uint32_t fault_code, uint32_t fault_info);
-    bool pollModbusPoint(const PointDefinition& definition, PointState& state, uint32_t now_ms);
-    bool readModbusRegisters(const PointDefinition& definition, uint16_t* regs_out);
     PointQuality qualityFromModbusError(ModbusMaster::Error error) const;
 };
 

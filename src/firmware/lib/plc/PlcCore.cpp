@@ -1,5 +1,7 @@
 #include "PlcCore.h"
 
+#include <cstring>
+
 #include "bigsister.h"
 #include "nodenetLogger.h"
 #include "plc_loader_v1.h"
@@ -27,21 +29,64 @@ static bool plc_slot_paused(const volatile PlcProgramControlBlockV1& control_blo
     return (control_block.control & kPlcSlotControlPausedV1) != 0u;
 }
 
+static bool modbus_table_is_bitwise(ModbusTable table)
+{
+    return table == ModbusTable::Coils || table == ModbusTable::DiscreteInputs;
+}
+
+static uint16_t modbus_point_span(const PointDefinition& definition)
+{
+    if (modbus_table_is_bitwise(definition.ref.modbus.table)) {
+        return 1u;
+    }
+
+    return definition.ref.modbus.register_count == 0u ? 0u : definition.ref.modbus.register_count;
+}
+
+static bool modbus_poll_sort_before(const PointDefinition& lhs, size_t lhs_index,
+                                    const PointDefinition& rhs, size_t rhs_index)
+{
+    if (lhs.ref.modbus.port_index != rhs.ref.modbus.port_index) {
+        return lhs.ref.modbus.port_index < rhs.ref.modbus.port_index;
+    }
+    if (lhs.ref.modbus.slave_address != rhs.ref.modbus.slave_address) {
+        return lhs.ref.modbus.slave_address < rhs.ref.modbus.slave_address;
+    }
+    if (lhs.ref.modbus.table != rhs.ref.modbus.table) {
+        return static_cast<uint8_t>(lhs.ref.modbus.table) < static_cast<uint8_t>(rhs.ref.modbus.table);
+    }
+    if (lhs.ref.modbus.address != rhs.ref.modbus.address) {
+        return lhs.ref.modbus.address < rhs.ref.modbus.address;
+    }
+
+    return lhs_index < rhs_index;
+}
+
 }
 
 void PlcCore::begin(PointCatalog* point_catalog, ModbusMaster* modbus0, NodeLogger* logger) {
     point_catalog_ = point_catalog;
     modbus0_ = modbus0;
     logger_ = logger;
-    next_point_index_ = 0u;
+    batch_count_ = 0u;
+    next_batch_index_ = 0u;
+    modbus_plan_hash_ = 0u;
     next_vm_scan_ms_ = millis();
     slot0_last_output_valid_ = false;
     slot0_last_output_value_ = false;
+    std::memset(batches_, 0, sizeof(batches_));
+    std::memset(batch_members_, 0, sizeof(batch_members_));
 }
 
 void PlcCore::attachRuntimePublisher(const PlcRuntimePublisherV1* publisher)
 {
     runtime_publisher_ = publisher;
+}
+
+void PlcCore::setModbusBatchMaxGap(uint16_t max_gap)
+{
+    modbus_batch_max_gap_ = max_gap;
+    modbus_plan_hash_ = 0u;
 }
 
 void PlcCore::resetSlot0ExecutionCache()
@@ -55,8 +100,147 @@ void PlcCore::loop() {
         return;
     }
 
+    rebuildPollPlanIfNeeded();
     pollNextPoint();
     runSlot0Program();
+}
+
+uint32_t PlcCore::computeModbusPlanHash() const
+{
+    if (point_catalog_ == nullptr) {
+        return 0u;
+    }
+
+    uint32_t hash = 2166136261u;
+    auto append_bytes = [&hash](const void* data, size_t len) {
+        const uint8_t* bytes = static_cast<const uint8_t*>(data);
+        for (size_t i = 0; i < len; ++i) {
+            hash ^= bytes[i];
+            hash *= 16777619u;
+        }
+    };
+
+    const PointDefinition* definitions = point_catalog_->entries();
+    for (size_t index = 0; index < point_catalog_->size(); ++index) {
+        const PointDefinition& definition = definitions[index];
+        if (definition.backend != PointBackend::Modbus) {
+            continue;
+        }
+
+        append_bytes(&definition.ref.modbus.port_index, sizeof(definition.ref.modbus.port_index));
+        append_bytes(&definition.ref.modbus.slave_address, sizeof(definition.ref.modbus.slave_address));
+        append_bytes(&definition.ref.modbus.address, sizeof(definition.ref.modbus.address));
+        append_bytes(&definition.ref.modbus.register_count, sizeof(definition.ref.modbus.register_count));
+        append_bytes(&definition.ref.modbus.table, sizeof(definition.ref.modbus.table));
+        append_bytes(&definition.polling.refresh_ms, sizeof(definition.polling.refresh_ms));
+        append_bytes(&definition.value_type, sizeof(definition.value_type));
+    }
+
+    append_bytes(&modbus_batch_max_gap_, sizeof(modbus_batch_max_gap_));
+
+    return hash;
+}
+
+void PlcCore::rebuildPollPlanIfNeeded()
+{
+    const uint32_t next_hash = computeModbusPlanHash();
+    if (next_hash == modbus_plan_hash_) {
+        return;
+    }
+
+    rebuildPollPlan();
+    modbus_plan_hash_ = next_hash;
+}
+
+void PlcCore::rebuildPollPlan()
+{
+    batch_count_ = 0u;
+    next_batch_index_ = 0u;
+    std::memset(batches_, 0, sizeof(batches_));
+    std::memset(batch_members_, 0, sizeof(batch_members_));
+
+    if (point_catalog_ == nullptr) {
+        return;
+    }
+
+    const PointDefinition* definitions = point_catalog_->entries();
+    size_t sorted_indices[PointCatalog::kMaxPoints] = {};
+    size_t sorted_count = 0u;
+    for (size_t index = 0; index < point_catalog_->size(); ++index) {
+        if (definitions[index].backend != PointBackend::Modbus) {
+            continue;
+        }
+
+        sorted_indices[sorted_count++] = index;
+    }
+
+    for (size_t i = 1u; i < sorted_count; ++i) {
+        size_t current = sorted_indices[i];
+        size_t insert = i;
+        while (insert > 0u &&
+               modbus_poll_sort_before(definitions[current],
+                                       current,
+                                       definitions[sorted_indices[insert - 1u]],
+                                       sorted_indices[insert - 1u])) {
+            sorted_indices[insert] = sorted_indices[insert - 1u];
+            --insert;
+        }
+        sorted_indices[insert] = current;
+    }
+
+    uint16_t member_cursor = 0u;
+    for (size_t sorted = 0u; sorted < sorted_count; ++sorted) {
+        const size_t catalog_index = sorted_indices[sorted];
+        const PointDefinition& definition = definitions[catalog_index];
+        const uint16_t span = modbus_point_span(definition);
+        if (span == 0u) {
+            continue;
+        }
+
+        const bool is_bitwise = modbus_table_is_bitwise(definition.ref.modbus.table);
+        const uint16_t batch_limit = is_bitwise ? kMaxModbusBatchBits : kMaxModbusBatchRegisters;
+        const uint32_t point_end = static_cast<uint32_t>(definition.ref.modbus.address) + static_cast<uint32_t>(span) - 1u;
+
+        bool append_to_batch = false;
+        if (batch_count_ > 0u) {
+            ModbusPollBatch& batch = batches_[batch_count_ - 1u];
+            const uint32_t batch_end = static_cast<uint32_t>(batch.start_address) + static_cast<uint32_t>(batch.quantity) - 1u;
+            const uint32_t merged_end = point_end > batch_end ? point_end : batch_end;
+            const uint32_t merged_quantity = merged_end - static_cast<uint32_t>(batch.start_address) + 1u;
+            const uint32_t max_next_address = batch_end + 1u + static_cast<uint32_t>(modbus_batch_max_gap_);
+            append_to_batch = batch.valid &&
+                              batch.port_index == definition.ref.modbus.port_index &&
+                              batch.slave_address == definition.ref.modbus.slave_address &&
+                              batch.table == definition.ref.modbus.table &&
+                              static_cast<uint32_t>(definition.ref.modbus.address) <= max_next_address &&
+                              merged_quantity <= batch_limit;
+            if (append_to_batch) {
+                batch.quantity = static_cast<uint16_t>(merged_quantity);
+            }
+        }
+
+        if (!append_to_batch) {
+            if (batch_count_ >= kMaxModbusPollBatches || member_cursor >= kMaxModbusBatchMembers) {
+                break;
+            }
+
+            ModbusPollBatch& batch = batches_[batch_count_++];
+            batch.valid = true;
+            batch.port_index = definition.ref.modbus.port_index;
+            batch.slave_address = definition.ref.modbus.slave_address;
+            batch.table = definition.ref.modbus.table;
+            batch.start_address = definition.ref.modbus.address;
+            batch.quantity = span;
+            batch.member_start = member_cursor;
+            batch.member_count = 0u;
+        }
+
+        ModbusPollBatch& batch = batches_[batch_count_ - 1u];
+        batch_members_[member_cursor].catalog_index = static_cast<uint16_t>(catalog_index);
+        batch_members_[member_cursor].address_offset = static_cast<uint16_t>(definition.ref.modbus.address - batch.start_address);
+        ++member_cursor;
+        ++batch.member_count;
+    }
 }
 
 void PlcCore::runSlot0Program()
@@ -240,161 +424,224 @@ bool PlcCore::commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now
 
 void PlcCore::faultSlot0(uint32_t control_block_addr, uint32_t fault_code, uint32_t fault_info)
 {
-    volatile PlcProgramControlBlockV1& control_block =
-        *reinterpret_cast<volatile PlcProgramControlBlockV1*>(static_cast<uintptr_t>(control_block_addr));
-    control_block.status = kPlcSlotStatusFaultedV1;
+    volatile PlcProgramControlBlockV1& control_block = *reinterpret_cast<volatile PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(control_block_addr));
+    control_block.status |= kPlcSlotStatusFaultedV1;
     control_block.fault_code = fault_code;
     control_block.fault_info = fault_info;
 }
 
-void PlcCore::pollNextPoint() {
-    const size_t point_count = point_catalog_->size();
-    if (point_count == 0u) {
+void PlcCore::pollNextPoint()
+{
+    if (point_catalog_ == nullptr || batch_count_ == 0u) {
         return;
     }
 
     const uint32_t now_ms = millis();
-    const PointDefinition* definitions = point_catalog_->entries();
-    for (size_t attempts = 0u; attempts < point_count; ++attempts) {
-        const size_t index = next_point_index_;
-        next_point_index_ = (next_point_index_ + 1u) % point_count;
-
-        const PointDefinition& definition = definitions[index];
-        if (definition.backend != PointBackend::Modbus) {
+    for (size_t attempts = 0u; attempts < batch_count_; ++attempts) {
+        const size_t batch_index = next_batch_index_;
+        next_batch_index_ = (next_batch_index_ + 1u) % batch_count_;
+        const ModbusPollBatch& batch = batches_[batch_index];
+        if (!batch.valid || !isBatchDue(batch, now_ms)) {
             continue;
         }
 
-        PointState* stored_state = point_catalog_->findState(definition.id);
-        if (stored_state == nullptr) {
-            continue;
-        }
-
-        if (definition.polling.refresh_ms != 0u &&
-            (now_ms - stored_state->last_update_ms) < definition.polling.refresh_ms) {
-            continue;
-        }
-
-        PointState next_state = *stored_state;
-        const bool ok = pollModbusPoint(definition, next_state, now_ms);
-        if (ok) {
-            next_state.last_good_update_ms = now_ms;
-        }
-        next_state.last_update_ms = now_ms;
-        (void)point_catalog_->updateState(definition.id, next_state);
+        (void)pollBatch(batch, now_ms);
         break;
     }
 }
 
-bool PlcCore::pollModbusPoint(const PointDefinition& definition, PointState& state, uint32_t now_ms) {
-    (void)now_ms;
-
-    if (definition.ref.modbus.port_index != 0u || modbus0_ == nullptr) {
-        state.quality = PointQuality::BadConfigError;
+bool PlcCore::isBatchDue(const ModbusPollBatch& batch, uint32_t now_ms) const
+{
+    if (point_catalog_ == nullptr) {
         return false;
     }
 
-    if (definition.value_type == PointValueType::String || definition.ref.modbus.register_count == 0u ||
-        definition.ref.modbus.register_count > kModbusRegisterBufferSize) {
-        state.quality = PointQuality::BadConfigError;
-        return false;
-    }
-
-    if (definition.ref.modbus.table == ModbusTable::Coils ||
-        definition.ref.modbus.table == ModbusTable::DiscreteInputs) {
-        bool bit_value = false;
-        bool ok = false;
-        if (definition.ref.modbus.table == ModbusTable::Coils) {
-            ok = modbus0_->readCoils(definition.ref.modbus.slave_address,
-                                     definition.ref.modbus.address,
-                                     1u,
-                                     &bit_value);
-        } else {
-            ok = modbus0_->readDiscreteInputs(definition.ref.modbus.slave_address,
-                                              definition.ref.modbus.address,
-                                              1u,
-                                              &bit_value);
+    const PointDefinition* definitions = point_catalog_->entries();
+    const PointState* states = point_catalog_->states();
+    for (uint16_t offset = 0u; offset < batch.member_count; ++offset) {
+        const ModbusPollBatchMember& member = batch_members_[batch.member_start + offset];
+        const size_t catalog_index = member.catalog_index;
+        if (catalog_index >= point_catalog_->size()) {
+            continue;
         }
 
-        if (!ok) {
-            state.quality = qualityFromModbusError(modbus0_->lastError());
-            return false;
+        const PointDefinition& definition = definitions[catalog_index];
+        const PointState& state = states[catalog_index];
+        if (definition.polling.refresh_ms == 0u ||
+            (now_ms - state.last_update_ms) >= definition.polling.refresh_ms) {
+            return true;
         }
-
-        state.value.b = bit_value;
-        state.quality = PointQuality::Good;
-        return true;
-    }
-
-    uint16_t regs[kModbusRegisterBufferSize] = {};
-    if (!readModbusRegisters(definition, regs)) {
-        state.quality = qualityFromModbusError(modbus0_->lastError());
-        return false;
-    }
-
-    switch (definition.value_type) {
-        case PointValueType::Bool:
-            state.value.b = ModbusMaster::regsToU16(regs[0]) != 0u;
-            break;
-        case PointValueType::Uint16:
-            state.value.u16 = static_cast<uint16_t>(apply_numeric_scale(static_cast<float>(ModbusMaster::regsToU16(regs[0])), definition));
-            break;
-        case PointValueType::Int16:
-            state.value.i16 = static_cast<int16_t>(apply_numeric_scale(static_cast<float>(ModbusMaster::regsToI16(regs[0])), definition));
-            break;
-        case PointValueType::Uint32:
-            if (definition.ref.modbus.register_count < 2u) {
-                state.quality = PointQuality::BadConfigError;
-                return false;
-            }
-            state.value.u32 = static_cast<uint32_t>(apply_numeric_scale(static_cast<float>(ModbusMaster::regsToU32(regs[0], regs[1])), definition));
-            break;
-        case PointValueType::Int32:
-            if (definition.ref.modbus.register_count < 2u) {
-                state.quality = PointQuality::BadConfigError;
-                return false;
-            }
-            state.value.i32 = static_cast<int32_t>(apply_numeric_scale(static_cast<float>(ModbusMaster::regsToI32(regs[0], regs[1])), definition));
-            break;
-        case PointValueType::Float:
-            if (definition.ref.modbus.register_count >= 2u) {
-                state.value.f32 = apply_numeric_scale(ModbusMaster::regsToFloatABCD(regs[0], regs[1]), definition);
-                break;
-            }
-            state.value.f32 = apply_numeric_scale(static_cast<float>(ModbusMaster::regsToI16(regs[0])), definition);
-            break;
-        case PointValueType::Enum:
-            state.value.enum_value = ModbusMaster::regsToI16(regs[0]);
-            break;
-        case PointValueType::String:
-        default:
-            state.quality = PointQuality::BadConfigError;
-            return false;
-    }
-
-    state.quality = PointQuality::Good;
-    return true;
-}
-
-bool PlcCore::readModbusRegisters(const PointDefinition& definition, uint16_t* regs_out) {
-    if (regs_out == nullptr) {
-        return false;
-    }
-
-    if (definition.ref.modbus.table == ModbusTable::HoldingRegisters) {
-        return modbus0_->readHoldingRegisters(definition.ref.modbus.slave_address,
-                                              definition.ref.modbus.address,
-                                              definition.ref.modbus.register_count,
-                                              regs_out);
-    }
-    if (definition.ref.modbus.table == ModbusTable::InputRegisters) {
-        return modbus0_->readInputRegisters(definition.ref.modbus.slave_address,
-                                            definition.ref.modbus.address,
-                                            definition.ref.modbus.register_count,
-                                            regs_out);
     }
 
     return false;
 }
+
+bool PlcCore::pollBatch(const ModbusPollBatch& batch, uint32_t now_ms)
+{
+    if (point_catalog_ == nullptr) {
+        return false;
+    }
+
+    const PointDefinition* definitions = point_catalog_->entries();
+    const PointState* states = point_catalog_->states();
+    const bool is_bitwise = modbus_table_is_bitwise(batch.table);
+
+    bool transaction_ok = false;
+    PointQuality batch_error = PointQuality::BadConfigError;
+    bool bit_values[kMaxModbusBatchBits] = {};
+    uint16_t regs[kMaxModbusBatchRegisters] = {};
+
+    if (batch.port_index != 0u || modbus0_ == nullptr) {
+        batch_error = PointQuality::BadConfigError;
+    } else if (is_bitwise) {
+        transaction_ok = readBatchBits(batch, bit_values);
+        if (!transaction_ok) {
+            batch_error = qualityFromModbusError(modbus0_->lastError());
+        }
+    } else {
+        transaction_ok = readBatchRegisters(batch, regs);
+        if (!transaction_ok) {
+            batch_error = qualityFromModbusError(modbus0_->lastError());
+        }
+    }
+
+    for (uint16_t offset = 0u; offset < batch.member_count; ++offset) {
+        const ModbusPollBatchMember& member = batch_members_[batch.member_start + offset];
+        const size_t catalog_index = member.catalog_index;
+        if (catalog_index >= point_catalog_->size()) {
+            continue;
+        }
+
+        const PointDefinition& definition = definitions[catalog_index];
+        PointState next_state = states[catalog_index];
+        bool point_ok = transaction_ok;
+
+        if (transaction_ok) {
+            if (is_bitwise) {
+                if (member.address_offset >= batch.quantity) {
+                    point_ok = false;
+                    next_state.quality = PointQuality::BadConfigError;
+                } else {
+                    point_ok = decodeBitState(definition, bit_values[member.address_offset], next_state);
+                }
+            } else {
+                point_ok = decodeRegisterState(definition,
+                                               regs + member.address_offset,
+                                               static_cast<uint16_t>(batch.quantity - member.address_offset),
+                                               next_state);
+            }
+        } else {
+            next_state.quality = batch_error;
+        }
+
+        next_state.last_update_ms = now_ms;
+        if (point_ok) {
+            next_state.last_good_update_ms = now_ms;
+        }
+        (void)point_catalog_->updateState(definition.id, next_state);
+    }
+
+    return transaction_ok;
+}
+
+        bool PlcCore::readBatchBits(const ModbusPollBatch& batch, bool* bit_values)
+        {
+            if (bit_values == nullptr || modbus0_ == nullptr) {
+                return false;
+            }
+
+            if (batch.table == ModbusTable::Coils) {
+                return modbus0_->readCoils(batch.slave_address, batch.start_address, batch.quantity, bit_values);
+            }
+            if (batch.table == ModbusTable::DiscreteInputs) {
+                return modbus0_->readDiscreteInputs(batch.slave_address, batch.start_address, batch.quantity, bit_values);
+            }
+
+            return false;
+        }
+
+        bool PlcCore::readBatchRegisters(const ModbusPollBatch& batch, uint16_t* regs_out)
+        {
+            if (regs_out == nullptr || modbus0_ == nullptr) {
+                return false;
+            }
+
+            if (batch.table == ModbusTable::HoldingRegisters) {
+                return modbus0_->readHoldingRegisters(batch.slave_address, batch.start_address, batch.quantity, regs_out);
+            }
+            if (batch.table == ModbusTable::InputRegisters) {
+                return modbus0_->readInputRegisters(batch.slave_address, batch.start_address, batch.quantity, regs_out);
+            }
+
+            return false;
+        }
+
+        bool PlcCore::decodeBitState(const PointDefinition& definition, bool bit_value, PointState& state) const
+        {
+            (void)definition;
+            state.value.b = bit_value;
+            state.quality = PointQuality::Good;
+            return true;
+        }
+
+        bool PlcCore::decodeRegisterState(const PointDefinition& definition,
+                                          const uint16_t* regs,
+                                          uint16_t available_regs,
+                                          PointState& state) const
+        {
+            if (regs == nullptr || definition.value_type == PointValueType::String || available_regs == 0u) {
+                state.quality = PointQuality::BadConfigError;
+                return false;
+            }
+
+            switch (definition.value_type) {
+                case PointValueType::Bool:
+                    state.value.b = ModbusMaster::regsToU16(regs[0]) != 0u;
+                    break;
+                case PointValueType::Uint16:
+                    state.value.u16 = static_cast<uint16_t>(apply_numeric_scale(static_cast<float>(ModbusMaster::regsToU16(regs[0])), definition));
+                    break;
+                case PointValueType::Int16:
+                    state.value.i16 = static_cast<int16_t>(apply_numeric_scale(static_cast<float>(ModbusMaster::regsToI16(regs[0])), definition));
+                    break;
+                case PointValueType::Uint32:
+                    if (definition.ref.modbus.register_count < 2u || available_regs < 2u) {
+                        state.quality = PointQuality::BadConfigError;
+                        return false;
+                    }
+                    state.value.u32 = static_cast<uint32_t>(apply_numeric_scale(static_cast<float>(ModbusMaster::regsToU32(regs[0], regs[1])), definition));
+                    break;
+                case PointValueType::Int32:
+                    if (definition.ref.modbus.register_count < 2u || available_regs < 2u) {
+                        state.quality = PointQuality::BadConfigError;
+                        return false;
+                    }
+                    state.value.i32 = static_cast<int32_t>(apply_numeric_scale(static_cast<float>(ModbusMaster::regsToI32(regs[0], regs[1])), definition));
+                    break;
+                case PointValueType::Float:
+                    if (definition.ref.modbus.register_count >= 2u) {
+                        if (available_regs < 2u) {
+                            state.quality = PointQuality::BadConfigError;
+                            return false;
+                        }
+                        state.value.f32 = apply_numeric_scale(ModbusMaster::regsToFloatABCD(regs[0], regs[1]), definition);
+                        break;
+                    }
+                    state.value.f32 = apply_numeric_scale(static_cast<float>(ModbusMaster::regsToI16(regs[0])), definition);
+                    break;
+                case PointValueType::Enum:
+                    state.value.enum_value = ModbusMaster::regsToI16(regs[0]);
+                    break;
+                case PointValueType::String:
+                default:
+                    state.quality = PointQuality::BadConfigError;
+                    return false;
+            }
+
+            state.quality = PointQuality::Good;
+            return true;
+        }
 
 PointQuality PlcCore::qualityFromModbusError(ModbusMaster::Error error) const {
     switch (error) {

@@ -76,6 +76,7 @@ class NodeNetCore
             modbus0["timeout"] = modbus0Settings.comSettings.timeout_ms;
             modbus0["retries"] = modbus0Settings.comSettings.retries;
             modbus0["interframeCharsQ1"] = modbus0Settings.comSettings.interframe_chars_q1;
+            modbus0["maxGap"] = modbus0Settings.comSettings.max_gap;
         }
         void fromJson(const JsonDocument& doc) {
             const uint8_t currentAddr = addr;
@@ -86,6 +87,7 @@ class NodeNetCore
             const uint32_t currentModbus0Timeout = modbus0Settings.comSettings.timeout_ms;
             const uint8_t currentModbus0Retries = modbus0Settings.comSettings.retries;
             const uint8_t currentModbus0Interframe = modbus0Settings.comSettings.interframe_chars_q1;
+            const uint16_t currentModbus0MaxGap = modbus0Settings.comSettings.max_gap;
             JsonObjectConst modbus0 = doc["modbus0"].as<JsonObjectConst>();
 
             addr = doc["addr"] | currentAddr;
@@ -98,6 +100,7 @@ class NodeNetCore
             modbus0Settings.comSettings.timeout_ms = modbus0["timeout"] | currentModbus0Timeout;
             modbus0Settings.comSettings.retries = modbus0["retries"] | currentModbus0Retries;
             modbus0Settings.comSettings.interframe_chars_q1 = modbus0["interframeCharsQ1"] | currentModbus0Interframe;
+            modbus0Settings.comSettings.max_gap = modbus0["maxGap"] | currentModbus0MaxGap;
         }
 
         struct Features {

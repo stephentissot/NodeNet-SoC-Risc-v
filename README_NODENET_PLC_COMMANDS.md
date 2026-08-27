@@ -920,6 +920,8 @@ For Modbus point writes, the current implementation is intentionally narrow:
 - value type must be `Bool`
 - access must be `Write` or `ReadWrite`
 
+For local Modbus port configuration, `updateProperty` also accepts writable properties under `modbus0.*`, including `modbus0.speed`, `modbus0.timeout`, `modbus0.retries`, `modbus0.interframeCharsQ1`, and `modbus0.maxGap`.
+
 That matches Waveshare outputs such as `output1`.
 
 For PLC control-point writes, the current implementation supports only local points under `plc.slotN`:
@@ -975,6 +977,20 @@ When the Modbus write succeeds, the point state is updated locally to the comman
   "to": 4,
   "propertyName": "modbus0.speed",
   "value": 9600
+}
+```
+
+### Example: change Modbus0 batch max gap
+
+`modbus0.maxGap` controls how many unneeded addressed items the firmware may span while merging adjacent Modbus reads into one batch. The default is `6`.
+
+```json
+{
+  "cmd": "updateProperty",
+  "from": 5,
+  "to": 4,
+  "propertyName": "modbus0.maxGap",
+  "value": 6
 }
 ```
 

@@ -784,6 +784,7 @@ void NodeNetCore::begin()
                     modbus0Settings.comSettings.interframe_chars_q1);
     features.hasModbus0 = true;
     _plcCore.begin(&_pointCatalog, _modbus0, _logger);
+    _plcCore.setModbusBatchMaxGap(modbus0Settings.comSettings.max_gap);
 
     publishBuiltinPointStates();
     publishBuiltinPlcPointStates(true);
@@ -1329,6 +1330,17 @@ bool NodeNetCore::updateProperty(const JsonDocument& request)
         if (_modbus0 != nullptr) {
             _modbus0->setInterframeCharsQ1(interframe_chars_q1);
         }
+        publishBuiltinPointStates();
+        savePreferences();
+        return true;
+    } else if (strcmp(propertyName, "modbus0.maxGap") == 0) {
+        if (!json_variant_is_integer(value)) {
+            return false;
+        }
+
+        const uint16_t max_gap = value.as<uint16_t>();
+        modbus0Settings.comSettings.max_gap = max_gap;
+        _plcCore.setModbusBatchMaxGap(max_gap);
         publishBuiltinPointStates();
         savePreferences();
         return true;
@@ -2863,6 +2875,17 @@ void NodeNetCore::registerBuiltinPointDefinitions()
     (void)upsertPointDefinition(definition);
 
     definition = {};
+    make_point_identity(definition.id, deviceId, "modbus0", "maxGap");
+    copy_text(definition.display_name, sizeof(definition.display_name), "Modbus0 Max Gap");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::InOut;
+    definition.value_type = PointValueType::Uint16;
+    copy_text(definition.unit, sizeof(definition.unit), "regs");
+    definition.polling.refresh_ms = 0u;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
     make_point_identity(definition.id, deviceId, "modbus0", "interframeCharsQ1");
     copy_text(definition.display_name, sizeof(definition.display_name), "Modbus0 Interframe Chars Q1");
     definition.backend = PointBackend::Local;
@@ -3084,6 +3107,14 @@ void NodeNetCore::publishBuiltinPointStates()
     make_point_identity(id, deviceId, "modbus0", "retries");
     state = {};
     state.value.u16 = modbus0Settings.comSettings.retries;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = millis();
+    state.last_good_update_ms = state.last_update_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "modbus0", "maxGap");
+    state = {};
+    state.value.u16 = modbus0Settings.comSettings.max_gap;
     state.quality = PointQuality::Good;
     state.last_update_ms = millis();
     state.last_good_update_ms = state.last_update_ms;

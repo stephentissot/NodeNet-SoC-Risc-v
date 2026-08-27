@@ -31,6 +31,7 @@ struct ModbusComSettings {
     uint32_t timeout_ms = 200u;
     uint8_t retries = 1u;
     uint8_t interframe_chars_q1 = 14u;
+    uint16_t max_gap = 6u;
 };
 
 struct ModbusRegisterDefinition {
