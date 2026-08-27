@@ -14,7 +14,6 @@ static constexpr uint32_t kPlcRuntimeHeaderAddr = SDRAM_BASE + 0x00100000u;
 static constexpr uint32_t kPlcRuntimeDescriptorBase = SDRAM_BASE + 0x00100100u;
 static constexpr uint32_t kPlcRuntimeValueBase = SDRAM_BASE + 0x00110000u;
 static constexpr uint32_t kPlcRuntimeStatusBase = SDRAM_BASE + 0x00120000u;
-static constexpr uint32_t kPlcRuntimePublishPeriodMs = 100u;
 static constexpr uint32_t kPlcRuntimeDescriptorWindowSize = 0x00010000u;
 static constexpr uint32_t kPlcRuntimeValueWindowSize = 0x00010000u;
 static constexpr uint32_t kPlcRuntimeStatusWindowSize = 0x00010000u;
@@ -251,6 +250,8 @@ public:
             return false;
         }
 
+        (void)now_ms;
+
         const uint32_t definition_hash = hashCatalogDefinitions(catalog);
         if (!header_written_ || definition_hash != definition_hash_) {
             rebuildDescriptors(catalog);
@@ -259,23 +260,12 @@ public:
             writeHeader();
             header_written_ = true;
         }
-
-        writeValuesAndStatus(catalog, now_ms);
-        next_publish_ms_ = now_ms + kPlcRuntimePublishPeriodMs;
         return true;
     }
 
     bool publishIfDue(const PointCatalog& catalog, uint32_t now_ms)
     {
-        if (!ready_) {
-            return false;
-        }
-
-        if (!header_written_ || (int32_t)(now_ms - next_publish_ms_) >= 0) {
-            return publish(catalog, now_ms);
-        }
-
-        return true;
+        return publish(catalog, now_ms);
     }
 
 private:
@@ -287,8 +277,6 @@ private:
     size_t runtime_to_catalog_[PointCatalog::kMaxPoints] = {};
     uint32_t definition_hash_ = 0u;
     uint32_t store_epoch_ = 0u;
-    uint32_t next_publish_ms_ = 0u;
-
     static volatile PlcRuntimeHeaderV1* headerPtr()
     {
         return reinterpret_cast<volatile PlcRuntimeHeaderV1*>(static_cast<uintptr_t>(kPlcRuntimeHeaderAddr));
@@ -568,35 +556,6 @@ private:
         writeHeaderFields(*headerPtr(), header);
     }
 
-    void writeValuesAndStatus(const PointCatalog& catalog, uint32_t now_ms) const
-    {
-        volatile PlcPointValueV1* values = valuePtr();
-        volatile PlcPointStatusV1* statuses = statusPtr();
-        const PointDefinition* definitions = catalog.entries();
-        const PointState* states = catalog.states();
-
-        for (size_t catalog_index = 0; catalog_index < catalog.size(); ++catalog_index) {
-            const uint16_t runtime_index = catalog_to_runtime_[catalog_index];
-            if (runtime_index == kInvalidPointIndex) {
-                continue;
-            }
-
-            const PointDefinition& definition = definitions[catalog_index];
-            const PointState& state = states[catalog_index];
-
-            PlcPointValueV1 value = {};
-            value.raw0 = encodeValueRaw0(definition.value_type, state);
-
-            PlcPointStatusV1 status = {};
-            status.quality = static_cast<uint32_t>(state.quality);
-            status.last_update_ms = (state.last_update_ms != 0u) ? state.last_update_ms : now_ms;
-            status.last_writer = mapLastWriter(definition);
-            status.flags = 0u;
-
-            writeValue(values[runtime_index], value);
-            writeStatus(statuses[runtime_index], status);
-        }
-    }
 };
 
 #endif

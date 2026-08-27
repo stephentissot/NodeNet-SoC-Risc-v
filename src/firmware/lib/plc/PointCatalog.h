@@ -59,7 +59,6 @@ private:
     void insertIndex(const PointIdentity& id, size_t index);
 
     PointDefinition entries_[kMaxPoints] = {};
-    PointState states_[kMaxPoints] = {};
     PointCommandState command_states_[kMaxPoints] = {};
     uint16_t index_slots_[kIndexCapacity] = {};
     size_t count_ = 0u;

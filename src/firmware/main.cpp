@@ -1992,9 +1992,6 @@ int main(void)
         nodeNetCore.loop();
         const uint32_t now_ms = millis();
         oled_refresh_plc_slot_icons_if_due(now_ms);
-        if (plcRuntimeAbiReady) {
-            (void)plcRuntimePublisher.publishIfDue(nodeNetCore.pointCatalog(), now_ms);
-        }
         if (kEnableSdramBringupTest) {
             sdram_update_test(&sdramFwTest,
                               sdramMasterTest,

@@ -9,10 +9,26 @@ extern "C" void* realloc(void*, size_t);
 
 #include <ArduinoJson.h>
 
+#include "sdram.h"
+
 namespace {
 
 static constexpr uint32_t kPointCatalogHashOffset = 2166136261u;
 static constexpr uint32_t kPointCatalogHashPrime = 16777619u;
+static constexpr uint32_t kPointStateSdramBase = SDRAM_BASE + 0x00130000u;
+static constexpr uintptr_t kPointStateSdramEnd =
+    static_cast<uintptr_t>(kPointStateSdramBase) + sizeof(PointState) * PointCatalog::kMaxPoints;
+
+static_assert(kPointStateSdramEnd <= static_cast<uintptr_t>(SDRAM_BASE + SDRAM_SIZE),
+              "Point state store exceeds SDRAM window");
+
+static PointState* point_state_storage() {
+    return reinterpret_cast<PointState*>(static_cast<uintptr_t>(kPointStateSdramBase));
+}
+
+static const PointState* point_state_storage_const() {
+    return reinterpret_cast<const PointState*>(static_cast<uintptr_t>(kPointStateSdramBase));
+}
 
 static void copy_string(char* dst, size_t dst_size, const char* src) {
     if (dst == nullptr || dst_size == 0u) {
@@ -224,7 +240,7 @@ PointCatalog::PointCatalog() {
 void PointCatalog::clear() {
     count_ = 0u;
     std::memset(entries_, 0, sizeof(entries_));
-    std::memset(states_, 0, sizeof(states_));
+    std::memset(point_state_storage(), 0, sizeof(PointState) * kMaxPoints);
     std::memset(command_states_, 0, sizeof(command_states_));
     resetIndex();
 }
@@ -238,7 +254,7 @@ const PointDefinition* PointCatalog::entries() const {
 }
 
 const PointState* PointCatalog::states() const {
-    return states_;
+    return point_state_storage_const();
 }
 
 const PointCommandState* PointCatalog::commandStates() const {
@@ -256,12 +272,12 @@ size_t PointCatalog::findIndex(const PointIdentity& id) const {
 
 PointState* PointCatalog::findState(const PointIdentity& id) {
     const size_t index = lookupIndex(id);
-    return index < count_ ? &states_[index] : nullptr;
+    return index < count_ ? &point_state_storage()[index] : nullptr;
 }
 
 const PointState* PointCatalog::findState(const PointIdentity& id) const {
     const size_t index = lookupIndex(id);
-    return index < count_ ? &states_[index] : nullptr;
+    return index < count_ ? &point_state_storage_const()[index] : nullptr;
 }
 
 PointCommandState* PointCatalog::findCommandState(const PointIdentity& id) {
@@ -286,7 +302,7 @@ bool PointCatalog::upsert(const PointDefinition& definition) {
     }
 
     copyDefinition(entries_[count_], definition);
-    states_[count_] = {};
+    point_state_storage()[count_] = {};
     command_states_[count_] = {};
     insertIndex(entries_[count_].id, count_);
     count_ += 1u;
@@ -301,12 +317,12 @@ bool PointCatalog::remove(const PointIdentity& id) {
 
     for (size_t move = index + 1u; move < count_; ++move) {
         entries_[move - 1u] = entries_[move];
-        states_[move - 1u] = states_[move];
+        point_state_storage()[move - 1u] = point_state_storage()[move];
         command_states_[move - 1u] = command_states_[move];
     }
 
     entries_[count_ - 1u] = {};
-    states_[count_ - 1u] = {};
+    point_state_storage()[count_ - 1u] = {};
     command_states_[count_ - 1u] = {};
     count_ -= 1u;
     rebuildIndex();

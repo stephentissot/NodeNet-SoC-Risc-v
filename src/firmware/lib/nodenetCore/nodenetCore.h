@@ -217,6 +217,8 @@ class NodeNetCore
         // msg: destination object that receives the copied queued message.
         bool dequeueOutputMessage(QueuedMessage& msg);
 
+        void syncPlcRuntimeDefinitions();
+
         // Drains queued input messages, parses them, and generates responses.
         void processInputQueue();
 

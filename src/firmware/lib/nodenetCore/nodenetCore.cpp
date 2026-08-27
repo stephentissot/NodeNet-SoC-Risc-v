@@ -920,6 +920,7 @@ bool NodeNetCore::upsertPointDefinition(const PointDefinition& definition)
     }
 
     if (changed) {
+        syncPlcRuntimeDefinitions();
         _pointCatalogDirty = true;
         if (_pointCatalogAutosaveEnabled) {
             const bool saved = savePointCatalog();
@@ -931,6 +932,15 @@ bool NodeNetCore::upsertPointDefinition(const PointDefinition& definition)
     }
 
     return true;
+}
+
+void NodeNetCore::syncPlcRuntimeDefinitions()
+{
+    if (_plcRuntimePublisher == nullptr) {
+        return;
+    }
+
+    (void)const_cast<PlcRuntimePublisherV1*>(_plcRuntimePublisher)->publish(_pointCatalog, millis());
 }
 
 bool NodeNetCore::updatePointState(const PointIdentity& id, const PointState& state)
@@ -1897,6 +1907,7 @@ bool NodeNetCore::handlePointDeleteRequest(const JsonDocument& request, JsonDocu
     const bool removed = _pointCatalog.remove(id);
     bool saved = removed;
     if (removed) {
+        syncPlcRuntimeDefinitions();
         saved = savePointCatalog();
     }
 
