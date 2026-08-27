@@ -628,7 +628,7 @@ void NodeNetCore::begin()
     _plcCore.begin(&_pointCatalog, _modbus0, _logger);
 
     publishBuiltinPointStates();
-    publishBuiltinPlcPointStates();
+    publishBuiltinPlcPointStates(true);
     _lastPlcBuiltinPointPublishMs = millis();
 
     _nodeNet->SetCallbacks(nodenet_broadcast_callback_trampoline,
@@ -651,7 +651,7 @@ void NodeNetCore::loop()
     _plcCore.loop();
     const uint32_t now_ms = millis();
     if (static_cast<uint32_t>(now_ms - _lastPlcBuiltinPointPublishMs) >= kPlcBuiltinPublishPeriodMs) {
-        publishBuiltinPlcPointStates();
+        publishBuiltinPlcPointStates(false);
         _lastPlcBuiltinPointPublishMs = now_ms;
     }
     processOutputQueue();
@@ -1293,7 +1293,7 @@ bool NodeNetCore::handleLocalPlcPointWrite(const PointDefinition& definition, Js
         command_state.last_ack_ts_ms = now_ms;
     }
     (void)updatePointCommandState(definition.id, command_state);
-    publishBuiltinPlcPointStates();
+    publishBuiltinPlcPointStates(true);
     return ok;
 }
 
@@ -2019,6 +2019,7 @@ bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument
     response["state"] = plc_slot_state_name(*control_block, slot_id);
     response["cycleCounter"] = control_block->cycle_counter;
     response["faultCode"] = control_block->fault_code;
+    publishBuiltinPlcPointStates(true);
     return true;
 }
 
@@ -2586,7 +2587,7 @@ void NodeNetCore::publishBuiltinPointStates()
     }
 }
 
-void NodeNetCore::publishBuiltinPlcPointStates()
+void NodeNetCore::publishBuiltinPlcPointStates(bool include_all_slots)
 {
     PointIdentity id = {};
     PointState state = {};
@@ -2653,7 +2654,8 @@ void NodeNetCore::publishBuiltinPlcPointStates()
     state.last_good_update_ms = now_ms;
     (void)updatePointState(id, state);
 
-    for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
+    const uint16_t slot_publish_count = include_all_slots ? kPlcSlotCountV1 : 1u;
+    for (uint16_t slot_id = 0u; slot_id < slot_publish_count; ++slot_id) {
         char feature[32] = {};
         (void)std::snprintf(feature, sizeof(feature), "plc.slot%u", static_cast<unsigned>(slot_id));
 

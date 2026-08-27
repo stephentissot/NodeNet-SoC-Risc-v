@@ -232,6 +232,6 @@ class NodeNetCore
         void publishNodePointStates(JsonDocument& doc);
         void registerBuiltinPointDefinitions();
         void publishBuiltinPointStates();
-        void publishBuiltinPlcPointStates();
+        void publishBuiltinPlcPointStates(bool include_all_slots);
 
 };
