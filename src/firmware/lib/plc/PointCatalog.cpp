@@ -11,6 +11,9 @@ extern "C" void* realloc(void*, size_t);
 
 namespace {
 
+static constexpr uint32_t kPointCatalogHashOffset = 2166136261u;
+static constexpr uint32_t kPointCatalogHashPrime = 16777619u;
+
 static void copy_string(char* dst, size_t dst_size, const char* src) {
     if (dst == nullptr || dst_size == 0u) {
         return;
@@ -214,11 +217,16 @@ static bool deserialize_persisted_entry(PointDefinition& definition, JsonVariant
 
 }  // namespace
 
+PointCatalog::PointCatalog() {
+    resetIndex();
+}
+
 void PointCatalog::clear() {
     count_ = 0u;
     std::memset(entries_, 0, sizeof(entries_));
     std::memset(states_, 0, sizeof(states_));
     std::memset(command_states_, 0, sizeof(command_states_));
+    resetIndex();
 }
 
 size_t PointCatalog::size() const {
@@ -238,65 +246,39 @@ const PointCommandState* PointCatalog::commandStates() const {
 }
 
 const PointDefinition* PointCatalog::find(const PointIdentity& id) const {
-    for (size_t index = 0; index < count_; ++index) {
-        if (identitiesEqual(entries_[index].id, id)) {
-            return &entries_[index];
-        }
-    }
-    return nullptr;
+    const size_t index = lookupIndex(id);
+    return index < count_ ? &entries_[index] : nullptr;
 }
 
 size_t PointCatalog::findIndex(const PointIdentity& id) const {
-    for (size_t index = 0; index < count_; ++index) {
-        if (identitiesEqual(entries_[index].id, id)) {
-            return index;
-        }
-    }
-    return count_;
+    return lookupIndex(id);
 }
 
 PointState* PointCatalog::findState(const PointIdentity& id) {
-    for (size_t index = 0; index < count_; ++index) {
-        if (identitiesEqual(entries_[index].id, id)) {
-            return &states_[index];
-        }
-    }
-    return nullptr;
+    const size_t index = lookupIndex(id);
+    return index < count_ ? &states_[index] : nullptr;
 }
 
 const PointState* PointCatalog::findState(const PointIdentity& id) const {
-    for (size_t index = 0; index < count_; ++index) {
-        if (identitiesEqual(entries_[index].id, id)) {
-            return &states_[index];
-        }
-    }
-    return nullptr;
+    const size_t index = lookupIndex(id);
+    return index < count_ ? &states_[index] : nullptr;
 }
 
 PointCommandState* PointCatalog::findCommandState(const PointIdentity& id) {
-    for (size_t index = 0; index < count_; ++index) {
-        if (identitiesEqual(entries_[index].id, id)) {
-            return &command_states_[index];
-        }
-    }
-    return nullptr;
+    const size_t index = lookupIndex(id);
+    return index < count_ ? &command_states_[index] : nullptr;
 }
 
 const PointCommandState* PointCatalog::findCommandState(const PointIdentity& id) const {
-    for (size_t index = 0; index < count_; ++index) {
-        if (identitiesEqual(entries_[index].id, id)) {
-            return &command_states_[index];
-        }
-    }
-    return nullptr;
+    const size_t index = lookupIndex(id);
+    return index < count_ ? &command_states_[index] : nullptr;
 }
 
 bool PointCatalog::upsert(const PointDefinition& definition) {
-    for (size_t index = 0; index < count_; ++index) {
-        if (identitiesEqual(entries_[index].id, definition.id)) {
-            copyDefinition(entries_[index], definition);
-            return true;
-        }
+    const size_t existing_index = lookupIndex(definition.id);
+    if (existing_index < count_) {
+        copyDefinition(entries_[existing_index], definition);
+        return true;
     }
 
     if (count_ >= kMaxPoints) {
@@ -306,30 +288,29 @@ bool PointCatalog::upsert(const PointDefinition& definition) {
     copyDefinition(entries_[count_], definition);
     states_[count_] = {};
     command_states_[count_] = {};
+    insertIndex(entries_[count_].id, count_);
     count_ += 1u;
     return true;
 }
 
 bool PointCatalog::remove(const PointIdentity& id) {
-    for (size_t index = 0; index < count_; ++index) {
-        if (!identitiesEqual(entries_[index].id, id)) {
-            continue;
-        }
-
-        for (size_t move = index + 1u; move < count_; ++move) {
-            entries_[move - 1u] = entries_[move];
-            states_[move - 1u] = states_[move];
-            command_states_[move - 1u] = command_states_[move];
-        }
-
-        entries_[count_ - 1u] = {};
-        states_[count_ - 1u] = {};
-        command_states_[count_ - 1u] = {};
-        count_ -= 1u;
-        return true;
+    const size_t index = lookupIndex(id);
+    if (index >= count_) {
+        return false;
     }
 
-    return false;
+    for (size_t move = index + 1u; move < count_; ++move) {
+        entries_[move - 1u] = entries_[move];
+        states_[move - 1u] = states_[move];
+        command_states_[move - 1u] = command_states_[move];
+    }
+
+    entries_[count_ - 1u] = {};
+    states_[count_ - 1u] = {};
+    command_states_[count_ - 1u] = {};
+    count_ -= 1u;
+    rebuildIndex();
+    return true;
 }
 
 bool PointCatalog::updateState(const PointIdentity& id, const PointState& state) {
@@ -387,6 +368,8 @@ bool PointCatalog::loadFromJson(const char* json) {
         count_ += 1u;
     }
 
+    rebuildIndex();
+
     return true;
 }
 
@@ -418,6 +401,83 @@ bool PointCatalog::identitiesEqual(const PointIdentity& lhs, const PointIdentity
 
 void PointCatalog::copyDefinition(PointDefinition& dst, const PointDefinition& src) {
     dst = src;
+}
+
+uint32_t PointCatalog::hashIdentity(const PointIdentity& id) {
+    uint32_t hash = kPointCatalogHashOffset;
+    auto append_text = [&hash](const char* text) {
+        if (text == nullptr) {
+            hash ^= 0xFFu;
+            hash *= kPointCatalogHashPrime;
+            return;
+        }
+
+        while (*text != '\0') {
+            hash ^= static_cast<uint8_t>(*text);
+            hash *= kPointCatalogHashPrime;
+            ++text;
+        }
+        hash ^= 0u;
+        hash *= kPointCatalogHashPrime;
+    };
+
+    append_text(id.device_id);
+    append_text(id.feature);
+    append_text(id.point_id);
+    return hash;
+}
+
+void PointCatalog::resetIndex() {
+    for (size_t slot = 0; slot < kIndexCapacity; ++slot) {
+        index_slots_[slot] = kInvalidIndex;
+    }
+}
+
+void PointCatalog::rebuildIndex() {
+    resetIndex();
+    for (size_t index = 0; index < count_; ++index) {
+        insertIndex(entries_[index].id, index);
+    }
+}
+
+size_t PointCatalog::lookupIndex(const PointIdentity& id) const {
+    if (count_ == 0u) {
+        return count_;
+    }
+
+    size_t slot = static_cast<size_t>(hashIdentity(id) & (kIndexCapacity - 1u));
+    for (size_t probes = 0; probes < kIndexCapacity; ++probes) {
+        const uint16_t entry_index = index_slots_[slot];
+        if (entry_index == kInvalidIndex) {
+            return count_;
+        }
+
+        if (entry_index < count_ && identitiesEqual(entries_[entry_index].id, id)) {
+            return entry_index;
+        }
+
+        slot = (slot + 1u) & (kIndexCapacity - 1u);
+    }
+
+    return count_;
+}
+
+void PointCatalog::insertIndex(const PointIdentity& id, size_t index) {
+    size_t slot = static_cast<size_t>(hashIdentity(id) & (kIndexCapacity - 1u));
+    for (size_t probes = 0; probes < kIndexCapacity; ++probes) {
+        const uint16_t entry_index = index_slots_[slot];
+        if (entry_index == kInvalidIndex) {
+            index_slots_[slot] = static_cast<uint16_t>(index);
+            return;
+        }
+
+        if (entry_index < count_ && identitiesEqual(entries_[entry_index].id, id)) {
+            index_slots_[slot] = static_cast<uint16_t>(index);
+            return;
+        }
+
+        slot = (slot + 1u) & (kIndexCapacity - 1u);
+    }
 }
 
 void PointCatalog::serializeDefinition(JsonObject obj, const PointDefinition& definition) {
