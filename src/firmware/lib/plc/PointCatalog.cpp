@@ -30,6 +30,58 @@ static const PointState* point_state_storage_const() {
     return reinterpret_cast<const PointState*>(static_cast<uintptr_t>(kPointStateSdramBase));
 }
 
+static bool is_ascii_digit(char c) {
+    return c >= '0' && c <= '9';
+}
+
+static bool is_transient_slot_variable(const PointIdentity& id) {
+    if (std::strncmp(id.feature, "plc.slot", 8u) != 0) {
+        return false;
+    }
+
+    const char* feature = id.feature + 8u;
+    if (!is_ascii_digit(*feature)) {
+        return false;
+    }
+
+    while (is_ascii_digit(*feature)) {
+        ++feature;
+    }
+
+    if (*feature != '\0') {
+        return false;
+    }
+
+    static constexpr const char* kReservedPointIds[] = {
+        "loaded",
+        "state",
+        "runEnabled",
+        "status",
+        "cycleCounter",
+        "faultCode",
+        "faultInfo",
+        "bytecodeSize",
+        "source",
+        "programType",
+        "paramsSummary",
+        "inputChannel",
+        "outputChannel",
+        "runtimeMapOk",
+        "start",
+        "stop",
+        "reset",
+        "clearFault",
+    };
+
+    for (const char* reserved : kReservedPointIds) {
+        if (std::strcmp(id.point_id, reserved) == 0) {
+            return false;
+        }
+    }
+
+    return id.point_id[0] != '\0';
+}
+
 static void copy_string(char* dst, size_t dst_size, const char* src) {
     if (dst == nullptr || dst_size == 0u) {
         return;
@@ -380,6 +432,9 @@ bool PointCatalog::loadFromJson(const char* json) {
         if (!deserialize_persisted_entry(definition, item)) {
             return false;
         }
+        if (is_transient_slot_variable(definition.id)) {
+            continue;
+        }
         entries_[count_] = definition;
         count_ += 1u;
     }
@@ -397,6 +452,9 @@ bool PointCatalog::saveToJson(char* out, size_t out_size) const {
     JsonDocument doc;
     JsonArray points = doc["points"].to<JsonArray>();
     for (size_t index = 0; index < count_; ++index) {
+        if (is_transient_slot_variable(entries_[index].id)) {
+            continue;
+        }
         JsonArray entry = points.add<JsonArray>();
         serialize_persisted_definition(entry, entries_[index]);
     }

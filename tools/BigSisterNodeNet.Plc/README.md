@@ -26,12 +26,15 @@ Supported declarations:
 
 - `CONST POINT_ID <symbol>, <deviceId.feature.pointId>`
 - `PARAM POINT_ID <symbol>`
+- `VAR <type> <name>`
 
 Supported instructions:
 
 - `HALT`
 - `LOAD_BOOL <symbol>`
 - `STORE_BOOL <symbol>`
+- `INC_INT <symbol>`
+- `DEC_INT <symbol>`
 - `DB <byte0>, <byte1>, ...`
 
 Supported aliases:
@@ -40,6 +43,8 @@ Supported aliases:
 - `STORE_POINT_BOOL`
 - `LB`
 - `SB`
+- `INC`
+- `DEC`
 
 Point operands reference the symbol names declared earlier in the same source.
 
@@ -48,9 +53,11 @@ Example:
 ```text
 PARAM POINT_ID input
 CONST POINT_ID y, gb9fao5yk4f.modbus0.waveshare8ch.output4
+VAR INT counter
 
 LOAD_BOOL input
 STORE_BOOL y
+INC_INT counter
 HALT
 ```
 
@@ -58,8 +65,8 @@ Generated object model:
 
 ```text
 code bytes with placeholder operands
-+ symbol table containing input and y
-+ relocation table patching LOAD_BOOL and STORE_BOOL operands
++ symbol table containing point symbols and slot-local vars
++ relocation table patching symbolic operands to runtime indices
 ```
 
 Disassembly helpers:
@@ -123,5 +130,7 @@ The repo documents desktop transport as raw JSON plus binary upload frames excha
 This library therefore:
 
 - builds JSON command payloads for the begin/commit upload phases
+- builds JSON command payloads for linked-bytecode readback from a loaded slot
+- builds JSON command payloads for true `objectFileV1` readback from a loaded slot
 - builds raw binary PLC upload frames matching the firmware `plcUploadDataRes` flow
 - leaves the actual transport, session ownership, and response handling to `BigSisterNodeNet.Core`

@@ -22,6 +22,15 @@ namespace BigSisterNodeNet.Plc
         public IDictionary<string, object> CommitResponse { get; set; }
     }
 
+    public sealed class PlcDownloadResult
+    {
+        public ushort SlotId { get; set; }
+        public byte[] BytecodeBytes { get; set; } = Array.Empty<byte>();
+        public byte[] PayloadBytes { get; set; } = Array.Empty<byte>();
+        public string ArtifactType { get; set; } = string.Empty;
+        public IDictionary<string, object> FinalResponse { get; set; }
+    }
+
     public sealed class PlcUploadClient
     {
         public byte[] BuildObjectFile(string machineCode, PlcUploadOptions options)
@@ -109,6 +118,48 @@ namespace BigSisterNodeNet.Plc
             };
         }
 
+        public IDictionary<string, object> CreateBytecodeReadRequest(ushort slotId,
+                                                                      uint offset,
+                                                                      int requestedCount,
+                                                                      PlcUploadOptions options)
+        {
+            if (options == null)
+            {
+                throw new ArgumentNullException(nameof(options));
+            }
+
+            return new Dictionary<string, object>
+            {
+                ["cmd"] = "plcBytecodeReq",
+                ["from"] = options.LocalAddress,
+                ["to"] = options.RemoteAddress,
+                ["slotId"] = slotId,
+                ["offset"] = offset,
+                ["maxBytes"] = requestedCount,
+            };
+        }
+
+        public IDictionary<string, object> CreateObjectFileReadRequest(ushort slotId,
+                                                                        uint offset,
+                                                                        int requestedCount,
+                                                                        PlcUploadOptions options)
+        {
+            if (options == null)
+            {
+                throw new ArgumentNullException(nameof(options));
+            }
+
+            return new Dictionary<string, object>
+            {
+                ["cmd"] = "plcObjectFileReq",
+                ["from"] = options.LocalAddress,
+                ["to"] = options.RemoteAddress,
+                ["slotId"] = slotId,
+                ["offset"] = offset,
+                ["maxBytes"] = requestedCount,
+            };
+        }
+
         public byte[] BuildDataFrame(uint uploadId, uint offset, byte[] payloadSource, int payloadOffset, int payloadCount)
         {
             var frame = new byte[16 + payloadCount];
@@ -139,9 +190,14 @@ namespace BigSisterNodeNet.Plc
             if (!ReadBoolean(response, "ok"))
             {
                 var error = ReadString(response, "error");
+                var loadStatus = response.TryGetValue("loadStatus", out var loadStatusValue) && loadStatusValue != null
+                    ? Convert.ToString(loadStatusValue)
+                    : string.Empty;
                 throw new InvalidOperationException(string.IsNullOrWhiteSpace(error)
                     ? "Device returned a rejected response."
-                    : $"Device returned error '{error}'.");
+                    : string.IsNullOrWhiteSpace(loadStatus)
+                        ? $"Device returned error '{error}'."
+                        : $"Device returned error '{error}' (loadStatus={loadStatus}).");
             }
 
             return response;
@@ -175,6 +231,27 @@ namespace BigSisterNodeNet.Plc
             }
 
             return Convert.ToUInt32(value);
+        }
+
+        public byte[] ReadBase64Bytes(IDictionary<string, object> response, string key)
+        {
+            if (response == null)
+            {
+                throw new ArgumentNullException(nameof(response));
+            }
+
+            if (!response.TryGetValue(key, out var value) || value == null)
+            {
+                return Array.Empty<byte>();
+            }
+
+            var text = Convert.ToString(value);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return Array.Empty<byte>();
+            }
+
+            return Convert.FromBase64String(text);
         }
 
         private static void WriteUInt16(byte[] buffer, int offset, ushort value)

@@ -15,6 +15,7 @@ Supported commands:
 - `plcStatusReq`
 - `plcSlotsReq`
 - `plcLoadReq`
+- `plcBytecodeReq`
 - `plcUploadBeginReq`
 - `plcUploadStatusReq`
 - `plcUploadCommitReq`
@@ -54,6 +55,126 @@ Transport note:
 - the firmware routes replies back to `request.from`
 - `from = 255` is treated as the desktop endpoint and the reply is re-emitted so the PC can receive it through the master
 - using `from = 5` or another regular NodeNet address sends the reply to that NodeNet node, not back to the PC link
+
+## plcBytecodeReq
+
+Reads back the linked PLC bytecode currently loaded in one slot.
+
+This command returns the runtime-linked bytecode stored in the slot SDRAM region,
+not the original `objectFileV1` source artifact. Symbolic point names are therefore
+not preserved in the returned bytes.
+
+### Request
+
+```json
+{
+  "cmd": "plcBytecodeReq",
+  "from": 255,
+  "to": 4,
+  "slotId": 0,
+  "offset": 0,
+  "maxBytes": 768
+}
+```
+
+Fields:
+
+- `slotId`: slot to inspect
+- `offset`: byte offset inside the linked slot bytecode
+- `maxBytes`: requested maximum chunk size, capped by firmware
+
+### Success response
+
+```json
+{
+  "cmd": "plcBytecodeRes",
+  "ok": true,
+  "slotId": 0,
+  "offset": 0,
+  "count": 96,
+  "totalSize": 96,
+  "hasMore": false,
+  "encoding": "base64",
+  "dataBase64": "ECoAEQEA"
+}
+```
+
+Fields:
+
+- `count`: number of decoded bytecode bytes in this chunk
+- `totalSize`: total linked bytecode size for the slot
+- `hasMore`: `true` when another chunk must be requested
+- `dataBase64`: Base64-encoded linked bytecode bytes
+
+### Failure responses
+
+Possible firmware error values:
+
+- `slotOutOfRange`
+- `slotNotLoaded`
+- `offsetOutOfRange`
+
+## plcObjectFileReq
+
+Reads back the original `objectFileV1` payload currently retained for one slot.
+
+This command returns the per-slot source artifact snapshot kept in SDRAM after a
+successful load. Symbol names, `PARAM`, and `VAR` declarations are preserved and
+can be reconstructed by the desktop disassembler.
+
+### Request
+
+```json
+{
+  "cmd": "plcObjectFileReq",
+  "from": 255,
+  "to": 4,
+  "slotId": 0,
+  "offset": 0,
+  "maxBytes": 768
+}
+```
+
+Fields:
+
+- `slotId`: slot to inspect
+- `offset`: byte offset inside the retained `objectFileV1` payload
+- `maxBytes`: requested maximum chunk size, capped by firmware
+
+### Success response
+
+```json
+{
+  "cmd": "plcObjectFileRes",
+  "ok": true,
+  "slotId": 0,
+  "offset": 0,
+  "count": 164,
+  "totalSize": 164,
+  "payloadCrc32": 305419896,
+  "artifactType": "objectFileV1",
+  "hasMore": false,
+  "encoding": "base64",
+  "dataBase64": "..."
+}
+```
+
+Fields:
+
+- `count`: number of decoded object bytes in this chunk
+- `totalSize`: total retained object size for the slot
+- `payloadCrc32`: checksum of the retained object payload
+- `artifactType`: always `objectFileV1`
+- `hasMore`: `true` when another chunk must be requested
+- `dataBase64`: Base64-encoded object bytes
+
+### Failure responses
+
+Possible firmware error values:
+
+- `slotOutOfRange`
+- `objectFileUnavailable`
+- `encodingFailed`
 
 ## pointDefsReq
 

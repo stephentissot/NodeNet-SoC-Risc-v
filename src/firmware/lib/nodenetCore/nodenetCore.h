@@ -247,6 +247,8 @@ class NodeNetCore
         bool handlePlcStatusRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePlcSlotsRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePlcLoadRequest(const JsonDocument& request, JsonDocument& response);
+        bool handlePlcBytecodeRequest(const JsonDocument& request, JsonDocument& response);
+        bool handlePlcObjectFileRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePlcUploadBeginRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePlcUploadStatusRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePlcUploadCommitRequest(const JsonDocument& request, JsonDocument& response);

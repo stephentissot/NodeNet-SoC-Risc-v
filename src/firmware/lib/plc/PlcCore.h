@@ -75,6 +75,8 @@ private:
     bool executeSlot0Scan(uint32_t control_block_addr, uint32_t now_ms);
     bool readRuntimeBool(uint16_t runtime_index, bool& value_out) const;
     bool commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now_ms);
+    bool readRuntimeInt16(uint16_t runtime_index, int16_t& value_out) const;
+    bool commitRuntimeInt16(uint16_t runtime_index, int16_t value, uint32_t now_ms);
     void faultSlot0(uint32_t control_block_addr, uint32_t fault_code, uint32_t fault_info);
     PointQuality qualityFromModbusError(ModbusMaster::Error error) const;
 };

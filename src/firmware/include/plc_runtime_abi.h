@@ -358,6 +358,55 @@ private:
         return std::strncmp(text, prefix, prefix_len) == 0;
     }
 
+    static bool isDynamicSlotVariablePoint(const PointDefinition& definition)
+    {
+        if (!startsWith(definition.id.feature, "plc.slot")) {
+            return false;
+        }
+
+        const char* feature = definition.id.feature + 8u;
+        if (*feature < '0' || *feature > '9') {
+            return false;
+        }
+
+        while (*feature >= '0' && *feature <= '9') {
+            ++feature;
+        }
+
+        if (*feature != '\0') {
+            return false;
+        }
+
+        static constexpr const char* kBuiltinSlotPointIds[] = {
+            "loaded",
+            "state",
+            "runEnabled",
+            "status",
+            "cycleCounter",
+            "faultCode",
+            "faultInfo",
+            "bytecodeSize",
+            "source",
+            "programType",
+            "paramsSummary",
+            "inputChannel",
+            "outputChannel",
+            "runtimeMapOk",
+            "start",
+            "stop",
+            "reset",
+            "clearFault",
+        };
+
+        for (const char* builtin : kBuiltinSlotPointIds) {
+            if (stringsEqual(definition.id.point_id, builtin)) {
+                return false;
+            }
+        }
+
+        return definition.id.point_id[0] != '\0';
+    }
+
     static bool shouldPublishDefinition(const PointDefinition& definition)
     {
         if (!isSupported(definition.value_type)) {
@@ -367,7 +416,7 @@ private:
         if (stringsEqual(definition.id.feature, "core") ||
             stringsEqual(definition.id.feature, "modbus0") ||
             stringsEqual(definition.id.feature, "plc") ||
-            startsWith(definition.id.feature, "plc.slot")) {
+            (startsWith(definition.id.feature, "plc.slot") && !isDynamicSlotVariablePoint(definition))) {
             return false;
         }
 

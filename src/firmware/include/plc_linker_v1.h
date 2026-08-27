@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "plc_runtime_abi.h"
@@ -13,6 +14,7 @@ static constexpr uint16_t kPlcObjectFileVersionV1 = 1u;
 enum PlcObjectSymbolKindV1 : uint8_t {
     kPlcSymbolConstPointId = 0u,
     kPlcSymbolParamPointId = 1u,
+    kPlcSymbolSlotVar = 2u,
 };
 
 enum PlcObjectRelocationKindV1 : uint8_t {
@@ -197,7 +199,8 @@ public:
                                                  const PointCatalog& catalog,
                                                  const PlcObjectImageV1& object_image,
                                                  uint8_t* linked_code_out,
-                                                 size_t linked_code_capacity)
+                                                 size_t linked_code_capacity,
+                                                 uint16_t slot_id = 0xFFFFu)
     {
         PlcObjectLinkResultV1 result = {};
         result.status = kPlcObjectLinkInvalidArgument;
@@ -247,7 +250,12 @@ public:
                 return result;
             }
 
-            const PlcObjectSymbolRecordV1& symbol = object_image.symbols[relocation.symbol_index];
+            PlcObjectSymbolRecordV1 symbol = {};
+            if (!resolveSymbolRecord(catalog, slot_id, object_image.symbols[relocation.symbol_index], symbol)) {
+                result.status = kPlcObjectLinkResolveFailed;
+                result.resolve_status = kPlcRuntimeLinkUnsupportedPointType;
+                return result;
+            }
             result.failing_symbol_index = relocation.symbol_index;
 
             PlcRuntimePublisherV1::LinkRequest request = {};
@@ -275,6 +283,79 @@ public:
     }
 
 private:
+    static bool resolveSymbolRecord(const PointCatalog& catalog,
+                                    uint16_t slot_id,
+                                    const PlcObjectSymbolRecordV1& source,
+                                    PlcObjectSymbolRecordV1& resolved)
+    {
+        resolved = source;
+        if (source.symbol_kind != kPlcSymbolSlotVar) {
+            return true;
+        }
+
+        if (!isSupportedSlotVariableType(source.expected_type)) {
+            return false;
+        }
+
+        return buildSlotVariableIdentity(catalog, slot_id, source.symbol_name, resolved.point_id);
+    }
+
+    static bool isSupportedSlotVariableType(uint8_t raw_type)
+    {
+        switch (static_cast<PointValueType>(raw_type)) {
+        case PointValueType::Bool:
+        case PointValueType::Uint16:
+        case PointValueType::Int16:
+        case PointValueType::Uint32:
+        case PointValueType::Int32:
+        case PointValueType::Float:
+        case PointValueType::Enum:
+            return true;
+        case PointValueType::String:
+        default:
+            return false;
+        }
+    }
+
+    static bool buildSlotVariableIdentity(const PointCatalog& catalog,
+                                          uint16_t slot_id,
+                                          const char* symbol_name,
+                                          PointIdentity& point_id)
+    {
+        if (catalog.size() == 0u || symbol_name == nullptr || symbol_name[0] == '\0' || slot_id == 0xFFFFu) {
+            return false;
+        }
+
+        point_id = {};
+        const int feature_written = std::snprintf(point_id.feature,
+                                                  sizeof(point_id.feature),
+                                                  "plc.slot%u",
+                                                  static_cast<unsigned>(slot_id));
+        if (feature_written <= 0 || static_cast<size_t>(feature_written) >= sizeof(point_id.feature)) {
+            return false;
+        }
+
+        const PointDefinition* definitions = catalog.entries();
+        bool device_id_resolved = false;
+        for (size_t index = 0u; index < catalog.size(); ++index) {
+            const PointDefinition& definition = definitions[index];
+            if (definition.backend != PointBackend::Local ||
+                std::strcmp(definition.id.feature, point_id.feature) != 0) {
+                continue;
+            }
+
+            std::strncpy(point_id.device_id, definition.id.device_id, sizeof(point_id.device_id) - 1u);
+            device_id_resolved = point_id.device_id[0] != '\0';
+            break;
+        }
+        if (!device_id_resolved) {
+            std::strncpy(point_id.device_id, definitions[0].id.device_id, sizeof(point_id.device_id) - 1u);
+        }
+
+        std::strncpy(point_id.point_id, symbol_name, sizeof(point_id.point_id) - 1u);
+        return point_id.point_id[0] != '\0';
+    }
+
     static uint32_t checksum32(const uint8_t* data, size_t len)
     {
         uint32_t value = 2166136261u;

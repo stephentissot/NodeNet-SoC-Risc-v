@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "flash.h"
@@ -12,10 +13,14 @@ static constexpr uint32_t kPlcSlotBytecodeRegionBaseV1 = SDRAM_BASE + 0x00130000
 static constexpr uint32_t kPlcSlotBytecodeRegionSizeV1 = 0x00040000u;
 static constexpr uint32_t kPlcSlotControlRegionBaseV1 = SDRAM_BASE + 0x00170000u;
 static constexpr uint32_t kPlcSlotControlRegionSizeV1 = 0x00010000u;
+static constexpr uint32_t kPlcSlotObjectRegionBaseV1 = SDRAM_BASE + 0x00180000u;
 static constexpr uint16_t kPlcSlotCountV1 = 16u;
 static constexpr uint32_t kPlcSlotBytecodeStrideV1 = kPlcSlotBytecodeRegionSizeV1 / kPlcSlotCountV1;
+static constexpr uint32_t kPlcSlotObjectStrideV1 = Flash::kPlcPackageSlotSize + 256u;
+static constexpr uint32_t kPlcSlotObjectRegionSizeV1 = static_cast<uint32_t>(kPlcSlotCountV1) * kPlcSlotObjectStrideV1;
 static constexpr uint32_t kPlcProgramControlBlockMagicV1 = 0x31424350u;
 static constexpr uint32_t kPlcLinkedImageMagicV1 = 0x31474D49u;
+static constexpr uint32_t kPlcObjectSnapshotMagicV1 = 0x3146534Fu;
 static constexpr uint32_t kPlcSlotDirectoryMagicV1 = 0x31524453u;
 static constexpr uint32_t kPlcSlotStackSizeBytesV1 = 1024u;
 static constexpr uint32_t kPlcSlotTimerSizeBytesV1 = 512u;
@@ -103,6 +108,15 @@ struct PlcLinkedImageHeaderV1 {
     uint32_t params_size;
 };
 
+struct PlcObjectSnapshotHeaderV1 {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t slot_id;
+    uint32_t flags;
+    uint32_t object_size;
+    uint32_t object_checksum;
+};
+
 struct PlcSlotDirectoryHeaderV1 {
     uint32_t magic;
     uint16_t version;
@@ -139,6 +153,7 @@ static_assert(sizeof(PlcSlotParamsHeaderV1) == 16u, "Unexpected params header si
 static_assert(sizeof(PlcMirrorProgramParamsV1) == 24u, "Unexpected mirror params size");
 static_assert(sizeof(PlcProgramControlBlockV1) == 72u, "Unexpected control block size");
 static_assert(sizeof(PlcLinkedImageHeaderV1) == 36u, "Unexpected linked image header size");
+static_assert(sizeof(PlcObjectSnapshotHeaderV1) == 20u, "Unexpected object snapshot header size");
 static_assert(sizeof(PlcSlotDirectoryHeaderV1) == 16u, "Unexpected slot directory header size");
 static_assert(sizeof(PlcSlotManifestV1) == 72u, "Unexpected slot manifest size");
 
@@ -183,6 +198,21 @@ public:
         return kPlcSlotControlRegionBaseV1;
     }
 
+    static uint32_t slotObjectSnapshotHeaderAddress(uint16_t slot_id)
+    {
+        return kPlcSlotObjectRegionBaseV1 + static_cast<uint32_t>(slot_id) * kPlcSlotObjectStrideV1;
+    }
+
+    static uint32_t slotObjectSnapshotDataAddress(uint16_t slot_id)
+    {
+        return slotObjectSnapshotHeaderAddress(slot_id) + static_cast<uint32_t>(sizeof(PlcObjectSnapshotHeaderV1));
+    }
+
+    static uint32_t slotObjectSnapshotCapacity()
+    {
+        return kPlcSlotObjectStrideV1 - static_cast<uint32_t>(sizeof(PlcObjectSnapshotHeaderV1));
+    }
+
     static uint32_t slotManifestAddress(uint16_t slot_id)
     {
         return slotManifestTableBase() + static_cast<uint32_t>(slot_id) * sizeof(PlcSlotManifestV1);
@@ -217,6 +247,7 @@ public:
         return static_cast<uintptr_t>(kPlcSlotBytecodeRegionBaseV1) >=
                    static_cast<uintptr_t>(kPlcRuntimeStatusBase + kPlcRuntimeStatusWindowSize) &&
                static_cast<uintptr_t>(kPlcSlotBytecodeRegionBaseV1 + kPlcSlotBytecodeRegionSizeV1) <= sdram_limit &&
+               static_cast<uintptr_t>(kPlcSlotObjectRegionBaseV1 + kPlcSlotObjectRegionSizeV1) <= sdram_limit &&
                control_block_limit <= control_limit &&
                control_limit <= sdram_limit;
     }
@@ -255,11 +286,19 @@ public:
         }
 
         uint8_t* linked_bytecode = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(result.layout.linked_code_addr));
+        if (!prepareSlotVariablePoints(publisher, catalog, slot_id, object_image)) {
+            result.status = kPlcSlotLoadLinkFailed;
+            result.link_result.status = kPlcObjectLinkResolveFailed;
+            result.link_result.resolve_status = kPlcRuntimeLinkUnsupportedPointType;
+            return result;
+        }
+
         result.link_result = PlcObjectLinkerV1::linkObjectImage(publisher,
                                                                 catalog,
                                                                 object_image,
                                                                 linked_bytecode,
-                                                                result.layout.linked_code_capacity);
+                                                                result.layout.linked_code_capacity,
+                                                                slot_id);
         if (result.link_result.status != kPlcObjectLinkOk) {
             result.status = kPlcSlotLoadLinkFailed;
             return result;
@@ -400,6 +439,12 @@ public:
                                           parse_result.object_image,
                                           parse_result.header.max_instructions_per_scan,
                                           parse_result.header.max_scan_time_us);
+        if (result.status == kPlcSlotLoadOk &&
+            !writeObjectFileSnapshot(slot_id,
+                                     object_file_bytes,
+                                     static_cast<uint32_t>(object_file_size))) {
+            result.status = kPlcSlotLoadBytecodeTooLarge;
+        }
         result.parse_status = parse_result.status;
         return result;
     }
@@ -462,8 +507,16 @@ public:
             return result;
         }
 
+        if (!prepareSlotVariablePointsFromFlash(publisher, catalog, slot_id, flash, flash_offset, object_header)) {
+            result.status = kPlcSlotLoadLinkFailed;
+            result.link_result.status = kPlcObjectLinkResolveFailed;
+            result.link_result.resolve_status = kPlcRuntimeLinkUnsupportedPointType;
+            return result;
+        }
+
         result.link_result = linkObjectFileFromFlash(publisher,
                                                      catalog,
+                                                     slot_id,
                                                      flash,
                                                      flash_offset,
                                                      object_header,
@@ -489,11 +542,337 @@ public:
                                 runtime_header.store_epoch,
                                 checksum32(linked_bytecode, object_header.code_size));
 
+        if (!writeObjectFileSnapshotFromFlash(slot_id,
+                                              flash,
+                                              flash_offset,
+                                              object_header.total_size,
+                                              object_header.object_checksum)) {
+            result.status = kPlcSlotLoadBytecodeTooLarge;
+            return result;
+        }
+
         result.status = kPlcSlotLoadOk;
         return result;
     }
 
+    static bool readObjectFileSnapshotChunk(uint16_t slot_id,
+                                            uint32_t offset,
+                                            uint8_t* out,
+                                            uint32_t out_capacity,
+                                            uint32_t& copied_out,
+                                            uint32_t& total_size_out,
+                                            uint32_t& checksum_out)
+    {
+        copied_out = 0u;
+        total_size_out = 0u;
+        checksum_out = 0u;
+        if (out == nullptr || slot_id >= kPlcSlotCountV1) {
+            return false;
+        }
+
+        const auto* header = reinterpret_cast<const PlcObjectSnapshotHeaderV1*>(
+            static_cast<uintptr_t>(slotObjectSnapshotHeaderAddress(slot_id)));
+        if (!objectSnapshotHeaderValid(*header, slot_id) || offset > header->object_size) {
+            return false;
+        }
+
+        total_size_out = header->object_size;
+        checksum_out = header->object_checksum;
+        copied_out = total_size_out - offset;
+        if (copied_out > out_capacity) {
+            copied_out = out_capacity;
+        }
+
+        const uint8_t* src = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(slotObjectSnapshotDataAddress(slot_id)));
+        std::memcpy(out, src + offset, copied_out);
+        return true;
+    }
+
 private:
+    static bool objectSnapshotHeaderValid(const PlcObjectSnapshotHeaderV1& header, uint16_t slot_id)
+    {
+        return header.magic == kPlcObjectSnapshotMagicV1 &&
+               header.version == kPlcRuntimeAbiV1Version &&
+               header.slot_id == slot_id &&
+               header.object_size >= sizeof(PlcObjectFileHeaderV1) &&
+               header.object_size <= slotObjectSnapshotCapacity();
+    }
+
+    static bool writeObjectFileSnapshot(uint16_t slot_id, const uint8_t* object_file_bytes, uint32_t object_size)
+    {
+        if (slot_id >= kPlcSlotCountV1 || object_file_bytes == nullptr ||
+            object_size < sizeof(PlcObjectFileHeaderV1) || object_size > slotObjectSnapshotCapacity()) {
+            return false;
+        }
+
+        auto* header = reinterpret_cast<PlcObjectSnapshotHeaderV1*>(
+            static_cast<uintptr_t>(slotObjectSnapshotHeaderAddress(slot_id)));
+        uint8_t* data = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(slotObjectSnapshotDataAddress(slot_id)));
+        std::memcpy(data, object_file_bytes, object_size);
+
+        PlcObjectSnapshotHeaderV1 next = {};
+        next.magic = kPlcObjectSnapshotMagicV1;
+        next.version = kPlcRuntimeAbiV1Version;
+        next.slot_id = slot_id;
+        next.flags = 0u;
+        next.object_size = object_size;
+        next.object_checksum = checksum32(object_file_bytes, object_size);
+        std::memcpy(header, &next, sizeof(next));
+        return true;
+    }
+
+    static bool writeObjectFileSnapshotFromFlash(uint16_t slot_id,
+                                                 const Flash& flash,
+                                                 uint32_t flash_offset,
+                                                 uint32_t object_size,
+                                                 uint32_t object_checksum)
+    {
+        if (slot_id >= kPlcSlotCountV1 ||
+            object_size < sizeof(PlcObjectFileHeaderV1) ||
+            object_size > slotObjectSnapshotCapacity()) {
+            return false;
+        }
+
+        uint8_t* data = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(slotObjectSnapshotDataAddress(slot_id)));
+        if (!flashReadBytes(flash, flash_offset, data, object_size)) {
+            return false;
+        }
+
+        auto* header = reinterpret_cast<PlcObjectSnapshotHeaderV1*>(
+            static_cast<uintptr_t>(slotObjectSnapshotHeaderAddress(slot_id)));
+        PlcObjectSnapshotHeaderV1 next = {};
+        next.magic = kPlcObjectSnapshotMagicV1;
+        next.version = kPlcRuntimeAbiV1Version;
+        next.slot_id = slot_id;
+        next.flags = 0u;
+        next.object_size = object_size;
+        next.object_checksum = object_checksum;
+        std::memcpy(header, &next, sizeof(next));
+        return true;
+    }
+
+    static bool prepareSlotVariablePoints(const PlcRuntimePublisherV1& publisher,
+                                          const PointCatalog& catalog,
+                                          uint16_t slot_id,
+                                          const PlcObjectImageV1& object_image)
+    {
+        PointCatalog& mutable_catalog = const_cast<PointCatalog&>(catalog);
+        if (!clearSlotVariablePoints(mutable_catalog, slot_id)) {
+            return false;
+        }
+
+        for (uint16_t symbol_index = 0u; symbol_index < object_image.symbol_count; ++symbol_index) {
+            if (!ensureSlotVariablePoint(mutable_catalog, slot_id, object_image.symbols[symbol_index])) {
+                return false;
+            }
+        }
+
+        return const_cast<PlcRuntimePublisherV1&>(publisher).publish(catalog, 0u);
+    }
+
+    static bool prepareSlotVariablePointsFromFlash(const PlcRuntimePublisherV1& publisher,
+                                                   const PointCatalog& catalog,
+                                                   uint16_t slot_id,
+                                                   const Flash& flash,
+                                                   uint32_t flash_offset,
+                                                   const PlcObjectFileHeaderV1& header)
+    {
+        PointCatalog& mutable_catalog = const_cast<PointCatalog&>(catalog);
+        if (!clearSlotVariablePoints(mutable_catalog, slot_id)) {
+            return false;
+        }
+
+        for (uint16_t symbol_index = 0u; symbol_index < header.symbol_count; ++symbol_index) {
+            PlcObjectSymbolRecordV1 symbol = {};
+            const uint32_t symbol_offset = flash_offset + header.symbol_table_offset +
+                                           static_cast<uint32_t>(symbol_index) * sizeof(PlcObjectSymbolRecordV1);
+            if (!flashReadBytes(flash, symbol_offset, &symbol, sizeof(symbol))) {
+                return false;
+            }
+            if (!ensureSlotVariablePoint(mutable_catalog, slot_id, symbol)) {
+                return false;
+            }
+        }
+
+        return const_cast<PlcRuntimePublisherV1&>(publisher).publish(catalog, 0u);
+    }
+
+    static bool ensureSlotVariablePoint(PointCatalog& catalog,
+                                        uint16_t slot_id,
+                                        const PlcObjectSymbolRecordV1& symbol)
+    {
+        if (symbol.symbol_kind != kPlcSymbolSlotVar) {
+            return true;
+        }
+
+        PointIdentity point_id = {};
+        if (!buildSlotVariableIdentity(catalog, slot_id, symbol.symbol_name, point_id) ||
+            !isSupportedSlotVariableType(symbol.expected_type)) {
+            return false;
+        }
+
+        PointDefinition definition = {};
+        definition.id = point_id;
+        std::strncpy(definition.display_name, symbol.symbol_name, sizeof(definition.display_name) - 1u);
+        definition.backend = PointBackend::Local;
+        definition.direction = PointDirection::InOut;
+        definition.value_type = static_cast<PointValueType>(symbol.expected_type);
+        definition.polling.refresh_ms = 0u;
+        definition.polling.timeout_ms = 0u;
+        definition.string_capacity = 0u;
+        definition.scale = 1.0f;
+        definition.unit[0] = '\0';
+        std::memset(&definition.ref, 0, sizeof(definition.ref));
+        return catalog.upsert(definition);
+    }
+
+    static bool clearSlotVariablePoints(PointCatalog& catalog, uint16_t slot_id)
+    {
+        size_t index = 0u;
+        while (index < catalog.size()) {
+            const PointDefinition& definition = catalog.entries()[index];
+            if (!isSlotVariablePoint(definition, slot_id)) {
+                ++index;
+                continue;
+            }
+
+            if (!catalog.remove(definition.id)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    static bool isSlotVariablePoint(const PointDefinition& definition, uint16_t slot_id)
+    {
+        if (definition.backend != PointBackend::Local) {
+            return false;
+        }
+
+        char feature[32] = {};
+        const int written = std::snprintf(feature, sizeof(feature), "plc.slot%u", static_cast<unsigned>(slot_id));
+        if (written <= 0 || static_cast<size_t>(written) >= sizeof(feature)) {
+            return false;
+        }
+
+        return std::strcmp(definition.id.feature, feature) == 0 && !isReservedSlotPointId(definition.id.point_id);
+    }
+
+    static bool resolveSymbolRecord(const PointCatalog& catalog,
+                                    uint16_t slot_id,
+                                    const PlcObjectSymbolRecordV1& source,
+                                    PlcObjectSymbolRecordV1& resolved)
+    {
+        resolved = source;
+        if (source.symbol_kind != kPlcSymbolSlotVar) {
+            return true;
+        }
+
+        if (!buildSlotVariableIdentity(catalog, slot_id, source.symbol_name, resolved.point_id) ||
+            !isSupportedSlotVariableType(source.expected_type)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    static bool buildSlotVariableIdentity(const PointCatalog& catalog,
+                                          uint16_t slot_id,
+                                          const char* symbol_name,
+                                          PointIdentity& point_id)
+    {
+        if (catalog.size() == 0u || symbol_name == nullptr || symbol_name[0] == '\0') {
+            return false;
+        }
+
+        point_id = {};
+        const int feature_written = std::snprintf(point_id.feature,
+                                                  sizeof(point_id.feature),
+                                                  "plc.slot%u",
+                                                  static_cast<unsigned>(slot_id));
+        if (feature_written <= 0 || static_cast<size_t>(feature_written) >= sizeof(point_id.feature)) {
+            return false;
+        }
+
+        const PointDefinition* definitions = catalog.entries();
+        bool device_id_resolved = false;
+        for (size_t index = 0u; index < catalog.size(); ++index) {
+            const PointDefinition& definition = definitions[index];
+            if (definition.backend != PointBackend::Local ||
+                std::strcmp(definition.id.feature, point_id.feature) != 0) {
+                continue;
+            }
+
+            std::strncpy(point_id.device_id, definition.id.device_id, sizeof(point_id.device_id) - 1u);
+            device_id_resolved = point_id.device_id[0] != '\0';
+            break;
+        }
+        if (!device_id_resolved) {
+            std::strncpy(point_id.device_id, definitions[0].id.device_id, sizeof(point_id.device_id) - 1u);
+        }
+
+        if (isReservedSlotPointId(symbol_name)) {
+            return false;
+        }
+
+        std::strncpy(point_id.point_id, symbol_name, sizeof(point_id.point_id) - 1u);
+        return point_id.point_id[0] != '\0';
+    }
+
+    static bool isReservedSlotPointId(const char* point_id)
+    {
+        if (point_id == nullptr || point_id[0] == '\0') {
+            return true;
+        }
+
+        static constexpr const char* kReservedPointIds[] = {
+            "loaded",
+            "state",
+            "runEnabled",
+            "status",
+            "cycleCounter",
+            "faultCode",
+            "faultInfo",
+            "bytecodeSize",
+            "source",
+            "programType",
+            "paramsSummary",
+            "inputChannel",
+            "outputChannel",
+            "runtimeMapOk",
+            "start",
+            "stop",
+            "reset",
+            "clearFault",
+        };
+
+        for (const char* reserved : kReservedPointIds) {
+            if (std::strcmp(point_id, reserved) == 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    static bool isSupportedSlotVariableType(uint8_t raw_type)
+    {
+        switch (static_cast<PointValueType>(raw_type)) {
+        case PointValueType::Bool:
+        case PointValueType::Uint16:
+        case PointValueType::Int16:
+        case PointValueType::Uint32:
+        case PointValueType::Int32:
+        case PointValueType::Float:
+        case PointValueType::Enum:
+            return true;
+        case PointValueType::String:
+        default:
+            return false;
+        }
+    }
+
     static PlcSlotLoadStatusV1 validateObjectFileHeader(const PlcObjectFileHeaderV1& header,
                                                         uint32_t object_capacity)
     {
@@ -567,6 +946,7 @@ private:
 
     static PlcObjectLinkResultV1 linkObjectFileFromFlash(const PlcRuntimePublisherV1& publisher,
                                                          const PointCatalog& catalog,
+                                                         uint16_t slot_id,
                                                          const Flash& flash,
                                                          uint32_t flash_offset,
                                                          const PlcObjectFileHeaderV1& header,
@@ -622,10 +1002,18 @@ private:
                 return result;
             }
 
+            PlcObjectSymbolRecordV1 resolved_symbol = {};
+            if (!resolveSymbolRecord(catalog, slot_id, symbol, resolved_symbol)) {
+                result.status = kPlcObjectLinkResolveFailed;
+                result.resolve_status = kPlcRuntimeLinkUnsupportedPointType;
+                result.failing_symbol_index = relocation.symbol_index;
+                return result;
+            }
+
             PlcRuntimePublisherV1::LinkRequest request = {};
-            request.point_id = symbol.point_id;
-            request.expected_type = static_cast<PointValueType>(symbol.expected_type);
-            request.access = static_cast<PlcRuntimeLinkAccessV1>(symbol.access);
+            request.point_id = resolved_symbol.point_id;
+            request.expected_type = static_cast<PointValueType>(resolved_symbol.expected_type);
+            request.access = static_cast<PlcRuntimeLinkAccessV1>(resolved_symbol.access);
 
             const PlcRuntimePublisherV1::LinkResult link_result = publisher.resolveLinkRequest(catalog, request);
             result.resolve_status = link_result.status;

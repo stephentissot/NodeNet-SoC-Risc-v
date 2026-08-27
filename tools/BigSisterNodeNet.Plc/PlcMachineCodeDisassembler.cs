@@ -61,17 +61,17 @@ namespace BigSisterNodeNet.Plc
                 throw new PlcObjectFileParseException($"Unsupported object file version {version}.");
             }
 
-            var totalSize = ReadUInt32(objectFileBytes, 10);
+            var totalSize = ReadUInt32(objectFileBytes, 12);
             if (totalSize > objectFileBytes.Length)
             {
                 throw new PlcObjectFileParseException("Object file total size exceeds the provided payload length.");
             }
 
-            var codeSize = ReadUInt32(objectFileBytes, 14);
-            var symbolCount = ReadUInt16(objectFileBytes, 22);
-            var relocationCount = ReadUInt16(objectFileBytes, 24);
-            var symbolTableOffset = ReadUInt32(objectFileBytes, 26);
-            var relocationTableOffset = ReadUInt32(objectFileBytes, 30);
+            var codeSize = ReadUInt32(objectFileBytes, 16);
+            var symbolCount = ReadUInt16(objectFileBytes, 24);
+            var relocationCount = ReadUInt16(objectFileBytes, 26);
+            var symbolTableOffset = ReadUInt32(objectFileBytes, 28);
+            var relocationTableOffset = ReadUInt32(objectFileBytes, 32);
 
             EnsureRange(symbolTableOffset, (uint)(symbolCount * PlcObjectFileBuilder.SymbolRecordSize), totalSize, "symbol table");
             EnsureRange(relocationTableOffset, (uint)(relocationCount * PlcObjectFileBuilder.RelocationRecordSize), totalSize, "relocation table");
@@ -119,17 +119,24 @@ namespace BigSisterNodeNet.Plc
             var builder = new StringBuilder();
             foreach (var symbol in result.Symbols)
             {
-                var keyword = symbol.Kind == PlcObjectSymbolKind.ParamPointId ? "PARAM" : "CONST";
-                if (symbol.Kind == PlcObjectSymbolKind.ParamPointId)
+                if (symbol.Kind == PlcObjectSymbolKind.SlotVar)
                 {
-                    builder.Append(keyword)
+                    builder.Append("VAR ")
+                           .Append(FormatValueType(symbol.ExpectedType))
+                           .Append(' ')
+                           .Append(symbol.Name)
+                           .AppendLine();
+                }
+                else if (symbol.Kind == PlcObjectSymbolKind.ParamPointId)
+                {
+                    builder.Append("PARAM")
                            .Append(" POINT_ID ")
                            .Append(symbol.Name)
                            .AppendLine();
                 }
                 else
                 {
-                    builder.Append(keyword)
+                    builder.Append("CONST")
                            .Append(" POINT_ID ")
                            .Append(symbol.Name)
                            .Append(", ")
@@ -176,6 +183,8 @@ namespace BigSisterNodeNet.Plc
 
                     case PlcMachineCodeAssembler.LoadPointBoolOpcode:
                     case PlcMachineCodeAssembler.StorePointBoolOpcode:
+                    case PlcMachineCodeAssembler.IncrementPointIntOpcode:
+                    case PlcMachineCodeAssembler.DecrementPointIntOpcode:
                         if ((pc + 2) >= codeBytes.Length)
                         {
                             throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
@@ -197,7 +206,8 @@ namespace BigSisterNodeNet.Plc
                                 : operandValue.ToString();
                         }
 
-                        builder.Append(opcode == PlcMachineCodeAssembler.LoadPointBoolOpcode ? "LOAD_BOOL " : "STORE_BOOL ")
+                           builder.Append(FormatOpcode(opcode))
+                               .Append(' ')
                                .AppendLine(operandText);
                         pc += 3;
                         break;
@@ -241,7 +251,56 @@ namespace BigSisterNodeNet.Plc
         {
             return value == PlcMachineCodeAssembler.HaltOpcode ||
                    value == PlcMachineCodeAssembler.LoadPointBoolOpcode ||
-                   value == PlcMachineCodeAssembler.StorePointBoolOpcode;
+                   value == PlcMachineCodeAssembler.StorePointBoolOpcode ||
+                   value == PlcMachineCodeAssembler.IncrementPointIntOpcode ||
+                   value == PlcMachineCodeAssembler.DecrementPointIntOpcode;
+        }
+
+        private static string FormatOpcode(byte opcode)
+        {
+            switch (opcode)
+            {
+                case PlcMachineCodeAssembler.LoadPointBoolOpcode:
+                    return "LOAD_BOOL";
+                case PlcMachineCodeAssembler.StorePointBoolOpcode:
+                    return "STORE_BOOL";
+                case PlcMachineCodeAssembler.IncrementPointIntOpcode:
+                    return "INC_INT";
+                case PlcMachineCodeAssembler.DecrementPointIntOpcode:
+                    return "DEC_INT";
+                default:
+                    return "DB";
+            }
+        }
+
+        private static string FormatValueType(byte rawType)
+        {
+            if (rawType == byte.MaxValue)
+            {
+                return "UNKNOWN";
+            }
+
+            switch ((PlcValueType)rawType)
+            {
+                case PlcValueType.Bool:
+                    return "BOOL";
+                case PlcValueType.Uint16:
+                    return "UINT16";
+                case PlcValueType.Int16:
+                    return "INT";
+                case PlcValueType.Uint32:
+                    return "UINT32";
+                case PlcValueType.Int32:
+                    return "DINT";
+                case PlcValueType.Float:
+                    return "FLOAT";
+                case PlcValueType.Enum:
+                    return "ENUM";
+                case PlcValueType.String:
+                    return "STRING";
+                default:
+                    return $"TYPE_{rawType}";
+            }
         }
 
         private static void EnsureRange(uint offset, uint size, uint totalSize, string sectionName)

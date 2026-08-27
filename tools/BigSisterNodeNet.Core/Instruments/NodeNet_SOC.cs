@@ -75,6 +75,16 @@ namespace BigSisterNodeNet.Core.Instruments
             return PlcProgramUploadServiceLocator.Current?.UploadProgram(this, program, slot, objectFileOptions);
         }
 
+        public PlcDownloadResult DownloadProgramBytecode(ushort slot)
+        {
+            return PlcProgramUploadServiceLocator.Current?.DownloadProgramBytecode(this, slot);
+        }
+
+        public PlcDownloadResult DownloadProgramObjectFile(ushort slot)
+        {
+            return PlcProgramUploadServiceLocator.Current?.DownloadProgramObjectFile(this, slot);
+        }
+
         public bool IsPointDefinitionPathLoaded(string path)
         {
             return _loadedPointDefinitionPaths.Contains(NormalizePath(path));

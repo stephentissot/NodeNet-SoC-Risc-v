@@ -9,6 +9,19 @@ namespace BigSisterNodeNet.Plc
     {
         ConstPointId = 0,
         ParamPointId = 1,
+        SlotVar = 2,
+    }
+
+    public enum PlcValueType : byte
+    {
+        Bool = 0,
+        Uint16 = 1,
+        Int16 = 2,
+        Uint32 = 3,
+        Int32 = 4,
+        Float = 5,
+        Enum = 6,
+        String = 7,
     }
 
     public enum PlcRuntimeLinkAccess : byte
@@ -34,7 +47,7 @@ namespace BigSisterNodeNet.Plc
         public string Name { get; set; }
         public PlcObjectSymbolKind Kind { get; set; }
         public string PointPath { get; set; }
-        public byte ExpectedType { get; set; }
+        public byte ExpectedType { get; set; } = byte.MaxValue;
         public PlcRuntimeLinkAccess Access { get; set; }
     }
 
@@ -118,10 +131,19 @@ namespace BigSisterNodeNet.Plc
                     writer.Write((byte)symbol.Kind);
                     writer.Write((byte)0);
 
-                    var pointIdentity = ParsePointPath(symbol.PointPath);
-                    WriteFixedAscii(writer, pointIdentity.DeviceId, DeviceIdSize);
-                    WriteFixedAscii(writer, pointIdentity.Feature, FeatureSize);
-                    WriteFixedAscii(writer, pointIdentity.PointId, PointIdSize);
+                    if (symbol.Kind == PlcObjectSymbolKind.SlotVar)
+                    {
+                        WriteFixedAscii(writer, string.Empty, DeviceIdSize);
+                        WriteFixedAscii(writer, string.Empty, FeatureSize);
+                        WriteFixedAscii(writer, string.Empty, PointIdSize);
+                    }
+                    else
+                    {
+                        var pointIdentity = ParsePointPath(symbol.PointPath);
+                        WriteFixedAscii(writer, pointIdentity.DeviceId, DeviceIdSize);
+                        WriteFixedAscii(writer, pointIdentity.Feature, FeatureSize);
+                        WriteFixedAscii(writer, pointIdentity.PointId, PointIdSize);
+                    }
                     writer.Write(symbol.ExpectedType);
                     writer.Write((byte)symbol.Access);
                     writer.Write((ushort)0);

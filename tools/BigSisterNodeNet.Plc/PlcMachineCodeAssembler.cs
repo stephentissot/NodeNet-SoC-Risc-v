@@ -20,6 +20,8 @@ namespace BigSisterNodeNet.Plc
         public const byte HaltOpcode = 0x00;
         public const byte LoadPointBoolOpcode = 0x10;
         public const byte StorePointBoolOpcode = 0x11;
+        public const byte IncrementPointIntOpcode = 0x20;
+        public const byte DecrementPointIntOpcode = 0x21;
 
         public static PlcAssemblyResult Assemble(string source, PlcObjectFileOptions options)
         {
@@ -65,6 +67,10 @@ namespace BigSisterNodeNet.Plc
                             ParseParamPointDeclaration(tokens, lineNumber, result, symbolIndexByName, options);
                             break;
 
+                        case "VAR":
+                            ParseVarDeclaration(tokens, lineNumber, result, symbolIndexByName);
+                            break;
+
                         case "HALT":
                             RequireOperandCount(tokens, 1, lineNumber);
                             output.Add(HaltOpcode);
@@ -75,7 +81,13 @@ namespace BigSisterNodeNet.Plc
                         case "LB":
                             RequireOperandCount(tokens, 2, lineNumber);
                             output.Add(LoadPointBoolOpcode);
-                            WriteRelocatedSymbol(output, tokens[1], lineNumber, result, symbolIndexByName, PlcRuntimeLinkAccess.Read);
+                            WriteRelocatedSymbol(output,
+                                                 tokens[1],
+                                                 lineNumber,
+                                                 result,
+                                                 symbolIndexByName,
+                                                 PlcValueType.Bool,
+                                                 PlcRuntimeLinkAccess.Read);
                             break;
 
                         case "STORE_BOOL":
@@ -83,7 +95,39 @@ namespace BigSisterNodeNet.Plc
                         case "SB":
                             RequireOperandCount(tokens, 2, lineNumber);
                             output.Add(StorePointBoolOpcode);
-                            WriteRelocatedSymbol(output, tokens[1], lineNumber, result, symbolIndexByName, PlcRuntimeLinkAccess.Write);
+                            WriteRelocatedSymbol(output,
+                                                 tokens[1],
+                                                 lineNumber,
+                                                 result,
+                                                 symbolIndexByName,
+                                                 PlcValueType.Bool,
+                                                 PlcRuntimeLinkAccess.Write);
+                            break;
+
+                        case "INC_INT":
+                        case "INC":
+                            RequireOperandCount(tokens, 2, lineNumber);
+                            output.Add(IncrementPointIntOpcode);
+                            WriteRelocatedSymbol(output,
+                                                 tokens[1],
+                                                 lineNumber,
+                                                 result,
+                                                 symbolIndexByName,
+                                                 PlcValueType.Int16,
+                                                 PlcRuntimeLinkAccess.ReadWrite);
+                            break;
+
+                        case "DEC_INT":
+                        case "DEC":
+                            RequireOperandCount(tokens, 2, lineNumber);
+                            output.Add(DecrementPointIntOpcode);
+                            WriteRelocatedSymbol(output,
+                                                 tokens[1],
+                                                 lineNumber,
+                                                 result,
+                                                 symbolIndexByName,
+                                                 PlcValueType.Int16,
+                                                 PlcRuntimeLinkAccess.ReadWrite);
                             break;
 
                         case "DB":
@@ -188,7 +232,30 @@ namespace BigSisterNodeNet.Plc
                       lineNumber,
                       tokens[2],
                       PlcObjectSymbolKind.ParamPointId,
-                      pointPath);
+                      pointPath,
+                      byte.MaxValue,
+                      PlcRuntimeLinkAccess.Read);
+        }
+
+        private static void ParseVarDeclaration(List<string> tokens,
+                                                int lineNumber,
+                                                PlcAssemblyResult result,
+                                                IDictionary<string, ushort> symbolIndexByName)
+        {
+            if (tokens.Count != 3)
+            {
+                throw new PlcMachineCodeCompileException("VAR syntax is 'VAR <type> <name>'", lineNumber);
+            }
+
+            var valueType = ParseValueType(tokens[1], lineNumber);
+            AddSymbol(result,
+                      symbolIndexByName,
+                      lineNumber,
+                      tokens[2],
+                      PlcObjectSymbolKind.SlotVar,
+                      string.Empty,
+                      (byte)valueType,
+                      PlcRuntimeLinkAccess.ReadWrite);
         }
 
         private static void AddSymbol(PlcAssemblyResult result,
@@ -196,7 +263,9 @@ namespace BigSisterNodeNet.Plc
                                       int lineNumber,
                                       string symbolName,
                                       PlcObjectSymbolKind kind,
-                                      string pointPath)
+                                      string pointPath,
+                                      byte expectedType = byte.MaxValue,
+                                      PlcRuntimeLinkAccess access = PlcRuntimeLinkAccess.Read)
         {
             if (string.IsNullOrWhiteSpace(symbolName))
             {
@@ -218,8 +287,8 @@ namespace BigSisterNodeNet.Plc
                 Name = symbolName,
                 Kind = kind,
                 PointPath = pointPath,
-                ExpectedType = 0,
-                Access = PlcRuntimeLinkAccess.Read,
+                ExpectedType = expectedType,
+                Access = access,
             });
         }
 
@@ -228,6 +297,7 @@ namespace BigSisterNodeNet.Plc
                                                  int lineNumber,
                                                  PlcAssemblyResult result,
                                                  IDictionary<string, ushort> symbolIndexByName,
+                                                 PlcValueType expectedType,
                                                  PlcRuntimeLinkAccess access)
         {
             if (!symbolIndexByName.TryGetValue(symbolName, out var symbolIndex))
@@ -236,8 +306,8 @@ namespace BigSisterNodeNet.Plc
             }
 
             var symbol = result.Symbols[symbolIndex];
+            ApplySymbolUsageType(symbol, expectedType, lineNumber);
             symbol.Access = MergeAccess(symbol.Access, access);
-            symbol.ExpectedType = 0;
 
             result.Relocations.Add(new PlcAssemblyRelocation
             {
@@ -248,14 +318,100 @@ namespace BigSisterNodeNet.Plc
             WriteUInt16(output, 0);
         }
 
+        private static void ApplySymbolUsageType(PlcAssemblySymbol symbol, PlcValueType expectedType, int lineNumber)
+        {
+            if (symbol == null)
+            {
+                throw new ArgumentNullException(nameof(symbol));
+            }
+
+            if (symbol.ExpectedType == byte.MaxValue)
+            {
+                symbol.ExpectedType = (byte)expectedType;
+                return;
+            }
+
+            if (symbol.ExpectedType != (byte)expectedType)
+            {
+                throw new PlcMachineCodeCompileException(
+                    $"Symbol '{symbol.Name}' is declared or used as {FormatValueType(symbol.ExpectedType)} and cannot be used as {FormatValueType((byte)expectedType)}",
+                    lineNumber);
+            }
+        }
+
         private static PlcRuntimeLinkAccess MergeAccess(PlcRuntimeLinkAccess current, PlcRuntimeLinkAccess next)
         {
+            if (current == PlcRuntimeLinkAccess.ReadWrite || next == PlcRuntimeLinkAccess.ReadWrite)
+            {
+                return PlcRuntimeLinkAccess.ReadWrite;
+            }
+
             if (current == next)
             {
                 return current;
             }
 
             return PlcRuntimeLinkAccess.ReadWrite;
+        }
+
+        private static PlcValueType ParseValueType(string token, int lineNumber)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                throw new PlcMachineCodeCompileException("Value type is required", lineNumber);
+            }
+
+            switch (token.Trim().ToUpperInvariant())
+            {
+                case "BOOL":
+                    return PlcValueType.Bool;
+                case "UINT16":
+                case "WORD":
+                    return PlcValueType.Uint16;
+                case "INT":
+                case "INT16":
+                    return PlcValueType.Int16;
+                case "UINT32":
+                case "DWORD":
+                    return PlcValueType.Uint32;
+                case "DINT":
+                case "INT32":
+                    return PlcValueType.Int32;
+                case "FLOAT":
+                case "REAL":
+                    return PlcValueType.Float;
+                case "ENUM":
+                    return PlcValueType.Enum;
+                case "STRING":
+                    return PlcValueType.String;
+                default:
+                    throw new PlcMachineCodeCompileException($"Unsupported value type '{token}'", lineNumber);
+            }
+        }
+
+        private static string FormatValueType(byte rawType)
+        {
+            switch ((PlcValueType)rawType)
+            {
+                case PlcValueType.Bool:
+                    return "BOOL";
+                case PlcValueType.Uint16:
+                    return "UINT16";
+                case PlcValueType.Int16:
+                    return "INT";
+                case PlcValueType.Uint32:
+                    return "UINT32";
+                case PlcValueType.Int32:
+                    return "DINT";
+                case PlcValueType.Float:
+                    return "FLOAT";
+                case PlcValueType.Enum:
+                    return "ENUM";
+                case PlcValueType.String:
+                    return "STRING";
+                default:
+                    return $"TYPE_{rawType}";
+            }
         }
 
         private static byte ParseByte(string text, int lineNumber)

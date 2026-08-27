@@ -1322,6 +1322,8 @@ static bool plc_slot_bytecode_supported_by_firmware_vm(uint16_t slot_id)
 
         case 0x10u:
         case 0x11u:
+        case 0x20u:
+        case 0x21u:
             if ((pc + 1u) >= control_block->bytecode_size) {
                 return false;
             }

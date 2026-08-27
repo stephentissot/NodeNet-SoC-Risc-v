@@ -2,11 +2,14 @@ using BigSisterNodeNet.Core.Instruments;
 using BigSisterNodeNet.Plc;
 using System;
 using System.Collections.Generic;
+using System.IO;
 
 namespace BigSisterNodeNet.Core.Services
 {
     public class PlcProgramUploadService : IPlcProgramUploadService
     {
+        private const int BytecodeReadChunkSize = 768;
+
         private readonly NodeNetCore _nodeNetCore;
         private readonly PlcUploadClient _uploadClient = new PlcUploadClient();
 
@@ -37,6 +40,40 @@ namespace BigSisterNodeNet.Core.Services
 
             var objectFileBytes = _uploadClient.BuildObjectFile(program, options);
             return _nodeNetCore.ExecuteExclusiveTransportSession(transport => UploadObjectFile(transport, objectFileBytes, options));
+        }
+
+        public PlcDownloadResult DownloadProgramBytecode(NodeNet_SOC node, ushort slot)
+        {
+            if (node == null)
+            {
+                throw new ArgumentNullException(nameof(node));
+            }
+
+            var options = new PlcUploadOptions
+            {
+                LocalAddress = NodeNetAddress.SerialEndpoint,
+                RemoteAddress = node.Address,
+                SlotId = slot,
+            };
+
+            return _nodeNetCore.ExecuteExclusiveTransportSession(transport => DownloadBytecode(transport, options));
+        }
+
+        public PlcDownloadResult DownloadProgramObjectFile(NodeNet_SOC node, ushort slot)
+        {
+            if (node == null)
+            {
+                throw new ArgumentNullException(nameof(node));
+            }
+
+            var options = new PlcUploadOptions
+            {
+                LocalAddress = NodeNetAddress.SerialEndpoint,
+                RemoteAddress = node.Address,
+                SlotId = slot,
+            };
+
+            return _nodeNetCore.ExecuteExclusiveTransportSession(transport => DownloadObjectFile(transport, options));
         }
 
         private PlcUploadResult UploadObjectFile(Transport.ISerialTransport transport, byte[] objectFileBytes, PlcUploadOptions options)
@@ -98,6 +135,131 @@ namespace BigSisterNodeNet.Core.Services
             };
         }
 
+        private PlcDownloadResult DownloadBytecode(Transport.ISerialTransport transport, PlcUploadOptions options)
+        {
+            if (transport == null)
+            {
+                throw new ArgumentNullException(nameof(transport));
+            }
+
+            if (!transport.IsOpen)
+            {
+                throw new InvalidOperationException("The NodeNet serial transport must be started before downloading a PLC program.");
+            }
+
+            using (var stream = new MemoryStream())
+            {
+                IDictionary<string, object> lastResponse = null;
+                uint offset = 0u;
+                uint totalSize = 0u;
+                bool hasMore;
+                do
+                {
+                    lastResponse = WaitForAcceptedResponse(
+                        "plcBytecodeRes",
+                        options,
+                        message => MatchesSlotId(message, options.SlotId) && MatchesOffset(message, offset),
+                        () => _nodeNetCore.EnqueueOutgoingMessage(CreateMessage(_uploadClient.CreateBytecodeReadRequest(options.SlotId,
+                                                                                                                          offset,
+                                                                                                                          BytecodeReadChunkSize,
+                                                                                                                          options))));
+
+                    totalSize = _uploadClient.ReadUInt32(lastResponse, "totalSize");
+                    var count = _uploadClient.ReadInt32(lastResponse, "count");
+                    var bytes = _uploadClient.ReadBase64Bytes(lastResponse, "dataBase64");
+                    if (bytes.Length != count)
+                    {
+                        throw new InvalidOperationException($"Invalid bytecode chunk length. Expected {count}, got {bytes.Length}.");
+                    }
+
+                    if (count > 0)
+                    {
+                        stream.Write(bytes, 0, bytes.Length);
+                    }
+
+                    offset += (uint)count;
+                    hasMore = _uploadClient.ReadBoolean(lastResponse, "hasMore");
+                }
+                while (hasMore);
+
+                if (stream.Length != totalSize)
+                {
+                    throw new InvalidOperationException($"Incomplete PLC bytecode readback. Expected {totalSize} bytes, got {stream.Length}.");
+                }
+
+                return new PlcDownloadResult
+                {
+                    SlotId = options.SlotId,
+                    BytecodeBytes = stream.ToArray(),
+                    PayloadBytes = stream.ToArray(),
+                    ArtifactType = "linkedBytecodeV1",
+                    FinalResponse = lastResponse,
+                };
+            }
+        }
+
+        private PlcDownloadResult DownloadObjectFile(Transport.ISerialTransport transport, PlcUploadOptions options)
+        {
+            if (transport == null)
+            {
+                throw new ArgumentNullException(nameof(transport));
+            }
+
+            if (!transport.IsOpen)
+            {
+                throw new InvalidOperationException("The NodeNet serial transport must be started before downloading a PLC object file.");
+            }
+
+            using (var stream = new MemoryStream())
+            {
+                IDictionary<string, object> lastResponse = null;
+                uint offset = 0u;
+                uint totalSize = 0u;
+                bool hasMore;
+                do
+                {
+                    lastResponse = WaitForAcceptedResponse(
+                        "plcObjectFileRes",
+                        options,
+                        message => MatchesSlotId(message, options.SlotId) && MatchesOffset(message, offset),
+                        () => _nodeNetCore.EnqueueOutgoingMessage(CreateMessage(_uploadClient.CreateObjectFileReadRequest(options.SlotId,
+                                                                                                                            offset,
+                                                                                                                            BytecodeReadChunkSize,
+                                                                                                                            options))));
+
+                    totalSize = _uploadClient.ReadUInt32(lastResponse, "totalSize");
+                    var count = _uploadClient.ReadInt32(lastResponse, "count");
+                    var bytes = _uploadClient.ReadBase64Bytes(lastResponse, "dataBase64");
+                    if (bytes.Length != count)
+                    {
+                        throw new InvalidOperationException($"Invalid object-file chunk length. Expected {count}, got {bytes.Length}.");
+                    }
+
+                    if (count > 0)
+                    {
+                        stream.Write(bytes, 0, bytes.Length);
+                    }
+
+                    offset += (uint)count;
+                    hasMore = _uploadClient.ReadBoolean(lastResponse, "hasMore");
+                }
+                while (hasMore);
+
+                if (stream.Length != totalSize)
+                {
+                    throw new InvalidOperationException($"Incomplete PLC object-file readback. Expected {totalSize} bytes, got {stream.Length}.");
+                }
+
+                return new PlcDownloadResult
+                {
+                    SlotId = options.SlotId,
+                    PayloadBytes = stream.ToArray(),
+                    ArtifactType = _uploadClient.ReadString(lastResponse, "artifactType"),
+                    FinalResponse = lastResponse,
+                };
+            }
+        }
+
         private IDictionary<string, object> WaitForAcceptedResponse(
             string expectedCommand,
             PlcUploadOptions options,
@@ -127,6 +289,11 @@ namespace BigSisterNodeNet.Core.Services
         private static bool MatchesOffset(NodeNetMessage message, uint offset)
         {
             return TryReadUInt32(message, "offset", out var messageOffset) && messageOffset == offset;
+        }
+
+        private static bool MatchesSlotId(NodeNetMessage message, ushort slotId)
+        {
+            return TryReadUInt32(message, "slotId", out var messageSlotId) && messageSlotId == slotId;
         }
 
         private static bool TryReadUInt32(NodeNetMessage message, string key, out uint value)

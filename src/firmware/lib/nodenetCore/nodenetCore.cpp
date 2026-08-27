@@ -28,6 +28,7 @@ constexpr uint32_t kPlcUploadSessionTimeoutMs = 15000u;
 constexpr uint32_t kPlcUploadStagingBase = Flash::kPlcPackageSlotBase;
 constexpr uint32_t kPlcUploadStagingSize = Flash::kPlcPackageSlotSize;
 constexpr uint8_t kPlcUploadDataFrameMagic = 0xA5u;
+constexpr uint16_t kPlcBytecodeChunkMaxBytes = 768u;
 
 struct PlcUploadDataFrameHeader {
     uint8_t magic = 0u;
@@ -223,6 +224,48 @@ static bool decode_base64_bytes(const char* text, uint8_t* out, size_t out_capac
 
     out_size = write_index;
     return write_index != 0u;
+}
+
+static bool encode_base64_bytes(const uint8_t* data, size_t data_size, char* out, size_t out_capacity)
+{
+    static constexpr char kBase64Alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    if (out == nullptr || out_capacity == 0u) {
+        return false;
+    }
+
+    if (data_size == 0u) {
+        out[0] = '\0';
+        return true;
+    }
+
+    const size_t encoded_size = ((data_size + 2u) / 3u) * 4u;
+    if (data == nullptr || encoded_size + 1u > out_capacity) {
+        return false;
+    }
+
+    size_t read_index = 0u;
+    size_t write_index = 0u;
+    while (read_index < data_size) {
+        const uint8_t a = data[read_index++];
+        const bool has_b = read_index < data_size;
+        const uint8_t b = has_b ? data[read_index++] : 0u;
+        const bool has_c = read_index < data_size;
+        const uint8_t c = has_c ? data[read_index++] : 0u;
+
+        const uint32_t triple = (static_cast<uint32_t>(a) << 16) |
+                                (static_cast<uint32_t>(b) << 8) |
+                                static_cast<uint32_t>(c);
+
+        out[write_index++] = kBase64Alphabet[(triple >> 18) & 0x3Fu];
+        out[write_index++] = kBase64Alphabet[(triple >> 12) & 0x3Fu];
+        out[write_index++] = has_b ? kBase64Alphabet[(triple >> 6) & 0x3Fu] : '=';
+        out[write_index++] = has_c ? kBase64Alphabet[triple & 0x3Fu] : '=';
+    }
+
+    out[write_index] = '\0';
+    return true;
 }
 
 static void build_point_path(const PointDefinition& definition, char* out, size_t out_size) {
@@ -579,6 +622,13 @@ static void build_waveshare_mirror_symbols(const char* device_id,
     relocations[1].relocation_kind = kPlcRelocationPointIndexU16Le;
 }
 
+static PlcSlotLoadStatusV1 build_mirror_program_object_file(const char* device_id,
+                                                            uint8_t input_channel,
+                                                            uint8_t output_channel,
+                                                            uint8_t* object_out,
+                                                            size_t object_capacity,
+                                                            size_t& object_size_out);
+
 static PlcSlotLoadResultV1 load_mirror_program_into_slot(const PointCatalog& catalog,
                                                          const PlcRuntimePublisherV1& publisher,
                                                          const char* device_id,
@@ -607,21 +657,24 @@ static PlcSlotLoadResultV1 load_mirror_program_into_slot(const PointCatalog& cat
         0x00u,
     };
 
-    PlcObjectImageV1 object_image = {};
-    object_image.code_bytes = object_code;
-    object_image.code_size = static_cast<uint32_t>(sizeof(object_code));
-    object_image.entry_offset = 0u;
-    object_image.symbols = symbols;
-    object_image.symbol_count = 2u;
-    object_image.relocations = relocations;
-    object_image.relocation_count = 2u;
+    uint8_t object_bytes[sizeof(PlcObjectFileHeaderV1) + sizeof(object_code) + sizeof(symbols) + sizeof(relocations)] = {};
+    size_t object_size = 0u;
+    const PlcSlotLoadStatusV1 build_status = build_mirror_program_object_file(device_id,
+                                                                              input_channel,
+                                                                              output_channel,
+                                                                              object_bytes,
+                                                                              sizeof(object_bytes),
+                                                                              object_size);
+    if (build_status != kPlcSlotLoadOk) {
+        result.status = build_status;
+        return result;
+    }
 
-    return PlcSlotLoaderV1::loadParsedObjectIntoSlot(publisher,
-                                                     catalog,
-                                                     slot_id,
-                                                     object_image,
-                                                     16u,
-                                                     5000u);
+    return PlcSlotLoaderV1::loadObjectFileIntoSlot(publisher,
+                                                   catalog,
+                                                   slot_id,
+                                                   object_bytes,
+                                                   object_size);
 }
 
 static PlcSlotLoadStatusV1 build_mirror_program_object_file(const char* device_id,
@@ -1180,6 +1233,12 @@ void NodeNetCore::processInputQueue()
                 break;
             case NodeNetCommands::Cmd::PLC_LOAD_REQ:
                 queueResponse = handlePlcLoadRequest(request, response);
+                break;
+            case NodeNetCommands::Cmd::PLC_BYTECODE_REQ:
+                queueResponse = handlePlcBytecodeRequest(request, response);
+                break;
+            case NodeNetCommands::Cmd::PLC_OBJECT_FILE_REQ:
+                queueResponse = handlePlcObjectFileRequest(request, response);
                 break;
             case NodeNetCommands::Cmd::PLC_UPLOAD_BEGIN_REQ:
                 queueResponse = handlePlcUploadBeginRequest(request, response);
@@ -2228,6 +2287,118 @@ bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument
     response["cycleCounter"] = control_block->cycle_counter;
     response["faultCode"] = control_block->fault_code;
     publishBuiltinPlcPointStates(true);
+    return true;
+}
+
+bool NodeNetCore::handlePlcBytecodeRequest(const JsonDocument& request, JsonDocument& response)
+{
+    response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_BYTECODE_RES);
+
+    const uint16_t slot_id = static_cast<uint16_t>(request["slotId"] | 0u);
+    const uint32_t offset = request["offset"] | 0u;
+    uint16_t max_bytes = static_cast<uint16_t>(request["maxBytes"] | kPlcBytecodeChunkMaxBytes);
+    if (max_bytes == 0u || max_bytes > kPlcBytecodeChunkMaxBytes) {
+        max_bytes = kPlcBytecodeChunkMaxBytes;
+    }
+
+    if (slot_id >= kPlcSlotCountV1) {
+        response["ok"] = false;
+        response["error"] = "slotOutOfRange";
+        return true;
+    }
+
+    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+    const bool loaded = plc_control_block_loaded(*control_block, slot_id);
+    if (!loaded || control_block->bytecode_base == 0u || control_block->bytecode_size == 0u) {
+        response["ok"] = false;
+        response["error"] = "slotNotLoaded";
+        response["slotId"] = slot_id;
+        return true;
+    }
+    if (offset > control_block->bytecode_size) {
+        response["ok"] = false;
+        response["error"] = "offsetOutOfRange";
+        response["slotId"] = slot_id;
+        response["totalSize"] = control_block->bytecode_size;
+        return true;
+    }
+
+    const uint32_t remaining = control_block->bytecode_size - offset;
+    const uint16_t chunk_size = static_cast<uint16_t>(remaining < max_bytes ? remaining : max_bytes);
+    const uint8_t* code = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(control_block->bytecode_base));
+    const uint8_t* chunk = code + offset;
+
+    char encoded[((kPlcBytecodeChunkMaxBytes + 2u) / 3u) * 4u + 1u] = {};
+    if (!encode_base64_bytes(chunk, chunk_size, encoded, sizeof(encoded))) {
+        response["ok"] = false;
+        response["error"] = "encodingFailed";
+        return true;
+    }
+
+    response["ok"] = true;
+    response["slotId"] = slot_id;
+    response["offset"] = offset;
+    response["count"] = chunk_size;
+    response["totalSize"] = control_block->bytecode_size;
+    response["hasMore"] = static_cast<uint32_t>(offset + chunk_size) < control_block->bytecode_size;
+    response["encoding"] = "base64";
+    response["dataBase64"] = encoded;
+    return true;
+}
+
+bool NodeNetCore::handlePlcObjectFileRequest(const JsonDocument& request, JsonDocument& response)
+{
+    response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_OBJECT_FILE_RES);
+
+    const uint16_t slot_id = static_cast<uint16_t>(request["slotId"] | 0u);
+    const uint32_t offset = request["offset"] | 0u;
+    uint16_t max_bytes = static_cast<uint16_t>(request["maxBytes"] | kPlcBytecodeChunkMaxBytes);
+    if (max_bytes == 0u || max_bytes > kPlcBytecodeChunkMaxBytes) {
+        max_bytes = kPlcBytecodeChunkMaxBytes;
+    }
+
+    if (slot_id >= kPlcSlotCountV1) {
+        response["ok"] = false;
+        response["error"] = "slotOutOfRange";
+        return true;
+    }
+
+    uint8_t chunk[kPlcBytecodeChunkMaxBytes] = {};
+    uint32_t copied = 0u;
+    uint32_t total_size = 0u;
+    uint32_t checksum = 0u;
+    if (!PlcSlotLoaderV1::readObjectFileSnapshotChunk(slot_id,
+                                                      offset,
+                                                      chunk,
+                                                      max_bytes,
+                                                      copied,
+                                                      total_size,
+                                                      checksum)) {
+        response["ok"] = false;
+        response["error"] = "objectFileUnavailable";
+        response["slotId"] = slot_id;
+        return true;
+    }
+
+    char encoded[((kPlcBytecodeChunkMaxBytes + 2u) / 3u) * 4u + 1u] = {};
+    if (!encode_base64_bytes(chunk, copied, encoded, sizeof(encoded))) {
+        response["ok"] = false;
+        response["error"] = "encodingFailed";
+        response["slotId"] = slot_id;
+        return true;
+    }
+
+    response["ok"] = true;
+    response["slotId"] = slot_id;
+    response["offset"] = offset;
+    response["count"] = copied;
+    response["totalSize"] = total_size;
+    response["payloadCrc32"] = checksum;
+    response["artifactType"] = "objectFileV1";
+    response["hasMore"] = static_cast<uint32_t>(offset + copied) < total_size;
+    response["encoding"] = "base64";
+    response["dataBase64"] = encoded;
     return true;
 }
 

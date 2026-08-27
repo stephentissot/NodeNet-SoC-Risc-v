@@ -1,6 +1,7 @@
 using BigSisterNodeNet.Core.Instruments;
 using BigSisterNodeNet.Core.Models;
 using BigSisterNodeNet.Core.PlcCore;
+using BigSisterNodeNet.Plc;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System;
@@ -31,11 +32,13 @@ namespace BigSisterNodeNet.UI.Models.Instruments
         public ICommand ReadStatesCommand { get; }
         public IRelayCommand UpdatePointDefinitionCommand { get; }
         public IRelayCommand UploadPlcProgramCommand { get; }
+        public IRelayCommand DownloadPlcProgramCommand { get; }
 
         private int _selectedPlcSlot;
         private string _plcProgramSource;
         private string _plcStatusMessage;
         private bool _isUploadingPlcProgram;
+        private bool _isDownloadingPlcProgram;
 
         private PointDefinitionEditorViewModel _settingsEditor;
         public PointDefinitionEditorViewModel SettingsEditor
@@ -106,7 +109,7 @@ namespace BigSisterNodeNet.UI.Models.Instruments
             private set => SetProperty(ref _plcStatusMessage, value);
         }
 
-        public string PlcHintMessage => "Upload direct vers le slot via objectFileV1. `PARAM POINT_ID` nécessite encore des bindings fournis par code.";
+        public string PlcHintMessage => "Upload et download utilisent objectFileV1. Le download relit la copie source conservée par slot pour retrouver symboles et VAR.";
 
         public bool IsUploadingPlcProgram
         {
@@ -116,17 +119,35 @@ namespace BigSisterNodeNet.UI.Models.Instruments
                 if (SetProperty(ref _isUploadingPlcProgram, value))
                 {
                     UploadPlcProgramCommand.NotifyCanExecuteChanged();
+                    DownloadPlcProgramCommand.NotifyCanExecuteChanged();
+                    OnPropertyChanged(nameof(IsPlcProgramBusy));
                 }
             }
         }
+
+        public bool IsDownloadingPlcProgram
+        {
+            get => _isDownloadingPlcProgram;
+            private set
+            {
+                if (SetProperty(ref _isDownloadingPlcProgram, value))
+                {
+                    UploadPlcProgramCommand.NotifyCanExecuteChanged();
+                    DownloadPlcProgramCommand.NotifyCanExecuteChanged();
+                    OnPropertyChanged(nameof(IsPlcProgramBusy));
+                }
+            }
+        }
+
+        public bool IsPlcProgramBusy => IsUploadingPlcProgram || IsDownloadingPlcProgram;
 
         public NodeNet_SOCViewModel(NodeNet_SOC node) : base(node)
         {
             _nodeNetSoc = node;
             BrowsePath = node?.DeviceId ?? string.Empty;
             SelectedPlcSlot = 0;
-            PlcProgramSource = "CONST POINT_ID input, gb9fao5yk4f.modbus0.waveshare8ch.input1\r\nCONST POINT_ID output, gb9fao5yk4f.modbus0.waveshare8ch.output1\r\n\r\nLOAD_BOOL input\r\nSTORE_BOOL output\r\nHALT\r\n";
-            PlcStatusMessage = "Prêt à uploader un programme PLC vers le slot sélectionné.";
+            PlcProgramSource = string.Empty;
+            PlcStatusMessage = "Prêt à uploader ou télécharger un programme PLC sur le slot sélectionné.";
             BrowsePathCommand = new RelayCommand(BrowsePathDefinitions);
             BrowseRootCommand = new RelayCommand(BrowseRoot);
             BrowseTreeNodeCommand = new RelayCommand<string>(BrowseTreeNode);
@@ -139,6 +160,7 @@ namespace BigSisterNodeNet.UI.Models.Instruments
             ReadStatesCommand = new RelayCommand(ReadStates);
             UpdatePointDefinitionCommand = new RelayCommand(UpdatePointDefinition, CanUpdatePointDefinition);
             UploadPlcProgramCommand = new RelayCommand(UploadPlcProgram, CanUploadPlcProgram);
+            DownloadPlcProgramCommand = new RelayCommand(DownloadPlcProgram, CanDownloadPlcProgram);
             RefreshCollections();
         }
 
@@ -209,7 +231,12 @@ namespace BigSisterNodeNet.UI.Models.Instruments
 
         private bool CanUploadPlcProgram()
         {
-            return !IsUploadingPlcProgram && !string.IsNullOrWhiteSpace(PlcProgramSource);
+            return !IsPlcProgramBusy && !string.IsNullOrWhiteSpace(PlcProgramSource);
+        }
+
+        private bool CanDownloadPlcProgram()
+        {
+            return !IsPlcProgramBusy;
         }
 
         private async void UploadPlcProgram()
@@ -227,6 +254,16 @@ namespace BigSisterNodeNet.UI.Models.Instruments
 
                 var result = await Task.Run(() => _nodeNetSoc.UploadProgram(PlcProgramSource ?? string.Empty, (ushort)SelectedPlcSlot));
                 var loadStatus = ReadResponseValue(result?.CommitResponse, "loadStatus");
+                if (_nodeNetSoc != null)
+                {
+                    var slotFeaturePath = string.IsNullOrWhiteSpace(_nodeNetSoc.DeviceId)
+                        ? string.Empty
+                        : _nodeNetSoc.DeviceId + ".plc.slot" + SelectedPlcSlot;
+                    if (!string.IsNullOrWhiteSpace(slotFeaturePath))
+                    {
+                        _nodeNetSoc.BrowsePointDefinitions(slotFeaturePath);
+                    }
+                }
                 PlcStatusMessage = string.IsNullOrWhiteSpace(loadStatus)
                     ? $"Upload terminé sur le slot {SelectedPlcSlot}."
                     : $"Upload terminé sur le slot {SelectedPlcSlot}. loadStatus={loadStatus}.";
@@ -238,6 +275,34 @@ namespace BigSisterNodeNet.UI.Models.Instruments
             finally
             {
                 IsUploadingPlcProgram = false;
+            }
+        }
+
+        private async void DownloadPlcProgram()
+        {
+            if (_nodeNetSoc == null)
+            {
+                PlcStatusMessage = "Aucun nœud NodeNet SoC sélectionné.";
+                return;
+            }
+
+            try
+            {
+                IsDownloadingPlcProgram = true;
+                PlcStatusMessage = $"Download du programme objectFileV1 du slot {SelectedPlcSlot} en cours...";
+
+                var result = await Task.Run(() => _nodeNetSoc.DownloadProgramObjectFile((ushort)SelectedPlcSlot));
+                var objectBytes = result?.PayloadBytes ?? Array.Empty<byte>();
+                PlcProgramSource = PlcMachineCodeDisassembler.DisassembleObjectFile(objectBytes).Source;
+                PlcStatusMessage = $"Download terminé pour le slot {SelectedPlcSlot}. {objectBytes.Length} octets lus.";
+            }
+            catch (Exception ex)
+            {
+                PlcStatusMessage = ex.Message;
+            }
+            finally
+            {
+                IsDownloadingPlcProgram = false;
             }
         }
 

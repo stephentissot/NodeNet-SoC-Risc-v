@@ -79,6 +79,10 @@ public:
     PLC_UPLOAD_ABORT_RES,
     PLC_UPLOAD_DATA_REQ,
     PLC_UPLOAD_DATA_RES,
+    PLC_BYTECODE_REQ,
+    PLC_BYTECODE_RES,
+    PLC_OBJECT_FILE_REQ,
+    PLC_OBJECT_FILE_RES,
   };
 
   // Parsing string -> enum
@@ -134,6 +138,10 @@ public:
     if(strcmp(cmd, "plcUploadAbortRes") == 0)   return PLC_UPLOAD_ABORT_RES;
     if(strcmp(cmd, "plcUploadDataReq") == 0)   return PLC_UPLOAD_DATA_REQ;
     if(strcmp(cmd, "plcUploadDataRes") == 0)   return PLC_UPLOAD_DATA_RES;
+    if(strcmp(cmd, "plcBytecodeReq") == 0)   return PLC_BYTECODE_REQ;
+    if(strcmp(cmd, "plcBytecodeRes") == 0)   return PLC_BYTECODE_RES;
+    if(strcmp(cmd, "plcObjectFileReq") == 0)   return PLC_OBJECT_FILE_REQ;
+    if(strcmp(cmd, "plcObjectFileRes") == 0)   return PLC_OBJECT_FILE_RES;
 
     return CMD_UNKNOWN;
   }
@@ -191,6 +199,10 @@ public:
       case PLC_UPLOAD_ABORT_RES: return "plcUploadAbortRes";
       case PLC_UPLOAD_DATA_REQ: return "plcUploadDataReq";
       case PLC_UPLOAD_DATA_RES: return "plcUploadDataRes";
+      case PLC_BYTECODE_REQ: return "plcBytecodeReq";
+      case PLC_BYTECODE_RES: return "plcBytecodeRes";
+      case PLC_OBJECT_FILE_REQ: return "plcObjectFileReq";
+      case PLC_OBJECT_FILE_RES: return "plcObjectFileRes";
       default:         return "Unknown";
     }
   }
