@@ -144,6 +144,19 @@ static const char* plc_slot_state_name(const PlcProgramControlBlockV1& control_b
     return "loaded";
 }
 
+static const char* plc_slot_source_name(uint16_t slot_id,
+                                        bool diag_valid,
+                                        uint8_t diag_slot_id,
+                                        const char* diag_source) {
+    if (diag_valid && diag_slot_id == slot_id && diag_source != nullptr && diag_source[0] != '\0') {
+        return diag_source;
+    }
+
+    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+    return plc_control_block_loaded(*control_block, slot_id) ? "unknown" : "none";
+}
+
 static bool resolve_waveshare_channel_runtime_indices(const PointCatalog& catalog,
                                                       const PlcRuntimePublisherV1* publisher,
                                                       const char* device_id,
@@ -706,6 +719,9 @@ void NodeNetCore::processInputQueue()
                 break;
             case NodeNetCommands::Cmd::PLC_STATUS_REQ:
                 queueResponse = handlePlcStatusRequest(request, response);
+                break;
+            case NodeNetCommands::Cmd::PLC_SLOTS_REQ:
+                queueResponse = handlePlcSlotsRequest(request, response);
                 break;
             case NodeNetCommands::UPDATE_PROPERTY:{
                 if (!updateProperty(request)) {
@@ -1399,6 +1415,65 @@ bool NodeNetCore::handlePlcStatusRequest(const JsonDocument& request, JsonDocume
         response["runtimeStoreEpoch"] = header.store_epoch;
         response["runtimePublishedCount"] = _plcRuntimePublisher->publishedCount();
         response["runtimeHeaderAddr"] = header.descriptor_base;
+    }
+
+    return true;
+}
+
+bool NodeNetCore::handlePlcSlotsRequest(const JsonDocument& request, JsonDocument& response)
+{
+    response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_SLOTS_RES);
+
+    const uint32_t offset = request["offset"] | 0u;
+    const uint32_t limit = request["limit"] | 4u;
+    response["ok"] = true;
+    response["offset"] = offset;
+    response["count"] = 0u;
+    response["total"] = static_cast<uint32_t>(kPlcSlotCountV1);
+    response["hasMore"] = false;
+
+    JsonArray slots = response["slots"].to<JsonArray>();
+    uint32_t emitted = 0u;
+
+    for (uint32_t slot_id = offset; slot_id < static_cast<uint32_t>(kPlcSlotCountV1); ++slot_id) {
+        if (emitted >= limit) {
+            break;
+        }
+
+        const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+            static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(static_cast<uint16_t>(slot_id))));
+        const bool loaded = plc_control_block_loaded(*control_block, static_cast<uint16_t>(slot_id));
+
+        JsonObject slot = slots.add<JsonObject>();
+        slot["slotId"] = slot_id;
+        slot["state"] = plc_slot_state_name(*control_block, static_cast<uint16_t>(slot_id));
+        slot["loaded"] = loaded;
+        slot["source"] = plc_slot_source_name(static_cast<uint16_t>(slot_id),
+                               _plcSlotRuntimeDiagnostics.valid,
+                               _plcSlotRuntimeDiagnostics.slot_id,
+                               _plcSlotRuntimeDiagnostics.source);
+        slot["cycleCounter"] = loaded ? control_block->cycle_counter : 0u;
+        slot["faultCode"] = loaded ? control_block->fault_code : 0u;
+        slot["bytecodeSize"] = loaded ? control_block->bytecode_size : 0u;
+        slot["status"] = loaded ? control_block->status : 0u;
+
+        response["count"] = emitted + 1u;
+        response["hasMore"] = false;
+        if (measureJson(response) > NODENET_MAX_PAYLOAD_SIZE) {
+            slots.remove(slots.size() - 1u);
+            response["count"] = emitted;
+            response["hasMore"] = true;
+            break;
+        }
+
+        emitted += 1u;
+    }
+
+    response["hasMore"] = (offset + (response["count"] | 0u)) < static_cast<uint32_t>(kPlcSlotCountV1);
+    if (_plcRuntimePublisher != nullptr) {
+        const PlcRuntimeHeaderV1 header = _plcRuntimePublisher->headerSnapshot();
+        response["runtimeStoreEpoch"] = header.store_epoch;
+        response["runtimePublishedCount"] = _plcRuntimePublisher->publishedCount();
     }
 
     return true;

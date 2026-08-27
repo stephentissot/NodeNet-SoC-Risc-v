@@ -349,6 +349,112 @@ Possible `pointDelete` errors:
 - `notFound`
 - `saveFailed`
 
+## plcStatusReq
+
+Requests detailed PLC runtime status for one slot.
+
+### Request
+
+```json
+{
+  "cmd": "plcStatusReq",
+  "from": 5,
+  "to": 4,
+  "slotId": 0
+}
+```
+
+### Response
+
+```json
+{
+  "cmd": "plcStatusRes",
+  "to": 5,
+  "ok": true,
+  "slotId": 0,
+  "state": "running",
+  "loaded": true,
+  "status": 2,
+  "pc": 7,
+  "cycleCounter": 885,
+  "faultCode": 0,
+  "faultInfo": 0,
+  "bytecodeBase": 537067584,
+  "bytecodeSize": 7,
+  "maxInstructionsPerScan": 16,
+  "maxScanTimeUs": 5000,
+  "source": "local",
+  "channel": 1,
+  "runtimeMapOk": true,
+  "inputRuntimeIndex": 0,
+  "outputRuntimeIndex": 1,
+  "runtimeStoreEpoch": 1,
+  "runtimePublishedCount": 21,
+  "runtimeHeaderAddr": 537919744
+}
+```
+
+Possible `state` values:
+
+- `empty`
+- `loaded`
+- `running`
+- `faulted`
+
+## plcSlotsReq
+
+Requests a compact inventory of PLC slots with pagination.
+
+### Request
+
+```json
+{
+  "cmd": "plcSlotsReq",
+  "from": 5,
+  "to": 4,
+  "offset": 0,
+  "limit": 4
+}
+```
+
+### Response
+
+```json
+{
+  "cmd": "plcSlotsRes",
+  "to": 5,
+  "ok": true,
+  "offset": 0,
+  "count": 4,
+  "total": 16,
+  "hasMore": true,
+  "runtimeStoreEpoch": 1,
+  "runtimePublishedCount": 21,
+  "slots": [
+    {
+      "slotId": 0,
+      "state": "running",
+      "loaded": true,
+      "source": "local",
+      "cycleCounter": 885,
+      "faultCode": 0,
+      "bytecodeSize": 7,
+      "status": 2
+    },
+    {
+      "slotId": 1,
+      "state": "loaded",
+      "loaded": true,
+      "source": "unknown",
+      "cycleCounter": 0,
+      "faultCode": 0,
+      "bytecodeSize": 6,
+      "status": 1
+    }
+  ]
+}
+```
+
 ## updateProperty for point writes
 
 The existing `updateProperty` command can also be used to write some runtime PLC values.
