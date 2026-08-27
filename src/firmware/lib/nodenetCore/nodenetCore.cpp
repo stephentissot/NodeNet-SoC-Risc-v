@@ -266,6 +266,162 @@ static bool flash_write_erased_bytes(Flash* flash, uint32_t base, const void* da
     return true;
 }
 
+static bool flash_erase_range(Flash* flash, uint32_t flash_offset, uint32_t size) {
+    if (flash == nullptr || (flash_offset % Flash::kSectorSize) != 0u || (size % Flash::kSectorSize) != 0u) {
+        return false;
+    }
+
+    for (uint32_t offset = 0u; offset < size; offset += Flash::kSectorSize) {
+        if (!flash->eraseSector(flash_offset + offset)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void build_waveshare_mirror_symbols(const char* device_id,
+                                           uint8_t channel,
+                                           PlcObjectSymbolRecordV1* symbols,
+                                           PlcObjectRelocationRecordV1* relocations) {
+    char input_point_id[16] = {};
+    char output_point_id[16] = {};
+    (void)snprintf(input_point_id, sizeof(input_point_id), "input%u", static_cast<unsigned>(channel));
+    (void)snprintf(output_point_id, sizeof(output_point_id), "output%u", static_cast<unsigned>(channel));
+
+    std::memset(symbols, 0, sizeof(PlcObjectSymbolRecordV1) * 2u);
+    std::memset(relocations, 0, sizeof(PlcObjectRelocationRecordV1) * 2u);
+
+    copy_text(symbols[0].point_id.device_id, sizeof(symbols[0].point_id.device_id), device_id);
+    copy_text(symbols[0].point_id.feature, sizeof(symbols[0].point_id.feature), "modbus0.waveshare8ch");
+    copy_text(symbols[0].point_id.point_id, sizeof(symbols[0].point_id.point_id), input_point_id);
+    symbols[0].expected_type = static_cast<uint8_t>(PointValueType::Bool);
+    symbols[0].access = static_cast<uint8_t>(kPlcRuntimeLinkRead);
+
+    copy_text(symbols[1].point_id.device_id, sizeof(symbols[1].point_id.device_id), device_id);
+    copy_text(symbols[1].point_id.feature, sizeof(symbols[1].point_id.feature), "modbus0.waveshare8ch");
+    copy_text(symbols[1].point_id.point_id, sizeof(symbols[1].point_id.point_id), output_point_id);
+    symbols[1].expected_type = static_cast<uint8_t>(PointValueType::Bool);
+    symbols[1].access = static_cast<uint8_t>(kPlcRuntimeLinkWrite);
+
+    relocations[0].code_offset = 1u;
+    relocations[0].symbol_index = 0u;
+    relocations[0].relocation_kind = kPlcRelocationPointIndexU16Le;
+    relocations[1].code_offset = 4u;
+    relocations[1].symbol_index = 1u;
+    relocations[1].relocation_kind = kPlcRelocationPointIndexU16Le;
+}
+
+static PlcSlotLoadResultV1 load_mirror_program_into_slot(const PointCatalog& catalog,
+                                                         const PlcRuntimePublisherV1& publisher,
+                                                         const char* device_id,
+                                                         uint16_t slot_id,
+                                                         uint8_t channel) {
+    PlcSlotLoadResultV1 result = {};
+    result.status = kPlcSlotLoadInvalidArgument;
+    result.parse_status = kPlcObjectParseOk;
+    result.link_result.status = kPlcObjectLinkInvalidArgument;
+
+    if (device_id == nullptr || channel == 0u || channel > 8u || slot_id >= kPlcSlotCountV1) {
+        return result;
+    }
+
+    PlcObjectSymbolRecordV1 symbols[2] = {};
+    PlcObjectRelocationRecordV1 relocations[2] = {};
+    build_waveshare_mirror_symbols(device_id, channel, symbols, relocations);
+
+    uint8_t object_code[] = {
+        0x10u, 0x00u, 0x00u,
+        0x11u, 0x00u, 0x00u,
+        0x00u,
+    };
+
+    PlcObjectImageV1 object_image = {};
+    object_image.code_bytes = object_code;
+    object_image.code_size = static_cast<uint32_t>(sizeof(object_code));
+    object_image.entry_offset = 0u;
+    object_image.symbols = symbols;
+    object_image.symbol_count = 2u;
+    object_image.relocations = relocations;
+    object_image.relocation_count = 2u;
+
+    return PlcSlotLoaderV1::loadParsedObjectIntoSlot(publisher,
+                                                     catalog,
+                                                     slot_id,
+                                                     object_image,
+                                                     16u,
+                                                     5000u);
+}
+
+static PlcSlotLoadStatusV1 build_mirror_program_package(const PointCatalog& catalog,
+                                                        const PlcRuntimePublisherV1& publisher,
+                                                        const char* device_id,
+                                                        uint8_t channel,
+                                                        uint8_t* package_out,
+                                                        size_t package_capacity,
+                                                        size_t& package_size_out) {
+    package_size_out = 0u;
+    if (device_id == nullptr || package_out == nullptr || channel == 0u || channel > 8u) {
+        return kPlcSlotLoadInvalidArgument;
+    }
+
+    PlcObjectSymbolRecordV1 symbols[2] = {};
+    PlcObjectRelocationRecordV1 relocations[2] = {};
+    build_waveshare_mirror_symbols(device_id, channel, symbols, relocations);
+
+    uint8_t object_code[] = {
+        0x10u, 0x00u, 0x00u,
+        0x11u, 0x00u, 0x00u,
+        0x00u,
+    };
+    uint8_t linked_code[sizeof(object_code)] = {};
+
+    PlcObjectImageV1 object_image = {};
+    object_image.code_bytes = object_code;
+    object_image.code_size = static_cast<uint32_t>(sizeof(object_code));
+    object_image.entry_offset = 0u;
+    object_image.symbols = symbols;
+    object_image.symbol_count = 2u;
+    object_image.relocations = relocations;
+    object_image.relocation_count = 2u;
+
+    const PlcObjectLinkResultV1 link_result = PlcObjectLinkerV1::linkObjectImage(publisher,
+                                                                                  catalog,
+                                                                                  object_image,
+                                                                                  linked_code,
+                                                                                  sizeof(linked_code));
+    if (link_result.status != kPlcObjectLinkOk) {
+        return kPlcSlotLoadLinkFailed;
+    }
+
+    const size_t package_size = sizeof(PlcLinkedProgramPackageHeaderV1) + sizeof(linked_code);
+    if (package_size > package_capacity) {
+        return kPlcSlotLoadBytecodeTooLarge;
+    }
+
+    PlcLinkedProgramPackageHeaderV1 package_header = {};
+    package_header.magic = kPlcLinkedProgramPackageMagicV1;
+    package_header.version = kPlcRuntimeAbiV1Version;
+    package_header.abi_version = kPlcRuntimeAbiV1Version;
+    package_header.code_size = static_cast<uint32_t>(sizeof(linked_code));
+    package_header.entry_offset = 0u;
+    package_header.symbol_count = 2u;
+    package_header.relocation_count = 2u;
+    package_header.max_instructions_per_scan = 16u;
+    package_header.max_scan_time_us = 5000u;
+    package_header.runtime_header_addr = kPlcRuntimeHeaderAddr;
+    package_header.store_epoch = publisher.storeEpoch();
+    package_header.linked_code_checksum = 2166136261u;
+    for (size_t i = 0u; i < sizeof(linked_code); ++i) {
+        package_header.linked_code_checksum ^= linked_code[i];
+        package_header.linked_code_checksum *= 16777619u;
+    }
+
+    std::memcpy(package_out, &package_header, sizeof(package_header));
+    std::memcpy(package_out + sizeof(package_header), linked_code, sizeof(linked_code));
+    package_size_out = package_size;
+    return kPlcSlotLoadOk;
+}
+
 static void serialize_point_state(JsonObject obj,
                                   const PointDefinition& definition,
                                   const PointState& state,
@@ -722,6 +878,9 @@ void NodeNetCore::processInputQueue()
                 break;
             case NodeNetCommands::Cmd::PLC_SLOTS_REQ:
                 queueResponse = handlePlcSlotsRequest(request, response);
+                break;
+            case NodeNetCommands::Cmd::PLC_LOAD_MIRROR_REQ:
+                queueResponse = handlePlcLoadMirrorRequest(request, response);
                 break;
             case NodeNetCommands::UPDATE_PROPERTY:{
                 if (!updateProperty(request)) {
@@ -1476,6 +1635,123 @@ bool NodeNetCore::handlePlcSlotsRequest(const JsonDocument& request, JsonDocumen
         response["runtimePublishedCount"] = _plcRuntimePublisher->publishedCount();
     }
 
+    return true;
+}
+
+bool NodeNetCore::handlePlcLoadMirrorRequest(const JsonDocument& request, JsonDocument& response)
+{
+    response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_LOAD_MIRROR_RES);
+
+    const uint16_t slot_id = static_cast<uint16_t>(request["slotId"] | 0u);
+    const uint8_t channel = static_cast<uint8_t>(request["channel"] | 0u);
+    const bool persist_to_flash = request["persistToFlash"] | false;
+
+    if (_plcRuntimePublisher == nullptr) {
+        response["ok"] = false;
+        response["error"] = "runtimeUnavailable";
+        return true;
+    }
+    if (slot_id >= kPlcSlotCountV1) {
+        response["ok"] = false;
+        response["error"] = "slotOutOfRange";
+        return true;
+    }
+    if (channel == 0u || channel > 8u) {
+        response["ok"] = false;
+        response["error"] = "channelOutOfRange";
+        return true;
+    }
+    if (persist_to_flash && slot_id != 0u) {
+        response["ok"] = false;
+        response["error"] = "flashPersistSlot0Only";
+        return true;
+    }
+
+    const PlcSlotLoadResultV1 load_result = load_mirror_program_into_slot(_pointCatalog,
+                                                                          *_plcRuntimePublisher,
+                                                                          deviceId,
+                                                                          slot_id,
+                                                                          channel);
+    response["slotId"] = slot_id;
+    response["channel"] = channel;
+    response["persistToFlash"] = persist_to_flash;
+    response["loadStatus"] = static_cast<uint8_t>(load_result.status);
+    if (load_result.status != kPlcSlotLoadOk) {
+        response["ok"] = false;
+        response["error"] = "loadFailed";
+        return true;
+    }
+
+    uint16_t input_runtime_index = PlcRuntimePublisherV1::kInvalidPointIndex;
+    uint16_t output_runtime_index = PlcRuntimePublisherV1::kInvalidPointIndex;
+    const bool runtime_map_ok = resolve_waveshare_channel_runtime_indices(_pointCatalog,
+                                                                          _plcRuntimePublisher,
+                                                                          deviceId,
+                                                                          channel,
+                                                                          input_runtime_index,
+                                                                          output_runtime_index);
+
+    PlcSlotLoadStatusV1 flash_status = kPlcSlotLoadInvalidArgument;
+    const char* source_name = "local";
+    if (persist_to_flash) {
+        uint8_t package_bytes[sizeof(PlcLinkedProgramPackageHeaderV1) + 7u] = {};
+        size_t package_size = 0u;
+        flash_status = build_mirror_program_package(_pointCatalog,
+                                                    *_plcRuntimePublisher,
+                                                    deviceId,
+                                                    channel,
+                                                    package_bytes,
+                                                    sizeof(package_bytes),
+                                                    package_size);
+        if (flash_status == kPlcSlotLoadOk) {
+            const uint32_t erase_size = static_cast<uint32_t>(((package_size + Flash::kSectorSize - 1u) /
+                                                               Flash::kSectorSize) * Flash::kSectorSize);
+            if (!flash_erase_range(_flash, Flash::kPlcPackageSlotBase, erase_size) ||
+                !flash_write_erased_bytes(_flash, Flash::kPlcPackageSlotBase, package_bytes, package_size)) {
+                flash_status = kPlcSlotLoadFlashReadFailed;
+            } else {
+                const PlcSlotLoadResultV1 flash_load_result =
+                    PlcSlotLoaderV1::loadLinkedProgramPackageFromFlash(*_plcRuntimePublisher,
+                                                                       *_flash,
+                                                                       slot_id,
+                                                                       Flash::kPlcPackageSlotBase,
+                                                                       Flash::kPlcPackageSlotSize);
+                flash_status = flash_load_result.status;
+                if (flash_status == kPlcSlotLoadOk) {
+                    source_name = "flash";
+                }
+            }
+        }
+
+        response["flashStatus"] = static_cast<uint8_t>(flash_status);
+        if (flash_status != kPlcSlotLoadOk) {
+            response["ok"] = false;
+            response["error"] = "flashPersistFailed";
+            return true;
+        }
+    }
+
+    if (slot_id == 0u && runtime_map_ok) {
+        setPlcSlotRuntimeDiagnostics(static_cast<uint8_t>(slot_id),
+                                     channel,
+                                     source_name,
+                                     input_runtime_index,
+                                     output_runtime_index);
+    }
+
+    response["ok"] = true;
+    response["source"] = source_name;
+    response["runtimeMapOk"] = runtime_map_ok;
+    if (runtime_map_ok) {
+        response["inputRuntimeIndex"] = input_runtime_index;
+        response["outputRuntimeIndex"] = output_runtime_index;
+    }
+
+    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+    response["state"] = plc_slot_state_name(*control_block, slot_id);
+    response["cycleCounter"] = control_block->cycle_counter;
+    response["faultCode"] = control_block->fault_code;
     return true;
 }
 

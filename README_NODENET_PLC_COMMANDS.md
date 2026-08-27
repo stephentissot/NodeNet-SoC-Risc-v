@@ -455,6 +455,62 @@ Requests a compact inventory of PLC slots with pagination.
 }
 ```
 
+## plcLoadMirrorReq
+
+Loads the built-in boolean mirror PLC program into a chosen slot.
+
+This is a firmware-side service command intended for runtime validation before the full raw PLC upload flow exists.
+
+### Request
+
+```json
+{
+  "cmd": "plcLoadMirrorReq",
+  "from": 5,
+  "to": 4,
+  "slotId": 0,
+  "channel": 1,
+  "persistToFlash": true
+}
+```
+
+Fields:
+
+- `slotId`: target PLC slot, `0..15`
+- `channel`: Waveshare mirror pair number, `1..8`
+- `persistToFlash`: optional, only accepted for `slotId = 0`
+
+### Response
+
+```json
+{
+  "cmd": "plcLoadMirrorRes",
+  "to": 5,
+  "ok": true,
+  "slotId": 0,
+  "channel": 1,
+  "persistToFlash": true,
+  "loadStatus": 0,
+  "flashStatus": 0,
+  "source": "flash",
+  "runtimeMapOk": true,
+  "inputRuntimeIndex": 0,
+  "outputRuntimeIndex": 1,
+  "state": "loaded",
+  "cycleCounter": 0,
+  "faultCode": 0
+}
+```
+
+Possible errors:
+
+- `runtimeUnavailable`
+- `slotOutOfRange`
+- `channelOutOfRange`
+- `flashPersistSlot0Only`
+- `loadFailed`
+- `flashPersistFailed`
+
 ## updateProperty for point writes
 
 The existing `updateProperty` command can also be used to write some runtime PLC values.

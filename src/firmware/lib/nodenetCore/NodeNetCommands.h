@@ -67,6 +67,8 @@ public:
     PLC_STATUS_RES,
     PLC_SLOTS_REQ,
     PLC_SLOTS_RES,
+    PLC_LOAD_MIRROR_REQ,
+    PLC_LOAD_MIRROR_RES,
   };
 
   // Parsing string -> enum
@@ -110,6 +112,8 @@ public:
     if(strcmp(cmd, "plcStatusRes") == 0)   return PLC_STATUS_RES;
     if(strcmp(cmd, "plcSlotsReq") == 0)   return PLC_SLOTS_REQ;
     if(strcmp(cmd, "plcSlotsRes") == 0)   return PLC_SLOTS_RES;
+    if(strcmp(cmd, "plcLoadMirrorReq") == 0)   return PLC_LOAD_MIRROR_REQ;
+    if(strcmp(cmd, "plcLoadMirrorRes") == 0)   return PLC_LOAD_MIRROR_RES;
 
     return CMD_UNKNOWN;
   }
@@ -155,6 +159,8 @@ public:
       case PLC_STATUS_RES: return "plcStatusRes";
       case PLC_SLOTS_REQ: return "plcSlotsReq";
       case PLC_SLOTS_RES: return "plcSlotsRes";
+      case PLC_LOAD_MIRROR_REQ: return "plcLoadMirrorReq";
+      case PLC_LOAD_MIRROR_RES: return "plcLoadMirrorRes";
       default:         return "Unknown";
     }
   }

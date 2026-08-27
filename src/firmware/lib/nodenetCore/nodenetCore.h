@@ -219,6 +219,7 @@ class NodeNetCore
         bool handlePointDeleteRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePlcStatusRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePlcSlotsRequest(const JsonDocument& request, JsonDocument& response);
+        bool handlePlcLoadMirrorRequest(const JsonDocument& request, JsonDocument& response);
 
         bool ensureFlashDbReady();
         bool savePointCatalog();
