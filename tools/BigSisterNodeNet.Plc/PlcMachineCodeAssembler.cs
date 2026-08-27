@@ -17,6 +17,28 @@ namespace BigSisterNodeNet.Plc
 
     public static class PlcMachineCodeAssembler
     {
+        private static readonly HashSet<string> ReservedSlotVariableNames = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "loaded",
+            "state",
+            "runEnabled",
+            "status",
+            "cycleCounter",
+            "faultCode",
+            "faultInfo",
+            "bytecodeSize",
+            "source",
+            "programType",
+            "paramsSummary",
+            "inputChannel",
+            "outputChannel",
+            "runtimeMapOk",
+            "start",
+            "stop",
+            "reset",
+            "clearFault",
+        };
+
         public const byte HaltOpcode = 0x00;
         public const byte LoadPointBoolOpcode = 0x10;
         public const byte StorePointBoolOpcode = 0x11;
@@ -248,6 +270,13 @@ namespace BigSisterNodeNet.Plc
             }
 
             var valueType = ParseValueType(tokens[1], lineNumber);
+            if (ReservedSlotVariableNames.Contains(tokens[2]))
+            {
+                throw new PlcMachineCodeCompileException(
+                    $"VAR name '{tokens[2]}' is reserved by plc.slot runtime points",
+                    lineNumber);
+            }
+
             AddSymbol(result,
                       symbolIndexByName,
                       lineNumber,

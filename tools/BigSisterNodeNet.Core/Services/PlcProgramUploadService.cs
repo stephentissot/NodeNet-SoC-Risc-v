@@ -35,6 +35,7 @@ namespace BigSisterNodeNet.Core.Services
                 LocalAddress = NodeNetAddress.SerialEndpoint,
                 RemoteAddress = node.Address,
                 SlotId = slot,
+                PersistToFlash = slot == 0,
                 ObjectFileOptions = objectFileOptions ?? new PlcObjectFileOptions(),
             };
 

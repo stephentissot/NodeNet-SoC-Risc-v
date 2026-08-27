@@ -27,6 +27,8 @@ constexpr uint32_t kPlcBuiltinPublishPeriodMs = 250u;
 constexpr uint32_t kPlcUploadSessionTimeoutMs = 15000u;
 constexpr uint32_t kPlcUploadStagingBase = Flash::kPlcPackageSlotBase;
 constexpr uint32_t kPlcUploadStagingSize = Flash::kPlcPackageSlotSize;
+constexpr uint32_t kPlcUploadVolatileStagingBase = SDRAM_PLC_UPLOAD_STAGING_BASE;
+constexpr uint32_t kPlcUploadVolatileStagingSize = SDRAM_PLC_UPLOAD_STAGING_SIZE;
 constexpr uint8_t kPlcUploadDataFrameMagic = 0xA5u;
 constexpr uint16_t kPlcBytecodeChunkMaxBytes = 768u;
 
@@ -41,6 +43,12 @@ struct PlcUploadDataFrameHeader {
 };
 
 static_assert(sizeof(PlcUploadDataFrameHeader) == 16u, "Unexpected PLC upload data frame header size");
+
+static_assert(kPlcUploadVolatileStagingBase >= (kPlcSlotObjectRegionBaseV1 + kPlcSlotObjectRegionSizeV1),
+              "Volatile PLC upload staging overlaps PLC object snapshot window");
+static_assert((static_cast<uintptr_t>(kPlcUploadVolatileStagingBase) + kPlcUploadVolatileStagingSize) <=
+                  static_cast<uintptr_t>(SDRAM_POINT_STATE_BASE),
+              "Volatile PLC upload staging overlaps point-state SDRAM window");
 
 struct PointCatalogFlashHeader {
     uint32_t magic = 0u;
@@ -90,6 +98,11 @@ static bool strings_equal(const char* lhs, const char* rhs) {
     }
 
     return std::strcmp(lhs, rhs) == 0;
+}
+
+static uint8_t* plc_upload_volatile_staging_ptr()
+{
+    return reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(kPlcUploadVolatileStagingBase));
 }
 
 static bool starts_with(const char* text, const char* prefix)
@@ -2452,12 +2465,18 @@ bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonD
         response["error"] = "slotOutOfRange";
         return true;
     }
-    if (!persist_to_flash) {
+    if (persist_to_flash && slot_id != 0u) {
         response["ok"] = false;
-        response["error"] = "persistRequired";
+        response["error"] = "flashPersistSlot0Only";
         return true;
     }
-    if (total_size < sizeof(PlcObjectFileHeaderV1) || total_size > kPlcUploadStagingSize) {
+    if (!persist_to_flash && !auto_load) {
+        response["ok"] = false;
+        response["error"] = "volatileUploadRequiresAutoLoad";
+        return true;
+    }
+    const uint32_t staging_capacity = persist_to_flash ? kPlcUploadStagingSize : kPlcUploadVolatileStagingSize;
+    if (total_size < sizeof(PlcObjectFileHeaderV1) || total_size > staging_capacity) {
         response["ok"] = false;
         response["error"] = "sizeOutOfRange";
         return true;
@@ -2467,12 +2486,16 @@ bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonD
         response["error"] = "unsupportedArtifactType";
         return true;
     }
-    if (!flash_erase_range(_flash,
-                           kPlcUploadStagingBase,
-                           static_cast<uint32_t>(((total_size + Flash::kSectorSize - 1u) / Flash::kSectorSize) * Flash::kSectorSize))) {
-        response["ok"] = false;
-        response["error"] = "stagingEraseFailed";
-        return true;
+    if (persist_to_flash) {
+        if (!flash_erase_range(_flash,
+                               kPlcUploadStagingBase,
+                               static_cast<uint32_t>(((total_size + Flash::kSectorSize - 1u) / Flash::kSectorSize) * Flash::kSectorSize))) {
+            response["ok"] = false;
+            response["error"] = "stagingEraseFailed";
+            return true;
+        }
+    } else {
+        std::memset(plc_upload_volatile_staging_ptr(), 0xFF, static_cast<size_t>(staging_capacity));
     }
 
     resetPlcUploadSession();
@@ -2489,6 +2512,8 @@ bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonD
     response["ok"] = true;
     response["acceptedChunkSize"] = Flash::kPageSize;
     response["uploadId"] = _plcUploadSession.upload_id;
+    response["persistToFlash"] = persist_to_flash;
+    response["stagingMedium"] = persist_to_flash ? "flash" : "sdram";
     fillPlcUploadStatus(response, false);
     return true;
 }
@@ -2559,12 +2584,20 @@ bool NodeNetCore::handlePlcUploadCommitRequest(const JsonDocument& request, Json
 
     PlcSlotLoadResultV1 load_result = {};
     if (_plcUploadSession.auto_load) {
-        load_result = PlcSlotLoaderV1::loadObjectFileFromFlash(*_plcRuntimePublisher,
-                                       _pointCatalog,
-                                       _plcUploadSession.slot_id,
-                                       *_flash,
-                                       kPlcUploadStagingBase,
-                                       _plcUploadSession.total_size);
+        if (_plcUploadSession.persist_to_flash) {
+            load_result = PlcSlotLoaderV1::loadObjectFileFromFlash(*_plcRuntimePublisher,
+                                           _pointCatalog,
+                                           _plcUploadSession.slot_id,
+                                           *_flash,
+                                           kPlcUploadStagingBase,
+                                           _plcUploadSession.total_size);
+        } else {
+            load_result = PlcSlotLoaderV1::loadObjectFileIntoSlot(*_plcRuntimePublisher,
+                                          _pointCatalog,
+                                          _plcUploadSession.slot_id,
+                                          plc_upload_volatile_staging_ptr(),
+                                          _plcUploadSession.total_size);
+        }
         if (load_result.status != kPlcSlotLoadOk) {
             response["ok"] = false;
             response["error"] = "loadFailed";
@@ -2578,6 +2611,8 @@ bool NodeNetCore::handlePlcUploadCommitRequest(const JsonDocument& request, Json
     response["ok"] = true;
     response["slotId"] = _plcUploadSession.slot_id;
     response["loadStatus"] = static_cast<uint8_t>(load_result.status);
+    response["persistToFlash"] = _plcUploadSession.persist_to_flash;
+    response["rebootPersistent"] = _plcUploadSession.persist_to_flash;
     fillPlcUploadStatus(response, false);
     resetPlcUploadSession();
     return true;
@@ -2718,14 +2753,28 @@ bool NodeNetCore::handlePlcUploadDataChunk(uint32_t upload_id,
         response["error"] = "chunkChecksumMismatch";
         response["expectedOffset"] = _plcUploadSession.expected_offset;
     } else {
-        uint8_t page[Flash::kPageSize] = {};
-        std::memset(page, 0xFF, sizeof(page));
-        std::memcpy(page, payload, payload_size);
-        if (!_flash->writePage(kPlcUploadStagingBase + offset, page)) {
-            response["ok"] = false;
-            response["error"] = "flashWriteFailed";
-            response["expectedOffset"] = _plcUploadSession.expected_offset;
+        if (_plcUploadSession.persist_to_flash) {
+            uint8_t page[Flash::kPageSize] = {};
+            std::memset(page, 0xFF, sizeof(page));
+            std::memcpy(page, payload, payload_size);
+            if (!_flash->writePage(kPlcUploadStagingBase + offset, page)) {
+                response["ok"] = false;
+                response["error"] = "flashWriteFailed";
+                response["expectedOffset"] = _plcUploadSession.expected_offset;
+            } else {
+                _plcUploadSession.bytes_received += static_cast<uint32_t>(payload_size);
+                _plcUploadSession.expected_offset += static_cast<uint32_t>(payload_size);
+                _plcUploadSession.payload_checksum = checksum32_extend(_plcUploadSession.payload_checksum,
+                                                                       payload,
+                                                                       payload_size);
+                _plcUploadSession.last_activity_ms = millis();
+                _plcUploadSession.last_error_status = 0u;
+                response["ok"] = true;
+                response["bytesReceived"] = _plcUploadSession.bytes_received;
+                response["expectedOffset"] = _plcUploadSession.expected_offset;
+            }
         } else {
+            std::memcpy(plc_upload_volatile_staging_ptr() + offset, payload, payload_size);
             _plcUploadSession.bytes_received += static_cast<uint32_t>(payload_size);
             _plcUploadSession.expected_offset += static_cast<uint32_t>(payload_size);
             _plcUploadSession.payload_checksum = checksum32_extend(_plcUploadSession.payload_checksum,

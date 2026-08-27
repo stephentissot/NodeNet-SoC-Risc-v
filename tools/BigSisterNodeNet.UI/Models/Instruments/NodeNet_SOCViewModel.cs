@@ -109,7 +109,7 @@ namespace BigSisterNodeNet.UI.Models.Instruments
             private set => SetProperty(ref _plcStatusMessage, value);
         }
 
-        public string PlcHintMessage => "Upload et download utilisent objectFileV1. Le download relit la copie source conservée par slot pour retrouver symboles et VAR.";
+        public string PlcHintMessage => "Upload et download utilisent objectFileV1. Le slot 0 peut rester reboot-persistant via flash; les autres slots sont chargés en runtime. Les noms VAR réservés du runtime de slot sont rejetés à l'assemblage.";
 
         public bool IsUploadingPlcProgram
         {
@@ -254,6 +254,7 @@ namespace BigSisterNodeNet.UI.Models.Instruments
 
                 var result = await Task.Run(() => _nodeNetSoc.UploadProgram(PlcProgramSource ?? string.Empty, (ushort)SelectedPlcSlot));
                 var loadStatus = ReadResponseValue(result?.CommitResponse, "loadStatus");
+                var rebootPersistent = string.Equals(ReadResponseValue(result?.CommitResponse, "rebootPersistent"), bool.TrueString, StringComparison.OrdinalIgnoreCase);
                 if (_nodeNetSoc != null)
                 {
                     var slotFeaturePath = string.IsNullOrWhiteSpace(_nodeNetSoc.DeviceId)
@@ -265,8 +266,8 @@ namespace BigSisterNodeNet.UI.Models.Instruments
                     }
                 }
                 PlcStatusMessage = string.IsNullOrWhiteSpace(loadStatus)
-                    ? $"Upload terminé sur le slot {SelectedPlcSlot}."
-                    : $"Upload terminé sur le slot {SelectedPlcSlot}. loadStatus={loadStatus}.";
+                    ? $"Upload terminé sur le slot {SelectedPlcSlot}. {(rebootPersistent ? "Persisté pour reboot." : "Chargé en runtime uniquement.")}"
+                    : $"Upload terminé sur le slot {SelectedPlcSlot}. loadStatus={loadStatus}. {(rebootPersistent ? "Persisté pour reboot." : "Chargé en runtime uniquement.")}";
             }
             catch (Exception ex)
             {

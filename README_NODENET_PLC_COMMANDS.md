@@ -22,6 +22,12 @@ Supported commands:
 - `plcUploadAbortReq`
 - `updateProperty` for writable local properties and writable Modbus coil points
 
+PLC upload persistence rules:
+
+- `persistToFlash = true` is supported only for slot `0`
+- uploads to other slots use volatile staging and are loaded into runtime only
+- volatile uploads must use `autoLoad = true`
+
 The point identity model is hierarchical:
 
 - `deviceId`
@@ -121,6 +127,11 @@ Reads back the original `objectFileV1` payload currently retained for one slot.
 This command returns the per-slot source artifact snapshot kept in SDRAM after a
 successful load. Symbol names, `PARAM`, and `VAR` declarations are preserved and
 can be reconstructed by the desktop disassembler.
+
+Persistence note:
+
+- slot `0` can retain a reboot-persistent PLC package in flash
+- other slots retain their source snapshot only while the current runtime stays loaded
 
 ### Request
 

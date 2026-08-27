@@ -66,6 +66,12 @@ extern char _sdram_end;
 #define SDRAM_APP_BASE  SDRAM_BASE
 #define SDRAM_APP_SIZE  SDRAM_SIZE
 
+/* Fixed high-SDRAM windows reserved for PLC runtime support. */
+#define SDRAM_POINT_STATE_WINDOW_SIZE   (128UL * 1024UL)
+#define SDRAM_POINT_STATE_BASE          (SDRAM_BASE + SDRAM_SIZE - SDRAM_POINT_STATE_WINDOW_SIZE)
+#define SDRAM_PLC_UPLOAD_STAGING_SIZE   (128UL * 1024UL)
+#define SDRAM_PLC_UPLOAD_STAGING_BASE   (SDRAM_POINT_STATE_BASE - SDRAM_PLC_UPLOAD_STAGING_SIZE)
+
 /* SoC status register exported by top.sv (bit0=bus stall, bit1=SDRAM init done). */
 #define SOC_STATUS_ADDR            0x10000020UL
 #define SOC_STATUS_BUS_STALL_BIT   (1UL << 0)

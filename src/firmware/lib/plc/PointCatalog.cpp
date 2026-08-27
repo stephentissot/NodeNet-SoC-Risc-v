@@ -15,12 +15,15 @@ namespace {
 
 static constexpr uint32_t kPointCatalogHashOffset = 2166136261u;
 static constexpr uint32_t kPointCatalogHashPrime = 16777619u;
-static constexpr uint32_t kPointStateSdramBase = SDRAM_BASE + 0x00130000u;
+static constexpr uint32_t kPointStateSdramBase = SDRAM_POINT_STATE_BASE;
+static constexpr uintptr_t kPointStateSdramCapacity = static_cast<uintptr_t>(SDRAM_POINT_STATE_WINDOW_SIZE);
 static constexpr uintptr_t kPointStateSdramEnd =
     static_cast<uintptr_t>(kPointStateSdramBase) + sizeof(PointState) * PointCatalog::kMaxPoints;
 
 static_assert(kPointStateSdramEnd <= static_cast<uintptr_t>(SDRAM_BASE + SDRAM_SIZE),
               "Point state store exceeds SDRAM window");
+static_assert(sizeof(PointState) * PointCatalog::kMaxPoints <= kPointStateSdramCapacity,
+              "Point state store exceeds reserved SDRAM point-state window");
 
 static PointState* point_state_storage() {
     return reinterpret_cast<PointState*>(static_cast<uintptr_t>(kPointStateSdramBase));

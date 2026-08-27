@@ -28,6 +28,27 @@ Supported declarations:
 - `PARAM POINT_ID <symbol>`
 - `VAR <type> <name>`
 
+Reserved slot-runtime names that cannot be used in `VAR` declarations:
+
+- `loaded`
+- `state`
+- `runEnabled`
+- `status`
+- `cycleCounter`
+- `faultCode`
+- `faultInfo`
+- `bytecodeSize`
+- `source`
+- `programType`
+- `paramsSummary`
+- `inputChannel`
+- `outputChannel`
+- `runtimeMapOk`
+- `start`
+- `stop`
+- `reset`
+- `clearFault`
+
 Supported instructions:
 
 - `HALT`
@@ -117,6 +138,7 @@ var frame0 = uploader.BuildDataFrame(uploadId: 1, offset: 0, payloadSource: obje
 - The stable firmware-side upload flow should accept `objectFileV1` artifacts.
 - The canonical durable artifact is relocatable and linked by firmware at slot
     load time.
+- Only slot `0` is reboot-persistent in the current flash layout; other slots are runtime-only.
 - `PARAM POINT_ID` values are full point paths supplied through
     `PlcObjectFileOptions.PointBindings`.
 - The upload uses binary pages of up to `256` bytes.
