@@ -352,6 +352,13 @@ A slot shall only be started if:
 
 `plc_vm` shall support multiple PLC programs executing concurrently.
 
+Implementation note for the current firmware-first phase:
+
+- bare-metal firmware execution is only a validation scaffold for slot `0`
+- firmware should not be generalized into a full multi-slot scheduler unless that
+  work is directly needed for hardware bring-up
+- the multi-slot execution target remains the HDL `plc_vm` transition
+
 ### 4.2 Slot-Based Model
 
 V1 shall expose a slot-based execution model.
@@ -450,8 +457,24 @@ struct PlcProgramControlBlockV1 {
     uint32_t timer_count;
     uint32_t max_instructions_per_scan;
     uint32_t max_scan_time_us;
+    uint32_t params_base;
+    uint32_t params_size;
 };
 ```
+
+### 4.8 Program Parameters
+
+Program parameters are part of the loaded program instance for one slot.
+
+Rules:
+
+- parameters are written at load time for the currently selected program type
+- parameters belong to the slot instance of that program, not to the slot as a
+  persistent independent object
+- loading a different program into the slot shall replace the parameter block
+  and shall not preserve parameters from the previous program
+- stopping or faulting a slot does not by itself redefine parameters; a new load
+  operation does
 
 ## 5. PLC Bytecode V1
 
@@ -683,6 +706,49 @@ For each slot the CPU shall be able to inspect:
 - last fault info
 - optional recent trace data
 
+## 7.4 NodeNet Observability And Control Model
+
+Firmware-facing PLC control should converge toward normal point features rather
+than a long-lived set of dedicated service commands.
+
+Recommended NodeNet model:
+
+- one global feature `plc`
+- one feature per slot: `plc.slot0`, `plc.slot1`, ...
+
+The global `plc` feature should expose read-only points such as:
+
+- implemented slot count
+- active slot count
+- runtime store epoch
+- global fault summary
+
+Each `plc.slotN` feature should expose read-only points such as:
+
+- slot state
+- cycle counter
+- fault code
+- fault info
+- loaded program type
+- linked bytecode size
+- parameter summary
+
+Each `plc.slotN` feature may later expose writable or command-like points for:
+
+- start
+- stop
+- reset
+- clear fault
+- load request staging
+
+This point-based model is preferred because:
+
+- it aligns PLC control with the rest of the NodeNet catalog
+- PLC state becomes reusable by other PLC programs through the same runtime
+  point model
+- one slot may eventually supervise another slot through ordinary point reads
+  and writes
+
 ## 8. Acceptance Criteria
 
 The V1 architecture is acceptable when the following are true.
@@ -708,7 +774,8 @@ The V1 architecture is acceptable when the following are true.
 
 - at least one slot can execute a program reading an input and writing an output
 - float values can be read, written, compared, and used in basic arithmetic
-- multiple slots can run concurrently with deterministic scheduling
+- multiple slots can run concurrently with deterministic scheduling in the HDL
+  `plc_vm` phase
 
 ### Capacity
 
@@ -722,11 +789,13 @@ To reduce risk, the implementation should proceed in this order.
 1. Add a minimal two-master SDRAM arbitration path.
 2. Define and expose the PLC runtime ABI in firmware.
 3. Add one-slot `plc_vm` execution prototype using the final ABI.
-4. Add CPU-side link/load/start/stop flow.
-5. Extend to multiple slots with deterministic round-robin scheduling.
-6. Add float arithmetic support if not already in the first prototype.
-7. Raise validated slot count toward `16`.
-8. Only then evaluate practical scaling toward `64`.
+4. Add CPU-side link/load flow and slot metadata publication.
+5. Expose PLC global and per-slot state through NodeNet point features.
+6. Add HDL-side slot execution and lifecycle control.
+7. Extend HDL execution to multiple slots with deterministic round-robin scheduling.
+8. Add float arithmetic support if not already in the first HDL prototype.
+9. Raise validated slot count toward `16`.
+10. Only then evaluate practical scaling toward `64`.
 
 ## 10. Summary Of Key Decisions
 

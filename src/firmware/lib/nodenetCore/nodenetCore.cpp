@@ -23,6 +23,7 @@ constexpr uint32_t kPointCatalogFlashVersion = 1u;
 constexpr uint32_t kPointCatalogFlashBase = Flash::kParamBase;
 constexpr uint32_t kPointCatalogFlashSectors = 3u;
 constexpr uint32_t kPointCatalogFlashSize = kPointCatalogFlashSectors * Flash::kSectorSize;
+constexpr uint32_t kPlcBuiltinPublishPeriodMs = 250u;
 
 struct PointCatalogFlashHeader {
     uint32_t magic = 0u;
@@ -566,6 +567,8 @@ void NodeNetCore::begin()
     _plcCore.begin(&_pointCatalog, _modbus0, _logger);
 
     publishBuiltinPointStates();
+    publishBuiltinPlcPointStates();
+    _lastPlcBuiltinPointPublishMs = millis();
 
     _nodeNet->SetCallbacks(nodenet_broadcast_callback_trampoline,
                            nodenet_message_callback_trampoline);
@@ -585,6 +588,11 @@ void NodeNetCore::loop()
     processInputQueue();
     processOutputQueue();
     _plcCore.loop();
+    const uint32_t now_ms = millis();
+    if (static_cast<uint32_t>(now_ms - _lastPlcBuiltinPointPublishMs) >= kPlcBuiltinPublishPeriodMs) {
+        publishBuiltinPlcPointStates();
+        _lastPlcBuiltinPointPublishMs = now_ms;
+    }
     processOutputQueue();
 }
 
@@ -2221,6 +2229,148 @@ void NodeNetCore::registerBuiltinPointDefinitions()
         definition.ref.modbus.access = ModbusAccess::Read;
         (void)upsertPointDefinition(definition);
     }
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc", "slotCount");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Slot Count");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Uint16;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc", "activeSlotCount");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Active Slot Count");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Uint16;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc", "runtimeStoreEpoch");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Runtime Store Epoch");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Uint32;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc", "runtimePublishedCount");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Runtime Published Count");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Uint16;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc.slot0", "loaded");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Slot0 Loaded");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Bool;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc.slot0", "state");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Slot0 State");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::String;
+    definition.string_capacity = 16u;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc.slot0", "status");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Slot0 Status");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Uint32;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc.slot0", "cycleCounter");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Slot0 Cycle Counter");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Uint32;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc.slot0", "faultCode");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Slot0 Fault Code");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Uint32;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc.slot0", "bytecodeSize");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Slot0 Bytecode Size");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Uint32;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc.slot0", "source");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Slot0 Source");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::String;
+    definition.string_capacity = 16u;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc.slot0", "inputChannel");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Slot0 Input Channel");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Uint16;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc.slot0", "outputChannel");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Slot0 Output Channel");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Uint16;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
+
+    definition = {};
+    make_point_identity(definition.id, deviceId, "plc.slot0", "runtimeMapOk");
+    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Slot0 Runtime Map OK");
+    definition.backend = PointBackend::Local;
+    definition.direction = PointDirection::Input;
+    definition.value_type = PointValueType::Bool;
+    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
+    definition.polling.timeout_ms = 0u;
+    (void)upsertPointDefinition(definition);
 }
 
 void NodeNetCore::publishBuiltinPointStates()
@@ -2311,4 +2461,182 @@ void NodeNetCore::publishBuiltinPointStates()
         state.last_update_ms = millis();
         (void)updatePointState(id, state);
     }
+}
+
+void NodeNetCore::publishBuiltinPlcPointStates()
+{
+    PointIdentity id = {};
+    PointState state = {};
+    const uint32_t now_ms = millis();
+
+    uint16_t active_slot_count = 0u;
+    for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
+        const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+            static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+        if (plc_control_block_loaded(*control_block, slot_id)) {
+            ++active_slot_count;
+        }
+    }
+
+    uint32_t runtime_store_epoch = 0u;
+    uint16_t runtime_published_count = 0u;
+    if (_plcRuntimePublisher != nullptr) {
+        const PlcRuntimeHeaderV1 header = _plcRuntimePublisher->headerSnapshot();
+        runtime_store_epoch = header.store_epoch;
+        runtime_published_count = _plcRuntimePublisher->publishedCount();
+    }
+
+    make_point_identity(id, deviceId, "plc", "slotCount");
+    state = {};
+    state.value.u16 = kPlcSlotCountV1;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc", "activeSlotCount");
+    state = {};
+    state.value.u16 = active_slot_count;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc", "runtimeStoreEpoch");
+    state = {};
+    state.value.u32 = runtime_store_epoch;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc", "runtimePublishedCount");
+    state = {};
+    state.value.u16 = runtime_published_count;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    const uint16_t slot_id = 0u;
+    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+    const bool loaded = plc_control_block_loaded(*control_block, slot_id);
+    const bool has_slot_diag = _plcSlotRuntimeDiagnostics.valid && _plcSlotRuntimeDiagnostics.slot_id == slot_id;
+
+    PlcMirrorProgramParamsV1 mirror_params = {};
+    const bool has_slot_params = PlcSlotLoaderV1::readMirrorProgramParams(slot_id, mirror_params);
+    uint8_t input_channel = has_slot_params
+                                ? static_cast<uint8_t>(mirror_params.input_channel)
+                                : (has_slot_diag ? _plcSlotRuntimeDiagnostics.input_channel
+                                                 : 0u);
+    uint8_t output_channel = has_slot_params
+                                 ? static_cast<uint8_t>(mirror_params.output_channel)
+                                 : (has_slot_diag ? _plcSlotRuntimeDiagnostics.output_channel
+                                                  : 0u);
+    uint16_t input_runtime_index = has_slot_params
+                                       ? mirror_params.input_runtime_index
+                                       : (has_slot_diag ? _plcSlotRuntimeDiagnostics.input_runtime_index
+                                                        : 0xFFFFu);
+    uint16_t output_runtime_index = has_slot_params
+                                        ? mirror_params.output_runtime_index
+                                        : (has_slot_diag ? _plcSlotRuntimeDiagnostics.output_runtime_index
+                                                         : 0xFFFFu);
+    bool runtime_map_ok = input_runtime_index != 0xFFFFu && output_runtime_index != 0xFFFFu;
+    if (!runtime_map_ok) {
+        runtime_map_ok = resolve_waveshare_channel_runtime_indices(_pointCatalog,
+                                                                   _plcRuntimePublisher,
+                                                                   deviceId,
+                                                                   input_channel,
+                                                                   output_channel,
+                                                                   input_runtime_index,
+                                                                   output_runtime_index);
+    }
+
+    make_point_identity(id, deviceId, "plc.slot0", "loaded");
+    state = {};
+    state.value.b = loaded;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc.slot0", "state");
+    state = {};
+    copy_text(state.string_value,
+              sizeof(state.string_value),
+              plc_slot_state_name(*control_block, slot_id));
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc.slot0", "status");
+    state = {};
+    state.value.u32 = loaded ? control_block->status : 0u;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc.slot0", "cycleCounter");
+    state = {};
+    state.value.u32 = loaded ? control_block->cycle_counter : 0u;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc.slot0", "faultCode");
+    state = {};
+    state.value.u32 = loaded ? control_block->fault_code : 0u;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc.slot0", "bytecodeSize");
+    state = {};
+    state.value.u32 = loaded ? control_block->bytecode_size : 0u;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc.slot0", "source");
+    state = {};
+    copy_text(state.string_value,
+              sizeof(state.string_value),
+              plc_slot_source_name(slot_id,
+                                   _plcSlotRuntimeDiagnostics.valid,
+                                   _plcSlotRuntimeDiagnostics.slot_id,
+                                   _plcSlotRuntimeDiagnostics.source));
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc.slot0", "inputChannel");
+    state = {};
+    state.value.u16 = input_channel;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc.slot0", "outputChannel");
+    state = {};
+    state.value.u16 = output_channel;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
+
+    make_point_identity(id, deviceId, "plc.slot0", "runtimeMapOk");
+    state = {};
+    state.value.b = runtime_map_ok;
+    state.quality = PointQuality::Good;
+    state.last_update_ms = now_ms;
+    state.last_good_update_ms = now_ms;
+    (void)updatePointState(id, state);
 }

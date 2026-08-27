@@ -144,6 +144,7 @@ class NodeNetCore
         PointCatalog _pointCatalog;
         bool _pointCatalogAutosaveEnabled = true;
         bool _pointCatalogDirty = false;
+        uint32_t _lastPlcBuiltinPointPublishMs = 0u;
         MessageQueue<kInputQueueCapacity> _inputQueue;
         MessageQueue<kOutputQueueCapacity> _outputQueue;
         volatile bool _inputQueueOverflow = false;
@@ -230,5 +231,6 @@ class NodeNetCore
         void publishNodePointStates(JsonDocument& doc);
         void registerBuiltinPointDefinitions();
         void publishBuiltinPointStates();
+        void publishBuiltinPlcPointStates();
 
 };
