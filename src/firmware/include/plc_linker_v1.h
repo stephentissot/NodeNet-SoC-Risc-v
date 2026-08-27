@@ -10,6 +10,11 @@
 static constexpr uint32_t kPlcObjectFileMagicV1 = 0x314A424Fu;
 static constexpr uint16_t kPlcObjectFileVersionV1 = 1u;
 
+enum PlcObjectSymbolKindV1 : uint8_t {
+    kPlcSymbolConstPointId = 0u,
+    kPlcSymbolParamPointId = 1u,
+};
+
 enum PlcObjectRelocationKindV1 : uint8_t {
     kPlcRelocationPointIndexU16Le = 0u,
     kPlcRelocationPointIndexU32Le = 1u,
@@ -42,17 +47,25 @@ enum PlcObjectParseStatusV1 : uint8_t {
 struct PlcObjectFileHeaderV1 {
     uint32_t magic;
     uint16_t version;
-    uint16_t flags;
+    uint16_t abi_version;
+    uint32_t flags;
+    uint32_t total_size;
     uint32_t code_size;
     uint32_t entry_offset;
     uint16_t symbol_count;
     uint16_t relocation_count;
     uint32_t symbol_table_offset;
     uint32_t relocation_table_offset;
-    uint32_t reserved0;
+    uint32_t max_instructions_per_scan;
+    uint32_t max_scan_time_us;
+    uint32_t runtime_header_addr;
+    uint32_t object_checksum;
 };
 
 struct PlcObjectSymbolRecordV1 {
+    char symbol_name[16];
+    uint8_t symbol_kind;
+    uint8_t reserved1;
     PointIdentity point_id;
     uint8_t expected_type;
     uint8_t access;
@@ -67,7 +80,8 @@ struct PlcObjectRelocationRecordV1 {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(PlcObjectSymbolRecordV1) == 84u, "Unexpected symbol record size");
+static_assert(sizeof(PlcObjectFileHeaderV1) == 52u, "Unexpected object file header size");
+static_assert(sizeof(PlcObjectSymbolRecordV1) == 102u, "Unexpected symbol record size");
 static_assert(sizeof(PlcObjectRelocationRecordV1) == 8u, "Unexpected relocation record size");
 
 struct PlcObjectImageV1 {
@@ -92,6 +106,7 @@ struct PlcObjectLinkResultV1 {
 
 struct PlcObjectParseResultV1 {
     PlcObjectParseStatusV1 status;
+    PlcObjectFileHeaderV1 header;
     PlcObjectImageV1 object_image;
 };
 
@@ -120,31 +135,51 @@ public:
             result.status = kPlcObjectParseBadVersion;
             return result;
         }
+        if (header->abi_version != kPlcRuntimeAbiV1Version) {
+            result.status = kPlcObjectParseBadVersion;
+            return result;
+        }
+        if (header->total_size < sizeof(PlcObjectFileHeaderV1) ||
+            header->total_size > object_file_size) {
+            result.status = kPlcObjectParseHeaderOutOfRange;
+            return result;
+        }
         if (header->entry_offset > header->code_size) {
             result.status = kPlcObjectParseEntryOffsetOutOfRange;
             return result;
         }
 
         const size_t code_offset = sizeof(PlcObjectFileHeaderV1);
-        if ((code_offset + static_cast<size_t>(header->code_size)) > object_file_size) {
+        if ((code_offset + static_cast<size_t>(header->code_size)) > header->total_size) {
             result.status = kPlcObjectParseCodeOutOfRange;
             return result;
         }
 
         const size_t symbol_table_end = static_cast<size_t>(header->symbol_table_offset) +
                                         static_cast<size_t>(header->symbol_count) * sizeof(PlcObjectSymbolRecordV1);
-        if (symbol_table_end > object_file_size) {
+        if (symbol_table_end > header->total_size) {
             result.status = kPlcObjectParseSymbolTableOutOfRange;
             return result;
         }
 
         const size_t relocation_table_end = static_cast<size_t>(header->relocation_table_offset) +
                                             static_cast<size_t>(header->relocation_count) * sizeof(PlcObjectRelocationRecordV1);
-        if (relocation_table_end > object_file_size) {
+        if (relocation_table_end > header->total_size) {
             result.status = kPlcObjectParseRelocationTableOutOfRange;
             return result;
         }
+        if (header->runtime_header_addr != kPlcRuntimeHeaderAddr) {
+            result.status = kPlcObjectParseBadVersion;
+            return result;
+        }
+        const uint32_t payload_checksum = checksum32(object_file_bytes + code_offset,
+                                                     static_cast<size_t>(header->total_size) - code_offset);
+        if (payload_checksum != header->object_checksum) {
+            result.status = kPlcObjectParseBadMagic;
+            return result;
+        }
 
+        result.header = *header;
         result.object_image.code_bytes = object_file_bytes + code_offset;
         result.object_image.code_size = header->code_size;
         result.object_image.entry_offset = header->entry_offset;
@@ -240,6 +275,20 @@ public:
     }
 
 private:
+    static uint32_t checksum32(const uint8_t* data, size_t len)
+    {
+        uint32_t value = 2166136261u;
+        if (data == nullptr) {
+            return value;
+        }
+
+        for (size_t index = 0u; index < len; ++index) {
+            value ^= data[index];
+            value *= 16777619u;
+        }
+        return value;
+    }
+
     static size_t relocationPatchSize(uint8_t relocation_kind)
     {
         switch (relocation_kind) {

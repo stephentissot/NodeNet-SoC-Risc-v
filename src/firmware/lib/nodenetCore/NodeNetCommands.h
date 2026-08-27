@@ -77,6 +77,7 @@ public:
     PLC_UPLOAD_COMMIT_RES,
     PLC_UPLOAD_ABORT_REQ,
     PLC_UPLOAD_ABORT_RES,
+    PLC_UPLOAD_DATA_REQ,
     PLC_UPLOAD_DATA_RES,
   };
 
@@ -131,6 +132,7 @@ public:
     if(strcmp(cmd, "plcUploadCommitRes") == 0)   return PLC_UPLOAD_COMMIT_RES;
     if(strcmp(cmd, "plcUploadAbortReq") == 0)   return PLC_UPLOAD_ABORT_REQ;
     if(strcmp(cmd, "plcUploadAbortRes") == 0)   return PLC_UPLOAD_ABORT_RES;
+    if(strcmp(cmd, "plcUploadDataReq") == 0)   return PLC_UPLOAD_DATA_REQ;
     if(strcmp(cmd, "plcUploadDataRes") == 0)   return PLC_UPLOAD_DATA_RES;
 
     return CMD_UNKNOWN;
@@ -187,6 +189,7 @@ public:
       case PLC_UPLOAD_COMMIT_RES: return "plcUploadCommitRes";
       case PLC_UPLOAD_ABORT_REQ: return "plcUploadAbortReq";
       case PLC_UPLOAD_ABORT_RES: return "plcUploadAbortRes";
+      case PLC_UPLOAD_DATA_REQ: return "plcUploadDataReq";
       case PLC_UPLOAD_DATA_RES: return "plcUploadDataRes";
       default:         return "Unknown";
     }

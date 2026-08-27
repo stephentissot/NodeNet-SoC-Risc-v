@@ -1,0 +1,119 @@
+﻿<UserControl x:Class="BigSisterNodeNet.UI.Views.Instruments.FilterNodeView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:BigSisterNodeNet.UI.Views.Instruments"
+             mc:Ignorable="d" 
+             d:DesignHeight="450" d:DesignWidth="800">
+
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <Grid Grid.Row="0"
+      Margin="0,0,0,10">
+
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="120"/>
+                <ColumnDefinition Width="200"/>
+                <ColumnDefinition Width="50"/>
+                <ColumnDefinition Width="200"/>
+                <ColumnDefinition Width="200"/>
+            </Grid.ColumnDefinitions>
+
+            <TextBlock Grid.Column="0" Margin="10"
+               Text="Filter Type:"
+               Foreground="{DynamicResource MaterialDesign.Brush.Foreground}"
+               VerticalAlignment="Center" HorizontalAlignment="Right"/>
+
+            <ComboBox Grid.Column="1" ItemsSource="{Binding FilterWheelTypes}" SelectedItem="{Binding FilterType}" Width="200" Foreground="White">
+            </ComboBox>
+
+            <TextBlock Grid.Column="3" Margin="10" Text="Home offset: " Foreground="{DynamicResource MaterialDesign.Brush.Foreground}"
+               VerticalAlignment="Center" HorizontalAlignment="Right"/>
+
+            <TextBox Grid.Column="4"
+                 
+                 Text="{Binding Node.HomeOffset, UpdateSourceTrigger=LostFocus}" Foreground="{DynamicResource MaterialDesign.Brush.Foreground}"/>
+
+        </Grid>
+
+        <DataGrid Grid.Row="1" ItemsSource="{Binding Slots}"
+              AutoGenerateColumns="False"
+              CanUserAddRows="False"
+              CanUserDeleteRows="False"
+              HeadersVisibility="Column"
+              IsReadOnly="False"
+              GridLinesVisibility="Horizontal"
+              SelectionMode="Single"
+              Margin="0"
+              RowHeaderWidth="0">
+            
+            <DataGrid.RowStyle>
+                <Style TargetType="DataGridRow" BasedOn="{StaticResource MaterialDesignDataGridRow}">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                            <Setter Property="Background" Value="#304060"/>
+                            <Setter Property="Foreground" Value="White" />
+                            <Setter Property="FontWeight" Value="Bold" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </DataGrid.RowStyle>
+            
+            <DataGrid.Columns>
+
+                <DataGridTextColumn Header="Slot"
+                                Binding="{Binding SlotNumber}"
+                                IsReadOnly="True"
+                                Width="100">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="VerticalAlignment" Value="Center"/>
+                            <Setter Property="HorizontalAlignment" Value="Center"/>
+                            <Setter Property="TextAlignment" Value="Center"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+
+                <DataGridTextColumn Header="Filter Name"
+                                Binding="{Binding Name, UpdateSourceTrigger=LostFocus}"
+                                Width="200"/>
+
+                <DataGridTextColumn Header="Offset"
+                                Binding="{Binding Offset, UpdateSourceTrigger=LostFocus}"
+                                Width="100">
+                </DataGridTextColumn>
+                
+                <DataGridTextColumn Header="Focus Offset"
+                                Binding="{Binding FocuserOffset, UpdateSourceTrigger=LostFocus}"
+                                Width="100">
+                </DataGridTextColumn>
+                <DataGridTemplateColumn Header="" Width="150">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Button Command="{Binding GoCommand}" IsEnabled="{Binding IsCurrent, Converter={StaticResource InverseBooleanConverter}}">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource MaterialDesignFlatDarkBgButton}">
+                                        <Setter Property="Content" Value="Go"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                                <Setter Property="Content" Value="✓"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                        </DataTemplate>
+                        
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+
+        </DataGrid>
+
+    </Grid>
+</UserControl>

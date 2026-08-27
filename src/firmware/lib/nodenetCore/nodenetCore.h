@@ -246,8 +246,15 @@ class NodeNetCore
         bool handlePlcUploadStatusRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePlcUploadCommitRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePlcUploadAbortRequest(const JsonDocument& request, JsonDocument& response);
+        bool handlePlcUploadDataRequest(const JsonDocument& request, JsonDocument& response);
         bool handleLocalPlcPointWrite(const PointDefinition& definition, JsonVariantConst value);
         bool handlePlcUploadDataMessage(const QueuedMessage& msg);
+        bool handlePlcUploadDataChunk(uint32_t upload_id,
+                          uint32_t offset,
+                          const uint8_t* payload,
+                          size_t payload_size,
+                          uint16_t payload_checksum,
+                          JsonDocument& response);
         void resetPlcUploadSession();
         void fillPlcUploadStatus(JsonDocument& response, bool include_header) const;
 

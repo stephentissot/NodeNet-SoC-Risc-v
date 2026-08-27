@@ -43,6 +43,7 @@ public:
     bool saveToJson(char* out, size_t out_size) const;
 
     static void serializeDefinition(JsonObject obj, const PointDefinition& definition);
+    static void serializePersistedDefinition(JsonArray entry, const PointDefinition& definition);
     static bool deserializeDefinition(PointDefinition& definition, JsonObjectConst obj);
 
 private:

@@ -1,0 +1,44 @@
+﻿<Window
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"        
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:d="http://schemas.microsoft.com/expression/blend/2008" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+        mc:Ignorable="d" x:Class="BigSisterNodeNet.UI.MainWindow"         
+
+        Style="{StaticResource MaterialDesignWindow}"
+        TextElement.Foreground="{DynamicResource MaterialDesignBody}"
+        TextElement.FontWeight="Regular"
+        Title="BigSister NodeNet"
+        Height="600" Width="1200">
+
+    <Grid Margin="5">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="35"/>
+        </Grid.RowDefinitions>
+        <TabControl Grid.Row="0" ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}" Style="{StaticResource MaterialDesignTabControl}">
+            <TabControl.ItemContainerStyle>
+                <Style TargetType="TabItem" BasedOn="{StaticResource MaterialDesignTabItem}">
+                    <Setter Property="IsEnabled" Value="{Binding Content.IsEnabled}"/>
+                    <Setter Property="Background" Value="{DynamicResource MaterialDesign.Brush.Primary}" />
+                    <Setter Property="Foreground" Value="Black" />
+                    <Setter Property="Padding" Value="10.5"/>
+                    <Setter Property="FontWeight" Value="Medium" />
+                    <Setter Property="Margin" Value="2"/>
+                    <Setter Property="Visibility" Value="{Binding IsVisible, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                </Style>
+            </TabControl.ItemContainerStyle>
+            <TabControl.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding Header}" />
+                </DataTemplate>
+            </TabControl.ItemTemplate>
+            <TabControl.ContentTemplate>
+                <DataTemplate>
+                    <ContentControl Content="{Binding Content}" />
+                </DataTemplate>
+            </TabControl.ContentTemplate>
+        </TabControl>
+        <Button Grid.Row="1" x:Name="buttonOk" Width="100" Height="30" Margin="0,0,0,0" Content="Ok" Command="{Binding OkCommand}"/>
+        <Image HorizontalAlignment="Left" Height="33" VerticalAlignment="Top" Width="44" Source="/Views/LogoHD.png" Margin="0,5,0,0" Grid.Row="1"/>
+    </Grid>
+</Window>

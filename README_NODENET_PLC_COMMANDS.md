@@ -478,6 +478,14 @@ Loads the built-in boolean mirror PLC program into a chosen slot.
 
 This is a firmware-side service command intended for runtime validation before the full raw PLC upload flow exists.
 
+Documentation note:
+
+- this helper is not the canonical long-term deployment format
+- the stable PLC deployment contract uses a relocatable PLC object file stored
+  in flash and linked by firmware when the slot is loaded
+- `plcLoadReq` remains useful as a convenience command for the built-in mirror
+  program, but generic host-side deployment should target the object-file flow
+
 ### Request
 
 ```json
@@ -542,14 +550,22 @@ Possible errors:
 
 Starts a PLC program upload session over NodeNet.
 
-V1 scope:
+Target V1 scope:
 
 - one upload session at a time
-- artifact type must be `linkedPackageV1`
+- artifact type must be `objectFileV1`
 - upload staging uses the existing PLC package flash slot
 - data packets are binary, not JSON
 - `persistToFlash` is currently required
 - `autoLoad` defaults to `true`
+
+Current implementation note:
+
+- the firmware upload path now accepts only `objectFileV1`
+- point symbols are linked by firmware at commit/load time against the current
+  runtime catalog
+- `PARAM POINT_ID` declarations are currently bound to full point paths on the
+  host side before upload
 
 ### Request
 
@@ -559,7 +575,7 @@ V1 scope:
   "from": 255,
   "to": 4,
   "slotId": 0,
-  "artifactType": "linkedPackageV1",
+  "artifactType": "objectFileV1",
   "totalSize": 1536,
   "payloadCrc32": 305419896,
   "persistToFlash": true,
@@ -578,7 +594,7 @@ V1 scope:
   "acceptedChunkSize": 256,
   "active": true,
   "slotId": 0,
-  "artifactType": "linkedPackageV1",
+  "artifactType": "objectFileV1",
   "persistToFlash": true,
   "autoLoad": true,
   "totalSize": 1536,
@@ -598,9 +614,69 @@ Possible errors:
 - `unsupportedArtifactType`
 - `stagingEraseFailed`
 
+## plcUploadDataReq
+
+After `plcUploadBeginReq`, chunk payloads can be sent with a minimal JSON command.
+
+This path is the recommended one when the desktop talks to the NodeNet master over a serial bridge, because the master relays normal NodeNet JSON messages to the target node.
+
+### Request
+
+```json
+{
+  "cmd": "plcUploadDataReq",
+  "from": 255,
+  "to": 4,
+  "uploadId": 1,
+  "offset": 0,
+  "dataHex": "4F424A3101000000..."
+}
+```
+
+Fields:
+
+- `uploadId`: upload session identifier returned by `plcUploadBeginRes`
+- `offset`: byte offset in the staged object file
+- `dataHex`: uppercase or lowercase hex payload for one chunk
+
+V1 constraints:
+
+- decoded payload size must be `1..256`
+- `offset` must match the next expected offset exactly
+- `offset` must be aligned on 256 bytes
+- chunks are written as one flash page each
+- the last chunk may be shorter than 256 bytes
+
+### Response
+
+Each accepted or rejected chunk generates a JSON acknowledgement.
+
+```json
+{
+  "cmd": "plcUploadDataRes",
+  "to": 255,
+  "ok": true,
+  "uploadId": 1,
+  "offset": 0,
+  "bytesReceived": 256,
+  "expectedOffset": 256
+}
+```
+
+Possible chunk errors:
+
+- `noActiveUpload`
+- `uploadIdMismatch`
+- `offsetMismatch`
+- `invalidChunkEncoding`
+- `invalidChunkSize`
+- `invalidOffset`
+- `chunkChecksumMismatch`
+- `flashWriteFailed`
+
 ## PLC upload binary data packets
 
-After `plcUploadBeginReq`, packet payloads must be sent as raw NodeNet binary frames instead of JSON.
+As an alternative compatibility path, chunk payloads may still be sent as raw NodeNet binary frames instead of JSON.
 
 Each frame contains a 16-byte header followed by one payload chunk.
 
@@ -684,7 +760,7 @@ Returns the current upload-session state.
   "active": true,
   "slotId": 0,
   "uploadId": 1,
-  "artifactType": "linkedPackageV1",
+  "artifactType": "objectFileV1",
   "persistToFlash": true,
   "autoLoad": true,
   "totalSize": 1536,
@@ -696,7 +772,17 @@ Returns the current upload-session state.
 
 ## plcUploadCommitReq
 
-Finalizes the upload, verifies the whole payload checksum, and loads the package into the target slot when `autoLoad` is enabled.
+Finalizes the upload, verifies the whole payload checksum, resolves point
+symbols against the current runtime catalog, and loads the linked slot image
+when `autoLoad` is enabled.
+
+On the stable object-file path, commit/load performs the following steps:
+
+1. parse the uploaded PLC object file
+2. read every stored point symbol path from the object file
+3. resolve every `CONST POINT_ID` and `PARAM POINT_ID` symbol
+4. patch relocations to runtime indices
+5. write the linked image into SDRAM and arm the target slot
 
 ### Request
 
@@ -732,6 +818,8 @@ Possible errors:
 - `uploadIdMismatch`
 - `uploadIncomplete`
 - `payloadChecksumMismatch`
+- `parseFailed`
+- `pointResolveFailed`
 - `loadFailed`
 
 When `loadFailed` is returned, `loadStatus` contains the `PlcSlotLoadStatusV1` numeric value.

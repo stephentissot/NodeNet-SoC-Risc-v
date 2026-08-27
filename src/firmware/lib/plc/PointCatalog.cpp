@@ -485,6 +485,10 @@ void PointCatalog::serializeDefinition(JsonObject obj, const PointDefinition& de
     serialize_backend_ref(obj, definition);
 }
 
+void PointCatalog::serializePersistedDefinition(JsonArray entry, const PointDefinition& definition) {
+    serialize_persisted_definition(entry, definition);
+}
+
 bool PointCatalog::deserializeDefinition(PointDefinition& definition, JsonObjectConst obj) {
     if (obj.isNull()) {
         return false;

@@ -101,6 +101,130 @@ static bool starts_with(const char* text, const char* prefix)
     return std::strncmp(text, prefix, prefix_len) == 0;
 }
 
+static int hex_nibble_value(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'A' && c <= 'F') {
+        return 10 + (c - 'A');
+    }
+    if (c >= 'a' && c <= 'f') {
+        return 10 + (c - 'a');
+    }
+    return -1;
+}
+
+static int base64_value(char c) {
+    if (c >= 'A' && c <= 'Z') {
+        return c - 'A';
+    }
+    if (c >= 'a' && c <= 'z') {
+        return 26 + (c - 'a');
+    }
+    if (c >= '0' && c <= '9') {
+        return 52 + (c - '0');
+    }
+    if (c == '+') {
+        return 62;
+    }
+    if (c == '/') {
+        return 63;
+    }
+    if (c == '=') {
+        return -2;
+    }
+    return -1;
+}
+
+static bool decode_hex_bytes(const char* text, uint8_t* out, size_t out_capacity, size_t& out_size) {
+    out_size = 0u;
+    if (text == nullptr || out == nullptr) {
+        return false;
+    }
+
+    const size_t text_len = std::strlen(text);
+    if ((text_len & 1u) != 0u) {
+        return false;
+    }
+
+    const size_t byte_count = text_len / 2u;
+    if (byte_count == 0u || byte_count > out_capacity) {
+        return false;
+    }
+
+    for (size_t index = 0u; index < byte_count; ++index) {
+        const int hi = hex_nibble_value(text[index * 2u]);
+        const int lo = hex_nibble_value(text[(index * 2u) + 1u]);
+        if (hi < 0 || lo < 0) {
+            return false;
+        }
+        out[index] = static_cast<uint8_t>((hi << 4) | lo);
+    }
+
+    out_size = byte_count;
+    return true;
+}
+
+static bool decode_base64_bytes(const char* text, uint8_t* out, size_t out_capacity, size_t& out_size) {
+    out_size = 0u;
+    if (text == nullptr || out == nullptr) {
+        return false;
+    }
+
+    const size_t text_len = std::strlen(text);
+    if (text_len == 0u || (text_len % 4u) != 0u) {
+        return false;
+    }
+
+    size_t write_index = 0u;
+    for (size_t index = 0u; index < text_len; index += 4u) {
+        const int a = base64_value(text[index + 0u]);
+        const int b = base64_value(text[index + 1u]);
+        const int c = base64_value(text[index + 2u]);
+        const int d = base64_value(text[index + 3u]);
+        if (a < 0 || b < 0 || c == -1 || d == -1) {
+            return false;
+        }
+
+        const uint32_t quartet = (static_cast<uint32_t>(a) << 18) |
+                                 (static_cast<uint32_t>(b) << 12) |
+                                 (static_cast<uint32_t>(c < 0 ? 0 : c) << 6) |
+                                 static_cast<uint32_t>(d < 0 ? 0 : d);
+
+        if (write_index >= out_capacity) {
+            return false;
+        }
+        out[write_index++] = static_cast<uint8_t>((quartet >> 16) & 0xFFu);
+
+        if (c == -2) {
+            if (d != -2 || (index + 4u) != text_len) {
+                return false;
+            }
+            break;
+        }
+
+        if (write_index >= out_capacity) {
+            return false;
+        }
+        out[write_index++] = static_cast<uint8_t>((quartet >> 8) & 0xFFu);
+
+        if (d == -2) {
+            if ((index + 4u) != text_len) {
+                return false;
+            }
+            break;
+        }
+
+        if (write_index >= out_capacity) {
+            return false;
+        }
+        out[write_index++] = static_cast<uint8_t>(quartet & 0xFFu);
+    }
+
+    out_size = write_index;
+    return write_index != 0u;
+}
+
 static void build_point_path(const PointDefinition& definition, char* out, size_t out_size) {
     if (out == nullptr || out_size == 0u) {
         return;
@@ -431,12 +555,16 @@ static void build_waveshare_mirror_symbols(const char* device_id,
     std::memset(symbols, 0, sizeof(PlcObjectSymbolRecordV1) * 2u);
     std::memset(relocations, 0, sizeof(PlcObjectRelocationRecordV1) * 2u);
 
+    copy_text(symbols[0].symbol_name, sizeof(symbols[0].symbol_name), "input");
+    symbols[0].symbol_kind = kPlcSymbolConstPointId;
     copy_text(symbols[0].point_id.device_id, sizeof(symbols[0].point_id.device_id), device_id);
     copy_text(symbols[0].point_id.feature, sizeof(symbols[0].point_id.feature), "modbus0.waveshare8ch");
     copy_text(symbols[0].point_id.point_id, sizeof(symbols[0].point_id.point_id), input_point_id);
     symbols[0].expected_type = static_cast<uint8_t>(PointValueType::Bool);
     symbols[0].access = static_cast<uint8_t>(kPlcRuntimeLinkRead);
 
+    copy_text(symbols[1].symbol_name, sizeof(symbols[1].symbol_name), "output");
+    symbols[1].symbol_kind = kPlcSymbolConstPointId;
     copy_text(symbols[1].point_id.device_id, sizeof(symbols[1].point_id.device_id), device_id);
     copy_text(symbols[1].point_id.feature, sizeof(symbols[1].point_id.feature), "modbus0.waveshare8ch");
     copy_text(symbols[1].point_id.point_id, sizeof(symbols[1].point_id.point_id), output_point_id);
@@ -496,17 +624,14 @@ static PlcSlotLoadResultV1 load_mirror_program_into_slot(const PointCatalog& cat
                                                      5000u);
 }
 
-static PlcSlotLoadStatusV1 build_mirror_program_package(const PointCatalog& catalog,
-                                                        const PlcRuntimePublisherV1& publisher,
-                                                        const char* device_id,
-                                                        uint8_t input_channel,
-                                                        uint8_t output_channel,
-                                                        const PlcMirrorProgramParamsV1& params,
-                                                        uint8_t* package_out,
-                                                        size_t package_capacity,
-                                                        size_t& package_size_out) {
-    package_size_out = 0u;
-    if (device_id == nullptr || package_out == nullptr ||
+static PlcSlotLoadStatusV1 build_mirror_program_object_file(const char* device_id,
+                                                            uint8_t input_channel,
+                                                            uint8_t output_channel,
+                                                            uint8_t* object_out,
+                                                            size_t object_capacity,
+                                                            size_t& object_size_out) {
+    object_size_out = 0u;
+    if (device_id == nullptr || object_out == nullptr ||
         input_channel == 0u || input_channel > 8u ||
         output_channel == 0u || output_channel > 8u) {
         return kPlcSlotLoadInvalidArgument;
@@ -521,54 +646,43 @@ static PlcSlotLoadStatusV1 build_mirror_program_package(const PointCatalog& cata
         0x11u, 0x00u, 0x00u,
         0x00u,
     };
-    uint8_t linked_code[sizeof(object_code)] = {};
-
-    PlcObjectImageV1 object_image = {};
-    object_image.code_bytes = object_code;
-    object_image.code_size = static_cast<uint32_t>(sizeof(object_code));
-    object_image.entry_offset = 0u;
-    object_image.symbols = symbols;
-    object_image.symbol_count = 2u;
-    object_image.relocations = relocations;
-    object_image.relocation_count = 2u;
-
-    const PlcObjectLinkResultV1 link_result = PlcObjectLinkerV1::linkObjectImage(publisher,
-                                                                                  catalog,
-                                                                                  object_image,
-                                                                                  linked_code,
-                                                                                  sizeof(linked_code));
-    if (link_result.status != kPlcObjectLinkOk) {
-        return kPlcSlotLoadLinkFailed;
-    }
-
-    const size_t package_size = sizeof(PlcLinkedProgramPackageHeaderV1) + sizeof(linked_code) + sizeof(params);
-    if (package_size > package_capacity) {
+    const size_t symbol_offset = sizeof(PlcObjectFileHeaderV1) + sizeof(object_code);
+    const size_t relocation_offset = symbol_offset + sizeof(symbols);
+    const size_t object_size = relocation_offset + sizeof(relocations);
+    if (object_size > object_capacity) {
         return kPlcSlotLoadBytecodeTooLarge;
     }
 
-    PlcLinkedProgramPackageHeaderV1 package_header = {};
-    package_header.magic = kPlcLinkedProgramPackageMagicV1;
-    package_header.version = kPlcRuntimeAbiV1Version;
-    package_header.abi_version = kPlcRuntimeAbiV1Version;
-    package_header.code_size = static_cast<uint32_t>(sizeof(linked_code));
-    package_header.entry_offset = 0u;
-    package_header.symbol_count = 2u;
-    package_header.relocation_count = 2u;
-    package_header.max_instructions_per_scan = 16u;
-    package_header.max_scan_time_us = 5000u;
-    package_header.runtime_header_addr = kPlcRuntimeHeaderAddr;
-    package_header.store_epoch = publisher.storeEpoch();
-    package_header.linked_code_checksum = 2166136261u;
-    package_header.params_size = sizeof(params);
-    for (size_t i = 0u; i < sizeof(linked_code); ++i) {
-        package_header.linked_code_checksum ^= linked_code[i];
-        package_header.linked_code_checksum *= 16777619u;
-    }
+    PlcObjectFileHeaderV1 object_header = {};
+    object_header.magic = kPlcObjectFileMagicV1;
+    object_header.version = kPlcObjectFileVersionV1;
+    object_header.abi_version = kPlcRuntimeAbiV1Version;
+    object_header.total_size = static_cast<uint32_t>(object_size);
+    object_header.code_size = static_cast<uint32_t>(sizeof(object_code));
+    object_header.entry_offset = 0u;
+    object_header.symbol_count = 2u;
+    object_header.relocation_count = 2u;
+    object_header.symbol_table_offset = static_cast<uint32_t>(symbol_offset);
+    object_header.relocation_table_offset = static_cast<uint32_t>(relocation_offset);
+    object_header.max_instructions_per_scan = 16u;
+    object_header.max_scan_time_us = 5000u;
+    object_header.runtime_header_addr = kPlcRuntimeHeaderAddr;
+    object_header.object_checksum = 2166136261u;
+    object_header.object_checksum = checksum32_extend(object_header.object_checksum,
+                                                      object_code,
+                                                      sizeof(object_code));
+    object_header.object_checksum = checksum32_extend(object_header.object_checksum,
+                                                      reinterpret_cast<const uint8_t*>(symbols),
+                                                      sizeof(symbols));
+    object_header.object_checksum = checksum32_extend(object_header.object_checksum,
+                                                      reinterpret_cast<const uint8_t*>(relocations),
+                                                      sizeof(relocations));
 
-    std::memcpy(package_out, &package_header, sizeof(package_header));
-    std::memcpy(package_out + sizeof(package_header), linked_code, sizeof(linked_code));
-    std::memcpy(package_out + sizeof(package_header) + sizeof(linked_code), &params, sizeof(params));
-    package_size_out = package_size;
+    std::memcpy(object_out, &object_header, sizeof(object_header));
+    std::memcpy(object_out + sizeof(object_header), object_code, sizeof(object_code));
+    std::memcpy(object_out + symbol_offset, symbols, sizeof(symbols));
+    std::memcpy(object_out + relocation_offset, relocations, sizeof(relocations));
+    object_size_out = object_size;
     return kPlcSlotLoadOk;
 }
 
@@ -1067,6 +1181,9 @@ void NodeNetCore::processInputQueue()
                 break;
             case NodeNetCommands::Cmd::PLC_UPLOAD_ABORT_REQ:
                 queueResponse = handlePlcUploadAbortRequest(request, response);
+                break;
+            case NodeNetCommands::Cmd::PLC_UPLOAD_DATA_REQ:
+                queueResponse = handlePlcUploadDataRequest(request, response);
                 break;
             case NodeNetCommands::UPDATE_PROPERTY:{
                 if (!updateProperty(request)) {
@@ -2026,30 +2143,30 @@ bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument
                                                                                     input_runtime_index,
                                                                                     output_runtime_index,
                                                                                     _plcRuntimePublisher->storeEpoch());
-        uint8_t package_bytes[sizeof(PlcLinkedProgramPackageHeaderV1) + 7u + sizeof(PlcMirrorProgramParamsV1)] = {};
-        size_t package_size = 0u;
-        flash_status = build_mirror_program_package(_pointCatalog,
-                                                    *_plcRuntimePublisher,
-                                                    deviceId,
-                                                    input_channel,
-                                                    output_channel,
-                                                    package_params,
-                                                    package_bytes,
-                                                    sizeof(package_bytes),
-                                                    package_size);
+        (void)package_params;
+        uint8_t object_bytes[sizeof(PlcObjectFileHeaderV1) + 7u + (2u * sizeof(PlcObjectSymbolRecordV1)) +
+                             (2u * sizeof(PlcObjectRelocationRecordV1))] = {};
+        size_t object_size = 0u;
+        flash_status = build_mirror_program_object_file(deviceId,
+                                                        input_channel,
+                                                        output_channel,
+                                                        object_bytes,
+                                                        sizeof(object_bytes),
+                                                        object_size);
         if (flash_status == kPlcSlotLoadOk) {
-            const uint32_t erase_size = static_cast<uint32_t>(((package_size + Flash::kSectorSize - 1u) /
+            const uint32_t erase_size = static_cast<uint32_t>(((object_size + Flash::kSectorSize - 1u) /
                                                                Flash::kSectorSize) * Flash::kSectorSize);
             if (!flash_erase_range(_flash, Flash::kPlcPackageSlotBase, erase_size) ||
-                !flash_write_erased_bytes(_flash, Flash::kPlcPackageSlotBase, package_bytes, package_size)) {
+                !flash_write_erased_bytes(_flash, Flash::kPlcPackageSlotBase, object_bytes, object_size)) {
                 flash_status = kPlcSlotLoadFlashReadFailed;
             } else {
                 const PlcSlotLoadResultV1 flash_load_result =
-                    PlcSlotLoaderV1::loadLinkedProgramPackageFromFlash(*_plcRuntimePublisher,
-                                                                       *_flash,
-                                                                       slot_id,
-                                                                       Flash::kPlcPackageSlotBase,
-                                                                       Flash::kPlcPackageSlotSize);
+                    PlcSlotLoaderV1::loadObjectFileFromFlash(*_plcRuntimePublisher,
+                                                             _pointCatalog,
+                                                             slot_id,
+                                                             *_flash,
+                                                             Flash::kPlcPackageSlotBase,
+                                                             Flash::kPlcPackageSlotSize);
                 flash_status = flash_load_result.status;
                 if (flash_status == kPlcSlotLoadOk) {
                     source_name = "flash";
@@ -2123,7 +2240,7 @@ bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonD
     const uint32_t payload_crc32 = request["payloadCrc32"] | 0u;
     const bool persist_to_flash = request["persistToFlash"] | true;
     const bool auto_load = request["autoLoad"] | true;
-    const char* artifact_type = request["artifactType"] | "linkedPackageV1";
+    const char* artifact_type = request["artifactType"] | "objectFileV1";
 
     if (_flash == nullptr || _plcRuntimePublisher == nullptr) {
         response["ok"] = false;
@@ -2146,12 +2263,12 @@ bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonD
         response["error"] = "persistRequired";
         return true;
     }
-    if (total_size < sizeof(PlcLinkedProgramPackageHeaderV1) || total_size > kPlcUploadStagingSize) {
+    if (total_size < sizeof(PlcObjectFileHeaderV1) || total_size > kPlcUploadStagingSize) {
         response["ok"] = false;
         response["error"] = "sizeOutOfRange";
         return true;
     }
-    if (std::strcmp(artifact_type, "linkedPackageV1") != 0) {
+    if (std::strcmp(artifact_type, "objectFileV1") != 0) {
         response["ok"] = false;
         response["error"] = "unsupportedArtifactType";
         return true;
@@ -2248,11 +2365,12 @@ bool NodeNetCore::handlePlcUploadCommitRequest(const JsonDocument& request, Json
 
     PlcSlotLoadResultV1 load_result = {};
     if (_plcUploadSession.auto_load) {
-        load_result = PlcSlotLoaderV1::loadLinkedProgramPackageFromFlash(*_plcRuntimePublisher,
-                                                                         *_flash,
-                                                                         _plcUploadSession.slot_id,
-                                                                         kPlcUploadStagingBase,
-                                                                         _plcUploadSession.total_size);
+        load_result = PlcSlotLoaderV1::loadObjectFileFromFlash(*_plcRuntimePublisher,
+                                       _pointCatalog,
+                                       _plcUploadSession.slot_id,
+                                       *_flash,
+                                       kPlcUploadStagingBase,
+                                       _plcUploadSession.total_size);
         if (load_result.status != kPlcSlotLoadOk) {
             response["ok"] = false;
             response["error"] = "loadFailed";
@@ -2287,56 +2405,21 @@ bool NodeNetCore::handlePlcUploadDataMessage(const QueuedMessage& msg)
     response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_UPLOAD_DATA_RES);
     response["to"] = msg.srcAddr;
     nodeHeader(response);
-    response["uploadId"] = header.upload_id;
-    response["offset"] = header.offset;
-
-    if (header.upload_id != _plcUploadSession.upload_id) {
-        response["ok"] = false;
-        response["error"] = "uploadIdMismatch";
-        response["expectedOffset"] = _plcUploadSession.expected_offset;
-    } else if (header.offset != _plcUploadSession.expected_offset) {
-        response["ok"] = false;
-        response["error"] = "offsetMismatch";
-        response["expectedOffset"] = _plcUploadSession.expected_offset;
-    } else if (header.payload_size == 0u ||
-               header.payload_size > Flash::kPageSize ||
-               (sizeof(PlcUploadDataFrameHeader) + header.payload_size) != msg.len) {
+    const uint8_t* payload = msg.data + sizeof(PlcUploadDataFrameHeader);
+    const size_t payload_size = msg.len - sizeof(PlcUploadDataFrameHeader);
+    if (payload_size != header.payload_size) {
+        response["uploadId"] = header.upload_id;
+        response["offset"] = header.offset;
         response["ok"] = false;
         response["error"] = "invalidChunkSize";
         response["expectedOffset"] = _plcUploadSession.expected_offset;
-    } else if ((header.offset % Flash::kPageSize) != 0u ||
-               (header.offset + header.payload_size) > _plcUploadSession.total_size) {
-        response["ok"] = false;
-        response["error"] = "invalidOffset";
-        response["expectedOffset"] = _plcUploadSession.expected_offset;
     } else {
-        const uint8_t* payload = msg.data + sizeof(PlcUploadDataFrameHeader);
-        const uint16_t computed_checksum = payload_checksum16(payload, header.payload_size);
-        if (computed_checksum != header.payload_checksum) {
-            response["ok"] = false;
-            response["error"] = "chunkChecksumMismatch";
-            response["expectedOffset"] = _plcUploadSession.expected_offset;
-        } else {
-            uint8_t page[Flash::kPageSize] = {};
-            std::memset(page, 0xFF, sizeof(page));
-            std::memcpy(page, payload, header.payload_size);
-            if (!_flash->writePage(kPlcUploadStagingBase + header.offset, page)) {
-                response["ok"] = false;
-                response["error"] = "flashWriteFailed";
-                response["expectedOffset"] = _plcUploadSession.expected_offset;
-            } else {
-                _plcUploadSession.bytes_received += header.payload_size;
-                _plcUploadSession.expected_offset += header.payload_size;
-                _plcUploadSession.payload_checksum = checksum32_extend(_plcUploadSession.payload_checksum,
-                                                                       payload,
-                                                                       header.payload_size);
-                _plcUploadSession.last_activity_ms = millis();
-                _plcUploadSession.last_error_status = 0u;
-                response["ok"] = true;
-                response["bytesReceived"] = _plcUploadSession.bytes_received;
-                response["expectedOffset"] = _plcUploadSession.expected_offset;
-            }
-        }
+        (void)handlePlcUploadDataChunk(header.upload_id,
+                                       header.offset,
+                                       payload,
+                                       payload_size,
+                                       header.payload_checksum,
+                                       response);
     }
 
     if (!(response["ok"] | false)) {
@@ -2348,6 +2431,124 @@ bool NodeNetCore::handlePlcUploadDataMessage(const QueuedMessage& msg)
         return false;
     }
     processOutputQueue();
+    return true;
+}
+
+bool NodeNetCore::handlePlcUploadDataRequest(const JsonDocument& request, JsonDocument& response)
+{
+    response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_UPLOAD_DATA_RES);
+
+    const uint32_t upload_id = request["uploadId"] | 0u;
+    const uint32_t offset = request["offset"] | 0u;
+    const JsonVariantConst data_base64_value = request["dataBase64"].as<JsonVariantConst>();
+    const JsonVariantConst data_hex_value = request["dataHex"].as<JsonVariantConst>();
+    const JsonVariantConst legacy_data_value = request["data"].as<JsonVariantConst>();
+    const char* data_base64 = nullptr;
+    const char* data_hex = nullptr;
+    if (!data_base64_value.isNull()) {
+        data_base64 = data_base64_value.as<const char*>();
+    }
+    if (!data_hex_value.isNull()) {
+        data_hex = data_hex_value.as<const char*>();
+    }
+    if ((data_hex == nullptr || data_hex[0] == '\0') && !legacy_data_value.isNull()) {
+        data_hex = legacy_data_value.as<const char*>();
+    }
+    uint8_t payload[Flash::kPageSize] = {};
+    size_t payload_size = 0u;
+
+    bool decoded = false;
+    if (data_base64 != nullptr && data_base64[0] != '\0') {
+        decoded = decode_base64_bytes(data_base64, payload, sizeof(payload), payload_size);
+    }
+    if (!decoded) {
+        if (data_hex == nullptr) {
+            data_hex = "";
+        }
+        decoded = decode_hex_bytes(data_hex, payload, sizeof(payload), payload_size);
+    }
+
+    if (!decoded) {
+        response["uploadId"] = upload_id;
+        response["offset"] = offset;
+        response["ok"] = false;
+        response["error"] = "invalidChunkEncoding";
+        response["expectedOffset"] = _plcUploadSession.expected_offset;
+        _plcUploadSession.last_error_status = 1u;
+        return true;
+    }
+
+    return handlePlcUploadDataChunk(upload_id,
+                                    offset,
+                                    payload,
+                                    payload_size,
+                                    payload_checksum16(payload, payload_size),
+                                    response);
+}
+
+bool NodeNetCore::handlePlcUploadDataChunk(uint32_t upload_id,
+                                           uint32_t offset,
+                                           const uint8_t* payload,
+                                           size_t payload_size,
+                                           uint16_t payload_checksum,
+                                           JsonDocument& response)
+{
+    response["uploadId"] = upload_id;
+    response["offset"] = offset;
+
+    if (_flash == nullptr || !_plcUploadSession.active) {
+        response["ok"] = false;
+        response["error"] = "noActiveUpload";
+        return true;
+    }
+
+    if (upload_id != _plcUploadSession.upload_id) {
+        response["ok"] = false;
+        response["error"] = "uploadIdMismatch";
+        response["expectedOffset"] = _plcUploadSession.expected_offset;
+    } else if (offset != _plcUploadSession.expected_offset) {
+        response["ok"] = false;
+        response["error"] = "offsetMismatch";
+        response["expectedOffset"] = _plcUploadSession.expected_offset;
+    } else if (payload == nullptr || payload_size == 0u || payload_size > Flash::kPageSize) {
+        response["ok"] = false;
+        response["error"] = "invalidChunkSize";
+        response["expectedOffset"] = _plcUploadSession.expected_offset;
+    } else if ((offset % Flash::kPageSize) != 0u ||
+               (offset + payload_size) > _plcUploadSession.total_size) {
+        response["ok"] = false;
+        response["error"] = "invalidOffset";
+        response["expectedOffset"] = _plcUploadSession.expected_offset;
+    } else if (payload_checksum16(payload, payload_size) != payload_checksum) {
+        response["ok"] = false;
+        response["error"] = "chunkChecksumMismatch";
+        response["expectedOffset"] = _plcUploadSession.expected_offset;
+    } else {
+        uint8_t page[Flash::kPageSize] = {};
+        std::memset(page, 0xFF, sizeof(page));
+        std::memcpy(page, payload, payload_size);
+        if (!_flash->writePage(kPlcUploadStagingBase + offset, page)) {
+            response["ok"] = false;
+            response["error"] = "flashWriteFailed";
+            response["expectedOffset"] = _plcUploadSession.expected_offset;
+        } else {
+            _plcUploadSession.bytes_received += static_cast<uint32_t>(payload_size);
+            _plcUploadSession.expected_offset += static_cast<uint32_t>(payload_size);
+            _plcUploadSession.payload_checksum = checksum32_extend(_plcUploadSession.payload_checksum,
+                                                                   payload,
+                                                                   payload_size);
+            _plcUploadSession.last_activity_ms = millis();
+            _plcUploadSession.last_error_status = 0u;
+            response["ok"] = true;
+            response["bytesReceived"] = _plcUploadSession.bytes_received;
+            response["expectedOffset"] = _plcUploadSession.expected_offset;
+        }
+    }
+
+    if (!(response["ok"] | false)) {
+        _plcUploadSession.last_error_status = 1u;
+    }
+
     return true;
 }
 
@@ -2382,8 +2583,8 @@ bool NodeNetCore::savePointCatalog()
         if (!should_persist_point_definition(definition, deviceId)) {
             continue;
         }
-        JsonObject point_obj = points.add<JsonObject>();
-        PointCatalog::serializeDefinition(point_obj, definition);
+        JsonArray point_entry = points.add<JsonArray>();
+        PointCatalog::serializePersistedDefinition(point_entry, definition);
     }
 
     const size_t json_size = measureJson(point_catalog_doc);

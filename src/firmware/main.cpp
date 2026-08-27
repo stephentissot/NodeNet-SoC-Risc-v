@@ -1218,12 +1218,16 @@ static PlcMirrorProgramPackageResult plc_build_hardcoded_mirror_package(const No
     (void)snprintf(output_point_id, sizeof(output_point_id), "output%u", static_cast<unsigned>(output_channel));
 
     PlcObjectSymbolRecordV1 symbols[2] = {};
+    std::strncpy(symbols[0].symbol_name, "input", sizeof(symbols[0].symbol_name) - 1u);
+    symbols[0].symbol_kind = kPlcSymbolConstPointId;
     std::strncpy(symbols[0].point_id.device_id, node_core.deviceId, sizeof(symbols[0].point_id.device_id) - 1u);
     std::strncpy(symbols[0].point_id.feature, "modbus0.waveshare8ch", sizeof(symbols[0].point_id.feature) - 1u);
     std::strncpy(symbols[0].point_id.point_id, input_point_id, sizeof(symbols[0].point_id.point_id) - 1u);
     symbols[0].expected_type = static_cast<uint8_t>(PointValueType::Bool);
     symbols[0].access = static_cast<uint8_t>(kPlcRuntimeLinkRead);
 
+    std::strncpy(symbols[1].symbol_name, "output", sizeof(symbols[1].symbol_name) - 1u);
+    symbols[1].symbol_kind = kPlcSymbolConstPointId;
     std::strncpy(symbols[1].point_id.device_id, node_core.deviceId, sizeof(symbols[1].point_id.device_id) - 1u);
     std::strncpy(symbols[1].point_id.feature, "modbus0.waveshare8ch", sizeof(symbols[1].point_id.feature) - 1u);
     std::strncpy(symbols[1].point_id.point_id, output_point_id, sizeof(symbols[1].point_id.point_id) - 1u);
@@ -1243,74 +1247,48 @@ static PlcMirrorProgramPackageResult plc_build_hardcoded_mirror_package(const No
         0x11u, 0x00u, 0x00u,
         0x00u,
     };
-    uint8_t linked_code[sizeof(object_code)] = {};
-
-    PlcObjectImageV1 object_image = {};
-    object_image.code_bytes = object_code;
-    object_image.code_size = static_cast<uint32_t>(sizeof(object_code));
-    object_image.entry_offset = 0u;
-    object_image.symbols = symbols;
-    object_image.symbol_count = 2u;
-    object_image.relocations = relocations;
-    object_image.relocation_count = 2u;
-
-    const PlcObjectLinkResultV1 link_result = PlcObjectLinkerV1::linkObjectImage(publisher,
-                                                                                  catalog,
-                                                                                  object_image,
-                                                                                  linked_code,
-                                                                                  sizeof(linked_code));
-    if (link_result.status != kPlcObjectLinkOk) {
-        result.status = kPlcSlotLoadLinkFailed;
-        return result;
-    }
-
-    uint16_t input_runtime_index = PlcRuntimePublisherV1::kInvalidPointIndex;
-    uint16_t output_runtime_index = PlcRuntimePublisherV1::kInvalidPointIndex;
-    if (!plc_runtime_indices_for_channel(node_core,
-                                         catalog,
-                                         publisher,
-                                         input_channel,
-                                         output_channel,
-                                         &input_runtime_index,
-                                         &output_runtime_index)) {
-        result.status = kPlcSlotLoadLinkFailed;
-        return result;
-    }
-
-    const PlcMirrorProgramParamsV1 params = plc_make_mirror_program_params(input_channel,
-                                                                           output_channel,
-                                                                           input_runtime_index,
-                                                                           output_runtime_index,
-                                                                           publisher.storeEpoch());
-
-    const size_t package_size = sizeof(PlcLinkedProgramPackageHeaderV1) + sizeof(linked_code) + sizeof(params);
+    (void)catalog;
+    (void)publisher;
+    const size_t symbol_offset = sizeof(PlcObjectFileHeaderV1) + sizeof(object_code);
+    const size_t relocation_offset = symbol_offset + sizeof(symbols);
+    const size_t package_size = relocation_offset + sizeof(relocations);
     if (package_size > package_capacity) {
         result.status = kPlcSlotLoadBytecodeTooLarge;
         return result;
     }
 
-    PlcLinkedProgramPackageHeaderV1 package_header = {};
-    package_header.magic = kPlcLinkedProgramPackageMagicV1;
-    package_header.version = kPlcRuntimeAbiV1Version;
+    PlcObjectFileHeaderV1 package_header = {};
+    package_header.magic = kPlcObjectFileMagicV1;
+    package_header.version = kPlcObjectFileVersionV1;
     package_header.abi_version = kPlcRuntimeAbiV1Version;
-    package_header.code_size = static_cast<uint32_t>(sizeof(linked_code));
+    package_header.total_size = static_cast<uint32_t>(package_size);
+    package_header.code_size = static_cast<uint32_t>(sizeof(object_code));
     package_header.entry_offset = 0u;
     package_header.symbol_count = 2u;
     package_header.relocation_count = 2u;
+    package_header.symbol_table_offset = static_cast<uint32_t>(symbol_offset);
+    package_header.relocation_table_offset = static_cast<uint32_t>(relocation_offset);
     package_header.max_instructions_per_scan = 16u;
     package_header.max_scan_time_us = 5000u;
     package_header.runtime_header_addr = kPlcRuntimeHeaderAddr;
-    package_header.store_epoch = publisher.storeEpoch();
-    package_header.linked_code_checksum = 2166136261u;
-    package_header.params_size = sizeof(params);
-    for (size_t i = 0u; i < sizeof(linked_code); ++i) {
-        package_header.linked_code_checksum ^= linked_code[i];
-        package_header.linked_code_checksum *= 16777619u;
+    package_header.object_checksum = 2166136261u;
+    for (size_t i = 0u; i < sizeof(object_code); ++i) {
+        package_header.object_checksum ^= object_code[i];
+        package_header.object_checksum *= 16777619u;
+    }
+    for (size_t i = 0u; i < sizeof(symbols); ++i) {
+        package_header.object_checksum ^= reinterpret_cast<const uint8_t*>(symbols)[i];
+        package_header.object_checksum *= 16777619u;
+    }
+    for (size_t i = 0u; i < sizeof(relocations); ++i) {
+        package_header.object_checksum ^= reinterpret_cast<const uint8_t*>(relocations)[i];
+        package_header.object_checksum *= 16777619u;
     }
 
     std::memcpy(package_out, &package_header, sizeof(package_header));
-    std::memcpy(package_out + sizeof(package_header), linked_code, sizeof(linked_code));
-    std::memcpy(package_out + sizeof(package_header) + sizeof(linked_code), &params, sizeof(params));
+    std::memcpy(package_out + sizeof(package_header), object_code, sizeof(object_code));
+    std::memcpy(package_out + symbol_offset, symbols, sizeof(symbols));
+    std::memcpy(package_out + relocation_offset, relocations, sizeof(relocations));
     result.build_ok = true;
     result.package_size = package_size;
     result.status = kPlcSlotLoadOk;
@@ -1372,11 +1350,12 @@ static PlcSlot0BootResult plc_boot_slot0_program(const NodeNetCore& node_core,
     result.flash_load_result.status = kPlcSlotLoadInvalidArgument;
     result.fallback_load_result.status = kPlcSlotLoadInvalidArgument;
 
-    result.flash_load_result = PlcSlotLoaderV1::loadLinkedProgramPackageFromFlash(publisher,
-                                                                                   flash,
-                                                                                   0u,
-                                                                                   Flash::kPlcPackageSlotBase,
-                                                                                   Flash::kPlcPackageSlotSize);
+    result.flash_load_result = PlcSlotLoaderV1::loadObjectFileFromFlash(publisher,
+                                                                        catalog,
+                                                                        0u,
+                                                                        flash,
+                                                                        Flash::kPlcPackageSlotBase,
+                                                                        Flash::kPlcPackageSlotSize);
     if (result.flash_load_result.status == kPlcSlotLoadOk &&
         plc_slot_bytecode_supported_by_firmware_vm(0u)) {
         result.load_ok = true;
@@ -1396,7 +1375,8 @@ static PlcSlot0BootResult plc_boot_slot0_program(const NodeNetCore& node_core,
         result.source = PlcSlot0BootSource::HardcodedMirror;
 
         if (plc_should_seed_flash_package(result.flash_load_result.status)) {
-            uint8_t package_bytes[sizeof(PlcLinkedProgramPackageHeaderV1) + 7u] = {};
+            uint8_t package_bytes[sizeof(PlcObjectFileHeaderV1) + 7u + (2u * sizeof(PlcObjectSymbolRecordV1)) +
+                                  (2u * sizeof(PlcObjectRelocationRecordV1))] = {};
             const PlcMirrorProgramPackageResult package_result =
                 plc_build_hardcoded_mirror_package(node_core,
                                                    catalog,
@@ -1413,11 +1393,12 @@ static PlcSlot0BootResult plc_boot_slot0_program(const NodeNetCore& node_core,
                                                  package_bytes,
                                                  package_result.package_size)) {
                     const PlcSlotLoadResultV1 seeded_flash_load =
-                        PlcSlotLoaderV1::loadLinkedProgramPackageFromFlash(publisher,
-                                                                           flash,
-                                                                           0u,
-                                                                           Flash::kPlcPackageSlotBase,
-                                                                           Flash::kPlcPackageSlotSize);
+                        PlcSlotLoaderV1::loadObjectFileFromFlash(publisher,
+                                                                 catalog,
+                                                                 0u,
+                                                                 flash,
+                                                                 Flash::kPlcPackageSlotBase,
+                                                                 Flash::kPlcPackageSlotSize);
                     if (seeded_flash_load.status == kPlcSlotLoadOk &&
                         plc_slot_bytecode_supported_by_firmware_vm(0u)) {
                         result.flash_seeded = true;
@@ -1591,12 +1572,30 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
     PlcObjectFileHeaderV1 header = {};
     header.magic = kPlcObjectFileMagicV1;
     header.version = kPlcObjectFileVersionV1;
+    header.abi_version = kPlcRuntimeAbiV1Version;
+    header.total_size = static_cast<uint32_t>(object_size);
     header.code_size = static_cast<uint32_t>(code_size);
     header.entry_offset = 0u;
     header.symbol_count = sample_count;
     header.relocation_count = sample_count;
     header.symbol_table_offset = static_cast<uint32_t>(symbol_offset);
     header.relocation_table_offset = static_cast<uint32_t>(relocation_offset);
+    header.max_instructions_per_scan = 200u;
+    header.max_scan_time_us = 10000u;
+    header.runtime_header_addr = kPlcRuntimeHeaderAddr;
+    header.object_checksum = 2166136261u;
+    for (size_t i = 0u; i < code_size; ++i) {
+        header.object_checksum ^= 0u;
+        header.object_checksum *= 16777619u;
+    }
+    for (size_t i = 0u; i < static_cast<size_t>(sample_count) * sizeof(PlcObjectSymbolRecordV1); ++i) {
+        header.object_checksum ^= reinterpret_cast<const uint8_t*>(symbols)[i];
+        header.object_checksum *= 16777619u;
+    }
+    for (size_t i = 0u; i < static_cast<size_t>(sample_count) * sizeof(PlcObjectRelocationRecordV1); ++i) {
+        header.object_checksum ^= reinterpret_cast<const uint8_t*>(relocations)[i];
+        header.object_checksum *= 16777619u;
+    }
     std::memcpy(object_file, &header, sizeof(header));
     std::memcpy(object_file + symbol_offset, symbols, static_cast<size_t>(sample_count) * sizeof(PlcObjectSymbolRecordV1));
     std::memcpy(object_file + relocation_offset,
@@ -1616,9 +1615,7 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
                                                                  catalog,
                                                                  1u,
                                                                  object_file,
-                                                                 object_size,
-                                                                 200u,
-                                                                 10000u);
+                                                                 object_size);
     if (result.load_result.status != kPlcSlotLoadOk) {
         return result;
     }
@@ -1655,31 +1652,55 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
         return result;
     }
 
-    uint8_t package_bytes[sizeof(PlcLinkedProgramPackageHeaderV1) + (kMaxSampleSymbols * 2u)] = {};
-    PlcLinkedProgramPackageHeaderV1 package_header = {};
-    package_header.magic = kPlcLinkedProgramPackageMagicV1;
-    package_header.version = kPlcRuntimeAbiV1Version;
+    const size_t package_symbol_offset = sizeof(PlcObjectFileHeaderV1) + code_size;
+    const size_t package_relocation_offset = package_symbol_offset +
+                                             static_cast<size_t>(sample_count) * sizeof(PlcObjectSymbolRecordV1);
+    const size_t package_size = package_relocation_offset +
+                                static_cast<size_t>(sample_count) * sizeof(PlcObjectRelocationRecordV1);
+    uint8_t package_bytes[sizeof(PlcObjectFileHeaderV1) + (kMaxSampleSymbols * 2u) +
+                          (kMaxSampleSymbols * sizeof(PlcObjectSymbolRecordV1)) +
+                          (kMaxSampleSymbols * sizeof(PlcObjectRelocationRecordV1))] = {};
+    PlcObjectFileHeaderV1 package_header = {};
+    package_header.magic = kPlcObjectFileMagicV1;
+    package_header.version = kPlcObjectFileVersionV1;
     package_header.abi_version = kPlcRuntimeAbiV1Version;
+    package_header.total_size = static_cast<uint32_t>(package_size);
     package_header.code_size = static_cast<uint32_t>(code_size);
     package_header.entry_offset = 0u;
     package_header.symbol_count = sample_count;
     package_header.relocation_count = sample_count;
+    package_header.symbol_table_offset = static_cast<uint32_t>(package_symbol_offset);
+    package_header.relocation_table_offset = static_cast<uint32_t>(package_relocation_offset);
     package_header.max_instructions_per_scan = 300u;
     package_header.max_scan_time_us = 12000u;
     package_header.runtime_header_addr = kPlcRuntimeHeaderAddr;
-    package_header.store_epoch = publisher.storeEpoch();
-    package_header.linked_code_checksum = 2166136261u;
+    package_header.object_checksum = 2166136261u;
     for (size_t i = 0u; i < code_size; ++i) {
-        package_header.linked_code_checksum ^= linked_code[i];
-        package_header.linked_code_checksum *= 16777619u;
+        package_header.object_checksum ^= linked_code[i];
+        package_header.object_checksum *= 16777619u;
+    }
+    for (size_t i = 0u; i < static_cast<size_t>(sample_count) * sizeof(PlcObjectSymbolRecordV1); ++i) {
+        package_header.object_checksum ^= reinterpret_cast<const uint8_t*>(symbols)[i];
+        package_header.object_checksum *= 16777619u;
+    }
+    for (size_t i = 0u; i < static_cast<size_t>(sample_count) * sizeof(PlcObjectRelocationRecordV1); ++i) {
+        package_header.object_checksum ^= reinterpret_cast<const uint8_t*>(relocations)[i];
+        package_header.object_checksum *= 16777619u;
     }
     std::memcpy(package_bytes, &package_header, sizeof(package_header));
-    std::memcpy(package_bytes + sizeof(package_header), linked_code, code_size);
+    std::memcpy(package_bytes + sizeof(package_header), object_file + sizeof(PlcObjectFileHeaderV1), code_size);
+    std::memcpy(package_bytes + package_symbol_offset,
+                symbols,
+                static_cast<size_t>(sample_count) * sizeof(PlcObjectSymbolRecordV1));
+    std::memcpy(package_bytes + package_relocation_offset,
+                relocations,
+                static_cast<size_t>(sample_count) * sizeof(PlcObjectRelocationRecordV1));
 
-    result.package_load_result = PlcSlotLoaderV1::loadLinkedProgramPackageIntoSlot(publisher,
-                                                                                    2u,
-                                                                                    package_bytes,
-                                                                                    sizeof(package_header) + code_size);
+    result.package_load_result = PlcSlotLoaderV1::loadObjectFileIntoSlot(publisher,
+                                                                         catalog,
+                                                                         2u,
+                                                                         package_bytes,
+                                                                         package_size);
     if (result.package_load_result.status != kPlcSlotLoadOk) {
         return result;
     }
@@ -1697,7 +1718,7 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
 
     if (include_flash_roundtrip) {
         Flash flash(FLASH0_BASE);
-        const size_t flash_package_size = sizeof(PlcLinkedProgramPackageHeaderV1) + code_size;
+        const size_t flash_package_size = package_size;
         const uint32_t flash_erase_size = static_cast<uint32_t>(((flash_package_size + Flash::kSectorSize - 1u) /
                                                                  Flash::kSectorSize) * Flash::kSectorSize);
         if (flash_package_size > Flash::kPlcPackageSlotSize ||
@@ -1710,11 +1731,12 @@ static PlcLoaderSelfTestResult plc_run_loader_self_test(const PointCatalog& cata
             return result;
         }
 
-        result.flash_load_result = PlcSlotLoaderV1::loadLinkedProgramPackageFromFlash(publisher,
-                                                                                       flash,
-                                                                                       3u,
-                                                                                       Flash::kPlcPackageSlotBase,
-                                                                                       Flash::kPlcPackageSlotSize);
+        result.flash_load_result = PlcSlotLoaderV1::loadObjectFileFromFlash(publisher,
+                                            catalog,
+                                            3u,
+                                            flash,
+                                            Flash::kPlcPackageSlotBase,
+                                            Flash::kPlcPackageSlotSize);
         if (result.flash_load_result.status != kPlcSlotLoadOk) {
             return result;
         }

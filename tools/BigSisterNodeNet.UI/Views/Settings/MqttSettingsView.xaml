@@ -1,0 +1,43 @@
+﻿<UserControl x:Class="BigSisterNodeNet.UI.Views.Settings.MqttSettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
+             xmlns:local="clr-namespace:BigSisterNodeNet.UI.Views.Settings"
+             mc:Ignorable="d" 
+             d:DesignHeight="450" d:DesignWidth="800"
+             xmlns:vm="clr-namespace:BigSisterNodeNet.UI.Models.Settings"
+             d:DataContext="{d:DesignInstance Type=vm:MqttSettingsViewModel}">
+    <Grid Margin ="20" IsEnabled="{Binding IsSaving,Converter={StaticResource InverseBooleanConverter}}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="10"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="10"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="10"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="10"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="10"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="10"/>
+            <RowDefinition Height="Auto"/>
+            
+        </Grid.RowDefinitions>
+        <CheckBox Grid.Row="0" Content="Enable MQTT" IsChecked="{Binding Enabled}" />
+        <TextBox Grid.Row="2" Text="{Binding IpAddress}" materialDesign:HintAssist.Hint="Broker IP" IsEnabled="{Binding Enabled}"/>
+        <TextBox Grid.Row="4" Text="{Binding PortNumber}" materialDesign:HintAssist.Hint="Port" IsEnabled="{Binding Enabled}"/>
+        <TextBox Grid.Row="6" Text="{Binding Login}" materialDesign:HintAssist.Hint="Login" IsEnabled="{Binding Enabled}"/>
+        <TextBox Grid.Row="8" Text="{Binding Password}" materialDesign:HintAssist.Hint="Password" IsEnabled="{Binding Enabled}"/>
+        <Button Grid.Row="10" Command="{Binding GoSave}" Content="Apply Mqtt settings" Width="250" IsEnabled="{Binding IsUpdated}" />
+        <TextBlock Grid.Row="12" Text="{Binding LastError, Mode=OneWay}" />
+
+
+        <Grid Visibility="{Binding IsSaving, Converter={StaticResource BoolToVisibilityConverter}}" Background="#80000000">
+            <ProgressBar Width="250" Height="6" IsIndeterminate="True" VerticalAlignment="Center"/>
+        </Grid>
+
+    </Grid>
+</UserControl>

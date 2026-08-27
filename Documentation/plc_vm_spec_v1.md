@@ -296,18 +296,22 @@ slot.
 
 The CPU-side linker shall:
 
-- load compiled PLC bytecode object data from PC-side tooling
-- parse symbolic point references required by the program
+- load a relocatable PLC object file from flash or PC-side tooling
+- parse symbol declarations and relocation records required by the program
+- combine constant point symbols with load-time parameter bindings
 - resolve each symbolic point reference to a runtime `point_index`
-- patch relocation entries or generate a slot-ready image
+- patch relocation entries and generate a slot-ready image in SDRAM
 - verify type compatibility against the runtime descriptor table
+- validate that all required program parameters are present and well-typed
+- keep the persistent flash artifact relocatable; only the slot image is linked
 - reject a load if required points are missing or type-incompatible
 
 ### 3.3 Link Inputs
 
 The link phase consumes:
 
-- a compiled PLC object or relocatable bytecode image
+- a compiled PLC object file stored in flash or received from the host
+- a slot parameter binding block for the current program instance
 - a runtime point catalog known by the CPU
 - the current runtime ABI version
 - the target slot configuration
@@ -317,26 +321,45 @@ The link phase consumes:
 The link phase produces:
 
 - a fully linked bytecode image with resolved point indices
-- a load manifest for the target slot
+- a slot control block for the target runtime slot
+- a slot parameter block that records the current program instance bindings
 - optional symbol debug metadata retained by the CPU
 
-### 3.5 Link Model Recommendation
+### 3.5 Stable V1 Artifact Model
 
-The recommended model is a two-stage program artifact:
+The stable V1 model is a two-stage program artifact:
 
-1. `PLC object`
-   - symbolic references still present
-   - relocations still unresolved
+1. `PLC object file`
+  - stored persistently in flash
+  - symbolic point references still present
+  - relocations still unresolved
+  - symbol table and resource budgets retained
 
 2. `PLC linked image`
-   - point references replaced by stable `point_index`
-   - target ABI version encoded
-   - checksum finalized
+  - produced only when a slot is loaded
+  - written to SDRAM for execution
+  - point references replaced by stable `point_index`
+  - tied to the current point catalog and current slot parameters
 
-This allows the same compiled program to be re-linked against different target
-point maps without recompiling from the graphical designer.
+This allows the same stored program to be re-linked against different target
+point maps or different parameter bindings without recompiling it.
 
-### 3.6 Acceptance Rule
+The repository should not keep a second persistent artifact format for already
+linked images. The canonical durable artifact in V1 is the relocatable object
+file.
+
+### 3.6 Symbol Classes
+
+V1 shall distinguish three symbol classes:
+
+- `CONST POINT_ID`: a point path fixed in the program source
+- `PARAM POINT_ID`: a point path provided when a slot instance is loaded
+- local variable declarations: deferred to a later VM extension and out of scope
+  for this first linker refactor
+
+For the initial refactor, only point-symbol classes are required by the loader.
+
+### 3.7 Acceptance Rule
 
 A slot shall only be started if:
 
@@ -476,7 +499,31 @@ Rules:
 - stopping or faulting a slot does not by itself redefine parameters; a new load
   operation does
 
-## 5. PLC Bytecode V1
+For the first stable linker contract, V1 parameters are restricted to symbolic
+point bindings:
+
+- `PARAM POINT_ID <name>` declares one required symbolic point parameter
+- the parameter value is a full point path of the form
+  `deviceId.feature.pointId`
+- the host-side assembler resolves the parameter declaration to a concrete point
+  path before the object file is uploaded or stored
+- the firmware loader still resolves that final point path against the current
+  runtime point catalog during the slot load step
+- if the path is missing, ill-formed, type-incompatible, or access-incompatible,
+  the load shall fail before the slot starts
+
+Example:
+
+```text
+PARAM POINT_ID input
+CONST POINT_ID y, gb9fao5yk4f.modbus0.waveshare8ch.output4
+
+LOAD_BOOL input
+STORE_BOOL y
+HALT
+```
+
+## 5. PLC Object And Bytecode V1
 
 ### 5.1 Requirements
 
@@ -484,7 +531,7 @@ Rules:
 - fixed and bounded resources
 - no dynamic allocation
 - fast decode in HDL
-- direct indexed access to runtime points
+- direct indexed access to runtime points after link
 - `float32` support in V1
 
 ### 5.2 Execution Model
@@ -498,24 +545,99 @@ Each active slot executes:
 3. output commit phase
 4. status/timestamp update phase
 
-### 5.3 Bytecode Header
+### 5.3 Source-Level Symbolic Syntax
 
-Suggested C layout:
+The source accepted by the assembler shall separate declarations from
+instructions.
+
+Minimal V1 declaration forms:
+
+- `CONST POINT_ID <symbol>, <deviceId.feature.pointId>`
+- `PARAM POINT_ID <symbol>`
+
+Minimal V1 instruction forms:
+
+- `LOAD_BOOL <symbol>`
+- `STORE_BOOL <symbol>`
+- `HALT`
+
+Example:
+
+```text
+PARAM POINT_ID input
+CONST POINT_ID y, gb9fao5yk4f.modbus0.waveshare8ch.output4
+
+LOAD_BOOL input
+STORE_BOOL y
+HALT
+```
+
+Assembly rules:
+
+- symbol names are local to one PLC object file
+- `LOAD_BOOL` and `STORE_BOOL` operands refer to symbolic point declarations,
+  not to literal runtime indices
+- the assembler encodes placeholder immediates in the code stream and emits
+  relocation records that identify which symbol must be resolved by the loader
+- literal runtime indices are not the canonical source form in stable V1
+
+### 5.4 PLC Object File Header
+
+Suggested V1 C layout:
 
 ```c
-struct PlcBytecodeHeaderV1 {
+struct PlcObjectFileHeaderV1 {
     uint32_t magic;
     uint16_t version;
-    uint16_t flags;
+    uint16_t abi_version;
+    uint32_t flags;
+    uint32_t total_size;
     uint32_t code_size;
     uint32_t entry_offset;
-    uint32_t max_stack_depth;
-    uint32_t relocation_count;
-    uint32_t checksum;
+    uint16_t symbol_count;
+    uint16_t relocation_count;
+    uint32_t symbol_table_offset;
+    uint32_t relocation_table_offset;
+    uint32_t max_instructions_per_scan;
+    uint32_t max_scan_time_us;
+    uint32_t runtime_header_addr;
+    uint32_t object_checksum;
 };
 ```
 
-### 5.4 Relocation Records
+The persistent flash artifact is the raw object file bytes starting at this
+header. No second linked-package container is kept as a durable V1 format.
+
+### 5.5 Symbol Records
+
+Suggested V1 C layout:
+
+```c
+enum PlcObjectSymbolKindV1 : uint8_t {
+    kPlcSymbolConstPointId = 0,
+    kPlcSymbolParamPointId = 1,
+};
+
+struct PlcObjectSymbolRecordV1 {
+    char symbol_name[16];
+    uint8_t symbol_kind;
+    uint8_t expected_type;
+    uint8_t access;
+    uint8_t reserved0;
+    PointIdentity point_id;
+};
+```
+
+Rules:
+
+- `symbol_name` stores the symbolic operand name used by instructions
+- for `kPlcSymbolConstPointId`, `point_id` contains the full fixed point path
+- for `kPlcSymbolParamPointId`, the current implementation also stores the bound
+  full point path in `point_id` before upload
+- the loader uses `symbol_kind` for diagnostics and future evolution, but both
+  point-symbol kinds are currently linked from the stored `point_id` field
+
+### 5.6 Relocation Records
 
 Compiled PLC objects may contain unresolved symbolic point references.
 
@@ -532,7 +654,7 @@ struct PlcRelocationV1 {
 After CPU linking, those relocations are resolved to concrete runtime point
 indices.
 
-### 5.5 Supported Opcodes In V1
+### 5.7 Supported Opcodes In V1
 
 The bytecode shall support at least the following operations.
 
@@ -607,7 +729,7 @@ The bytecode shall support at least the following operations.
 - `TOF_START timer_idx16, preset_ms32`
 - `TOF_DONE timer_idx16`
 
-### 5.6 Float Support Notes
+### 5.8 Float Support Notes
 
 `float32` is required in V1.
 
@@ -1250,11 +1372,13 @@ Objective:
 
 Tasks:
 
-1. Define a compact relocatable PLC object file format.
+1. Finalize the V1 PLC object file format as the only durable deployment
+  artifact.
 2. Implement point symbol resolution by `device_id/feature/point_id`.
-3. Implement type validation against the descriptor table.
-4. Patch relocations to `point_index` values.
-5. Write linked images and slot control blocks into SDRAM.
+3. Implement load-time resolution of `PARAM POINT_ID` bindings.
+4. Implement type validation against the descriptor table.
+5. Patch relocations to `point_index` values.
+6. Write linked images and slot control blocks into SDRAM.
 
 Validation:
 
@@ -1350,10 +1474,11 @@ Entry gate:
 
 Tasks:
 
-1. Define the PLC object file emitted by the compiler.
-2. Define the deployment protocol to send programs to the CPU.
-3. Add debug symbol retention for diagnostics.
-4. Add version checks for compiler output vs ABI/VM hardware.
+1. Define the PLC object file emitted by the compiler/assembler.
+2. Define declaration syntax for `CONST POINT_ID` and `PARAM POINT_ID`.
+3. Define the deployment protocol to send PLC object files to the CPU.
+4. Add debug symbol retention for diagnostics.
+5. Add version checks for compiler output vs ABI/VM hardware.
 
 Validation:
 
@@ -1376,7 +1501,8 @@ Tasks:
 1. Define a chunked NodeNet upload session for raw PLC object bytes.
 2. Stage received object bytes into the dedicated raw PLC flash slot.
 3. Verify size and checksum before CPU-side link.
-4. Link from raw object flash staging into a slot-ready SDRAM image.
+4. Resolve slot parameter bindings and perform CPU-side link from raw object
+  flash staging into a slot-ready SDRAM image.
 5. Expose slot load and fault status through NodeNet responses.
 
 Validation:

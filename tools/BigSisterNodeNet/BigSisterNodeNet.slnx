@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="../BigSisterNodeNet.Core/BigSisterNodeNet.Core.csproj" />
+  <Project Path="../BigSisterNodeNet.Driver/BigSisterNodeNet.Driver.csproj" />
+  <Project Path="../BigSisterNodeNet.Plc/BigSisterNodeNet.Plc.csproj" />
+  <Project Path="../BigSisterNodeNet.Sniffer/BigSisterNodeNet.Sniffer.csproj" />
+  <Project Path="../BigSisterNodeNet.UI/BigSisterNodeNet.UI.csproj" />
+</Solution>
