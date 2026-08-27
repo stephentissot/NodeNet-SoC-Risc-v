@@ -360,6 +360,33 @@ Current V1 restriction:
 
 - the target point must resolve to runtime type `Int16`
 
+### DEC_INT
+
+Syntax:
+
+```text
+DEC_INT <symbol>
+```
+
+Alias:
+
+- `DEC <symbol>`
+
+Encoding:
+
+- opcode `0x21`
+- one relocated `u16` operand patched to a runtime point index by the loader
+
+Behavior:
+
+- reads one `INT` point
+- decrements it by `1`
+- writes the new value back to the same point in the same scan
+
+Current V1 restriction:
+
+- the target point must resolve to runtime type `Int16`
+
 ## HDL-Oriented Instruction Roadmap
 
 The long-term goal may be to migrate part of the PLC execution engine from the
@@ -690,6 +717,168 @@ Phase D, only if clearly justified:
 - `MOD`
 - float load/store and float ALU instructions
 
+## IEC-Aligned Phase A
+
+If the goal is to stay compatible with IEC 61131-3 expectations while still
+building a compact HDL-friendly VM, the first real execution profile should be
+defined as a semantic subset, not as a copy of historical `IL` syntax.
+
+The recommended IEC-aligned Phase A is:
+
+### Core declarations
+
+- `CONST POINT_ID`
+- `PARAM POINT_ID`
+- `VAR`
+
+### Primitive data movement
+
+- `LOAD_BOOL`
+- `STORE_BOOL`
+- `LOAD_I16`
+- `STORE_I16`
+- `PUSH_TRUE`
+- `PUSH_FALSE`
+
+### Primitive boolean logic
+
+- `AND`
+- `OR`
+- `XOR`
+- `NOT`
+
+### Primitive integer logic
+
+- `EQ`
+- `NE`
+- `ADD`
+- `SUB`
+- `INC_INT`
+- `DEC_INT`
+
+### Minimal execution control
+
+- `NOP`
+- `HALT`
+
+Why this is the right Phase A:
+
+- it already covers relay-like boolean logic
+- it covers the first useful integer state pattern, especially counters and
+  accumulators
+- it stays implementable without branch hardware, divider hardware, or float
+  support
+- it matches the most common expectations from small PLC logic scans
+
+IEC 61131-3 features intentionally deferred beyond Phase A:
+
+- timer blocks such as `TON`, `TOF`, `TP`
+- counter blocks such as `CTU`, `CTD`, `CTUD`
+- ordered comparisons `LT`, `LE`, `GT`, `GE`
+- control flow `JMP`, `JZ`, `JNZ`
+- float types and float operators
+
+## Primitive ISA Vs IEC Standard Blocks
+
+The most important architectural rule for the next steps is to separate:
+
+- primitive VM instructions
+- IEC-facing standard blocks
+
+They should not be treated as the same design problem.
+
+### Primitive ISA
+
+Primitive instructions are the actual execution atoms of the VM or HDL engine.
+They should remain:
+
+- fixed-width or nearly fixed-width
+- easy to decode
+- type-explicit
+- locally testable in isolation
+
+Examples of good primitive instructions:
+
+- `LOAD_BOOL`
+- `STORE_BOOL`
+- `LOAD_I16`
+- `STORE_I16`
+- `PUSH_I16`
+- `AND`
+- `OR`
+- `EQ`
+- `ADD`
+- `SUB`
+- `JZ`
+- `JMP`
+
+### IEC Standard Blocks
+
+IEC 61131-3 helps most at this level. Timers, counters, and edge detectors are
+better treated as standard semantic blocks built on top of the runtime model,
+not necessarily as one opcode each.
+
+Examples of standard blocks or standard block families:
+
+- `TON`
+- `TOF`
+- `TP`
+- `CTU`
+- `CTD`
+- `CTUD`
+- `R_TRIG`
+- `F_TRIG`
+- `SR`
+- `RS`
+
+For this project, the simplest mapping is usually one of these two strategies:
+
+- expose a block as a small group of primitive-oriented instructions
+- expose a block as a loader-recognized or runtime-recognized instance with
+  explicit state slots
+
+Recommended mappings for this VM family:
+
+- `TON` -> `TON_START`, `TON_DONE`, `TON_ELAPSED`, `TON_RESET`
+- `TOF` -> `TOF_START`, `TOF_DONE`, `TOF_RESET`
+- `TP` -> `TP_START`, `TP_DONE`, `TP_RESET`
+- `CTU` -> `CTU_COUNT`, `CTU_DONE`, `CTU_RESET`
+- `CTD` -> `CTD_COUNT`, `CTD_DONE`, `CTD_RESET`
+- `R_TRIG` and `F_TRIG` -> dedicated stateful primitives or runtime services
+
+Why this split helps:
+
+- the ISA stays regular and HDL-friendly
+- IEC behavior stays available at source level
+- timer and counter instance state can live in explicit per-slot memories
+- desktop tooling can later compile a higher-level PLC source into the same
+  primitive runtime
+
+## IEC Priority For Future Work
+
+IEC 61131-3 suggests the following practical order if user value matters more
+than language purity.
+
+### High value, moderate HDL cost
+
+- ordered compares: `LT`, `LE`, `GT`, `GE`
+- timer family: `TON`, `TOF`, `TP`
+- edge detection: `R_TRIG`, `F_TRIG`
+- counter family: `CTU`, `CTD`
+
+### High value, higher HDL cost
+
+- branching: `JMP`, `JZ`, `JNZ`
+- multiply: `MUL`
+- richer integer utilities: `MIN`, `MAX`, `CLAMP`
+
+### Lower value for the first industrial subset
+
+- float arithmetic
+- strings
+- generic diagnostics opcodes
+- deep call/return control-flow features
+
 ## Candidate Full Instruction Set
 
 For planning purposes, the most complete practical instruction catalog for this
@@ -838,33 +1027,6 @@ VM family is:
 - `ASSERT`
 - `TRACE`
 - `DB`
-
-### DEC_INT
-
-Syntax:
-
-```text
-DEC_INT <symbol>
-```
-
-Alias:
-
-- `DEC <symbol>`
-
-Encoding:
-
-- opcode `0x21`
-- one relocated `u16` operand patched to a runtime point index by the loader
-
-Behavior:
-
-- reads one `INT` point
-- decrements it by `1`
-- writes the new value back to the same point in the same scan
-
-Current V1 restriction:
-
-- the target point must resolve to runtime type `Int16`
 
 ## Instruction Families Reserved By The VM Spec
 
