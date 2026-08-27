@@ -157,40 +157,75 @@ static const char* plc_slot_source_name(uint16_t slot_id,
     return plc_control_block_loaded(*control_block, slot_id) ? "unknown" : "none";
 }
 
+static bool resolve_waveshare_runtime_index(const PointCatalog& catalog,
+                                            const PlcRuntimePublisherV1* publisher,
+                                            const char* device_id,
+                                            const char* point_prefix,
+                                            uint8_t channel,
+                                            uint16_t& runtime_index) {
+    if (publisher == nullptr || device_id == nullptr || point_prefix == nullptr || channel == 0u || channel > 8u) {
+        return false;
+    }
+
+    char point_id[16] = {};
+    (void)snprintf(point_id, sizeof(point_id), "%s%u", point_prefix, static_cast<unsigned>(channel));
+
+    PointIdentity id = {};
+    copy_text(id.device_id, sizeof(id.device_id), device_id);
+    copy_text(id.feature, sizeof(id.feature), "modbus0.waveshare8ch");
+    copy_text(id.point_id, sizeof(id.point_id), point_id);
+
+    runtime_index = publisher->runtimeIndexForIdentity(catalog, id);
+    if (runtime_index == PlcRuntimePublisherV1::kInvalidPointIndex) {
+        return false;
+    }
+
+    return true;
+}
+
 static bool resolve_waveshare_channel_runtime_indices(const PointCatalog& catalog,
                                                       const PlcRuntimePublisherV1* publisher,
                                                       const char* device_id,
-                                                      uint8_t channel,
+                                                      uint8_t input_channel,
+                                                      uint8_t output_channel,
                                                       uint16_t& input_runtime_index,
                                                       uint16_t& output_runtime_index) {
-    if (publisher == nullptr || device_id == nullptr || channel == 0u || channel > 8u) {
+    if (!resolve_waveshare_runtime_index(catalog,
+                                         publisher,
+                                         device_id,
+                                         "input",
+                                         input_channel,
+                                         input_runtime_index)) {
+        return false;
+    }
+    if (!resolve_waveshare_runtime_index(catalog,
+                                         publisher,
+                                         device_id,
+                                         "output",
+                                         output_channel,
+                                         output_runtime_index)) {
         return false;
     }
 
-    char input_point_id[16] = {};
-    char output_point_id[16] = {};
-    (void)snprintf(input_point_id, sizeof(input_point_id), "input%u", static_cast<unsigned>(channel));
-    (void)snprintf(output_point_id, sizeof(output_point_id), "output%u", static_cast<unsigned>(channel));
-
-    PointIdentity input_id = {};
-    PointIdentity output_id = {};
-    copy_text(input_id.device_id, sizeof(input_id.device_id), device_id);
-    copy_text(input_id.feature, sizeof(input_id.feature), "modbus0.waveshare8ch");
-    copy_text(input_id.point_id, sizeof(input_id.point_id), input_point_id);
-    copy_text(output_id.device_id, sizeof(output_id.device_id), device_id);
-    copy_text(output_id.feature, sizeof(output_id.feature), "modbus0.waveshare8ch");
-    copy_text(output_id.point_id, sizeof(output_id.point_id), output_point_id);
-
-    const uint16_t resolved_input = publisher->runtimeIndexForIdentity(catalog, input_id);
-    const uint16_t resolved_output = publisher->runtimeIndexForIdentity(catalog, output_id);
-    if (resolved_input == PlcRuntimePublisherV1::kInvalidPointIndex ||
-        resolved_output == PlcRuntimePublisherV1::kInvalidPointIndex) {
-        return false;
-    }
-
-    input_runtime_index = resolved_input;
-    output_runtime_index = resolved_output;
     return true;
+}
+
+static PlcMirrorProgramParamsV1 make_mirror_program_params(uint8_t input_channel,
+                                                           uint8_t output_channel,
+                                                           uint16_t input_runtime_index,
+                                                           uint16_t output_runtime_index,
+                                                           uint32_t load_epoch) {
+    PlcMirrorProgramParamsV1 params = {};
+    params.header.magic = kPlcSlotParamsMagicV1;
+    params.header.version = kPlcRuntimeAbiV1Version;
+    params.header.program_kind = kPlcProgramKindMirrorBool;
+    params.header.payload_size = static_cast<uint16_t>(sizeof(PlcMirrorProgramParamsV1));
+    params.header.load_epoch = load_epoch;
+    params.input_channel = input_channel;
+    params.output_channel = output_channel;
+    params.input_runtime_index = input_runtime_index;
+    params.output_runtime_index = output_runtime_index;
+    return params;
 }
 
 static uint32_t point_catalog_checksum(const uint8_t* data, size_t len) {
@@ -280,13 +315,14 @@ static bool flash_erase_range(Flash* flash, uint32_t flash_offset, uint32_t size
 }
 
 static void build_waveshare_mirror_symbols(const char* device_id,
-                                           uint8_t channel,
+                                           uint8_t input_channel,
+                                           uint8_t output_channel,
                                            PlcObjectSymbolRecordV1* symbols,
                                            PlcObjectRelocationRecordV1* relocations) {
     char input_point_id[16] = {};
     char output_point_id[16] = {};
-    (void)snprintf(input_point_id, sizeof(input_point_id), "input%u", static_cast<unsigned>(channel));
-    (void)snprintf(output_point_id, sizeof(output_point_id), "output%u", static_cast<unsigned>(channel));
+    (void)snprintf(input_point_id, sizeof(input_point_id), "input%u", static_cast<unsigned>(input_channel));
+    (void)snprintf(output_point_id, sizeof(output_point_id), "output%u", static_cast<unsigned>(output_channel));
 
     std::memset(symbols, 0, sizeof(PlcObjectSymbolRecordV1) * 2u);
     std::memset(relocations, 0, sizeof(PlcObjectRelocationRecordV1) * 2u);
@@ -315,19 +351,23 @@ static PlcSlotLoadResultV1 load_mirror_program_into_slot(const PointCatalog& cat
                                                          const PlcRuntimePublisherV1& publisher,
                                                          const char* device_id,
                                                          uint16_t slot_id,
-                                                         uint8_t channel) {
+                                                         uint8_t input_channel,
+                                                         uint8_t output_channel) {
     PlcSlotLoadResultV1 result = {};
     result.status = kPlcSlotLoadInvalidArgument;
     result.parse_status = kPlcObjectParseOk;
     result.link_result.status = kPlcObjectLinkInvalidArgument;
 
-    if (device_id == nullptr || channel == 0u || channel > 8u || slot_id >= kPlcSlotCountV1) {
+    if (device_id == nullptr ||
+        input_channel == 0u || input_channel > 8u ||
+        output_channel == 0u || output_channel > 8u ||
+        slot_id >= kPlcSlotCountV1) {
         return result;
     }
 
     PlcObjectSymbolRecordV1 symbols[2] = {};
     PlcObjectRelocationRecordV1 relocations[2] = {};
-    build_waveshare_mirror_symbols(device_id, channel, symbols, relocations);
+    build_waveshare_mirror_symbols(device_id, input_channel, output_channel, symbols, relocations);
 
     uint8_t object_code[] = {
         0x10u, 0x00u, 0x00u,
@@ -355,18 +395,22 @@ static PlcSlotLoadResultV1 load_mirror_program_into_slot(const PointCatalog& cat
 static PlcSlotLoadStatusV1 build_mirror_program_package(const PointCatalog& catalog,
                                                         const PlcRuntimePublisherV1& publisher,
                                                         const char* device_id,
-                                                        uint8_t channel,
+                                                        uint8_t input_channel,
+                                                        uint8_t output_channel,
+                                                        const PlcMirrorProgramParamsV1& params,
                                                         uint8_t* package_out,
                                                         size_t package_capacity,
                                                         size_t& package_size_out) {
     package_size_out = 0u;
-    if (device_id == nullptr || package_out == nullptr || channel == 0u || channel > 8u) {
+    if (device_id == nullptr || package_out == nullptr ||
+        input_channel == 0u || input_channel > 8u ||
+        output_channel == 0u || output_channel > 8u) {
         return kPlcSlotLoadInvalidArgument;
     }
 
     PlcObjectSymbolRecordV1 symbols[2] = {};
     PlcObjectRelocationRecordV1 relocations[2] = {};
-    build_waveshare_mirror_symbols(device_id, channel, symbols, relocations);
+    build_waveshare_mirror_symbols(device_id, input_channel, output_channel, symbols, relocations);
 
     uint8_t object_code[] = {
         0x10u, 0x00u, 0x00u,
@@ -393,7 +437,7 @@ static PlcSlotLoadStatusV1 build_mirror_program_package(const PointCatalog& cata
         return kPlcSlotLoadLinkFailed;
     }
 
-    const size_t package_size = sizeof(PlcLinkedProgramPackageHeaderV1) + sizeof(linked_code);
+    const size_t package_size = sizeof(PlcLinkedProgramPackageHeaderV1) + sizeof(linked_code) + sizeof(params);
     if (package_size > package_capacity) {
         return kPlcSlotLoadBytecodeTooLarge;
     }
@@ -411,6 +455,7 @@ static PlcSlotLoadStatusV1 build_mirror_program_package(const PointCatalog& cata
     package_header.runtime_header_addr = kPlcRuntimeHeaderAddr;
     package_header.store_epoch = publisher.storeEpoch();
     package_header.linked_code_checksum = 2166136261u;
+    package_header.params_size = sizeof(params);
     for (size_t i = 0u; i < sizeof(linked_code); ++i) {
         package_header.linked_code_checksum ^= linked_code[i];
         package_header.linked_code_checksum *= 16777619u;
@@ -418,6 +463,7 @@ static PlcSlotLoadStatusV1 build_mirror_program_package(const PointCatalog& cata
 
     std::memcpy(package_out, &package_header, sizeof(package_header));
     std::memcpy(package_out + sizeof(package_header), linked_code, sizeof(linked_code));
+    std::memcpy(package_out + sizeof(package_header) + sizeof(linked_code), &params, sizeof(params));
     package_size_out = package_size;
     return kPlcSlotLoadOk;
 }
@@ -673,14 +719,16 @@ void NodeNetCore::attachPlcRuntimePublisher(const PlcRuntimePublisherV1* publish
 }
 
 void NodeNetCore::setPlcSlotRuntimeDiagnostics(uint8_t slot_id,
-                                               uint8_t channel,
+                                               uint8_t input_channel,
+                                               uint8_t output_channel,
                                                const char* source,
                                                uint16_t input_runtime_index,
                                                uint16_t output_runtime_index)
 {
     _plcSlotRuntimeDiagnostics.valid = true;
     _plcSlotRuntimeDiagnostics.slot_id = slot_id;
-    _plcSlotRuntimeDiagnostics.channel = channel;
+    _plcSlotRuntimeDiagnostics.input_channel = input_channel;
+    _plcSlotRuntimeDiagnostics.output_channel = output_channel;
     copy_text(_plcSlotRuntimeDiagnostics.source,
               sizeof(_plcSlotRuntimeDiagnostics.source),
               (source != nullptr && source[0] != '\0') ? source : "unknown");
@@ -835,6 +883,7 @@ void NodeNetCore::processInputQueue()
         NodeNetCommands::Cmd cmd = NodeNetCommands::parse(request["cmd"] | "");
         JsonDocument response(&g_sdram_json_allocator);
         response["to"] = request["from"] | 0u;
+        nodeHeader(response);
         bool queueResponse = false;
 
         switch (cmd) {
@@ -879,8 +928,8 @@ void NodeNetCore::processInputQueue()
             case NodeNetCommands::Cmd::PLC_SLOTS_REQ:
                 queueResponse = handlePlcSlotsRequest(request, response);
                 break;
-            case NodeNetCommands::Cmd::PLC_LOAD_MIRROR_REQ:
-                queueResponse = handlePlcLoadMirrorRequest(request, response);
+            case NodeNetCommands::Cmd::PLC_LOAD_REQ:
+                queueResponse = handlePlcLoadRequest(request, response);
                 break;
             case NodeNetCommands::UPDATE_PROPERTY:{
                 if (!updateProperty(request)) {
@@ -903,6 +952,8 @@ void NodeNetCore::processInputQueue()
         const uint8_t destAddr = response_destination_from_request(request);
         if (!enqueueOutputMessage(destAddr, response)) {
             _logger->Warning("NodeNetCore response enqueue failed for dst=%u", msg.srcAddr);
+        } else {
+            processOutputQueue();
         }
     }
 }
@@ -1545,24 +1596,38 @@ bool NodeNetCore::handlePlcStatusRequest(const JsonDocument& request, JsonDocume
                              ? _plcSlotRuntimeDiagnostics.source
                              : (loaded ? "unknown" : "none");
 
-    uint8_t channel = has_slot_diag ? _plcSlotRuntimeDiagnostics.channel : static_cast<uint8_t>(request["channel"] | 0u);
-    uint16_t input_runtime_index = has_slot_diag
-                                       ? _plcSlotRuntimeDiagnostics.input_runtime_index
-                                       : 0xFFFFu;
-    uint16_t output_runtime_index = has_slot_diag
-                                        ? _plcSlotRuntimeDiagnostics.output_runtime_index
-                                        : 0xFFFFu;
+    PlcMirrorProgramParamsV1 mirror_params = {};
+    const bool has_slot_params = PlcSlotLoaderV1::readMirrorProgramParams(slot_id, mirror_params);
+    uint8_t input_channel = has_slot_params
+                                ? static_cast<uint8_t>(mirror_params.input_channel)
+                                : (has_slot_diag ? _plcSlotRuntimeDiagnostics.input_channel
+                                                 : 0u);
+    uint8_t output_channel = has_slot_params
+                                 ? static_cast<uint8_t>(mirror_params.output_channel)
+                                 : (has_slot_diag ? _plcSlotRuntimeDiagnostics.output_channel
+                                                  : 0u);
+    uint16_t input_runtime_index = has_slot_params
+                                       ? mirror_params.input_runtime_index
+                                       : (has_slot_diag ? _plcSlotRuntimeDiagnostics.input_runtime_index
+                                                        : 0xFFFFu);
+    uint16_t output_runtime_index = has_slot_params
+                                        ? mirror_params.output_runtime_index
+                                        : (has_slot_diag ? _plcSlotRuntimeDiagnostics.output_runtime_index
+                                                         : 0xFFFFu);
     bool runtime_map_ok = input_runtime_index != 0xFFFFu && output_runtime_index != 0xFFFFu;
     if (!runtime_map_ok) {
         runtime_map_ok = resolve_waveshare_channel_runtime_indices(_pointCatalog,
                                                                    _plcRuntimePublisher,
                                                                    deviceId,
-                                                                   channel,
+                                                                   input_channel,
+                                                                   output_channel,
                                                                    input_runtime_index,
                                                                    output_runtime_index);
     }
 
-    response["channel"] = channel;
+    JsonObject params_doc = response["params"].to<JsonObject>();
+    params_doc["inputChannel"] = input_channel;
+    params_doc["outputChannel"] = output_channel;
     response["runtimeMapOk"] = runtime_map_ok;
     if (runtime_map_ok) {
         response["inputRuntimeIndex"] = input_runtime_index;
@@ -1638,17 +1703,25 @@ bool NodeNetCore::handlePlcSlotsRequest(const JsonDocument& request, JsonDocumen
     return true;
 }
 
-bool NodeNetCore::handlePlcLoadMirrorRequest(const JsonDocument& request, JsonDocument& response)
+bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument& response)
 {
-    response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_LOAD_MIRROR_RES);
+    response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_LOAD_RES);
 
+    const char* program_type = request["programType"] | "mirrorBool";
     const uint16_t slot_id = static_cast<uint16_t>(request["slotId"] | 0u);
-    const uint8_t channel = static_cast<uint8_t>(request["channel"] | 0u);
     const bool persist_to_flash = request["persistToFlash"] | false;
+    const JsonObjectConst params_obj = request["params"].as<JsonObjectConst>();
+    uint8_t input_channel = static_cast<uint8_t>(params_obj["inputChannel"] | 0u);
+    uint8_t output_channel = static_cast<uint8_t>(params_obj["outputChannel"] | 0u);
 
     if (_plcRuntimePublisher == nullptr) {
         response["ok"] = false;
         response["error"] = "runtimeUnavailable";
+        return true;
+    }
+    if (std::strcmp(program_type, "mirrorBool") != 0 && std::strcmp(program_type, "mirror") != 0) {
+        response["ok"] = false;
+        response["error"] = "unsupportedProgramType";
         return true;
     }
     if (slot_id >= kPlcSlotCountV1) {
@@ -1656,7 +1729,7 @@ bool NodeNetCore::handlePlcLoadMirrorRequest(const JsonDocument& request, JsonDo
         response["error"] = "slotOutOfRange";
         return true;
     }
-    if (channel == 0u || channel > 8u) {
+    if (input_channel == 0u || input_channel > 8u || output_channel == 0u || output_channel > 8u) {
         response["ok"] = false;
         response["error"] = "channelOutOfRange";
         return true;
@@ -1671,11 +1744,15 @@ bool NodeNetCore::handlePlcLoadMirrorRequest(const JsonDocument& request, JsonDo
                                                                           *_plcRuntimePublisher,
                                                                           deviceId,
                                                                           slot_id,
-                                                                          channel);
+                                                                          input_channel,
+                                                                          output_channel);
     response["slotId"] = slot_id;
-    response["channel"] = channel;
+    response["programType"] = "mirrorBool";
     response["persistToFlash"] = persist_to_flash;
     response["loadStatus"] = static_cast<uint8_t>(load_result.status);
+    JsonObject params_out = response["params"].to<JsonObject>();
+    params_out["inputChannel"] = input_channel;
+    params_out["outputChannel"] = output_channel;
     if (load_result.status != kPlcSlotLoadOk) {
         response["ok"] = false;
         response["error"] = "loadFailed";
@@ -1687,19 +1764,45 @@ bool NodeNetCore::handlePlcLoadMirrorRequest(const JsonDocument& request, JsonDo
     const bool runtime_map_ok = resolve_waveshare_channel_runtime_indices(_pointCatalog,
                                                                           _plcRuntimePublisher,
                                                                           deviceId,
-                                                                          channel,
+                                                                          input_channel,
+                                                                          output_channel,
                                                                           input_runtime_index,
                                                                           output_runtime_index);
+    if (runtime_map_ok) {
+        const PlcMirrorProgramParamsV1 slot_params = make_mirror_program_params(input_channel,
+                                                                                output_channel,
+                                                                                input_runtime_index,
+                                                                                output_runtime_index,
+                                                                                _plcRuntimePublisher->storeEpoch());
+        if (!PlcSlotLoaderV1::writeSlotParams(slot_id, &slot_params, sizeof(slot_params))) {
+            response["ok"] = false;
+            response["error"] = "paramsWriteFailed";
+            return true;
+        }
+    }
 
     PlcSlotLoadStatusV1 flash_status = kPlcSlotLoadInvalidArgument;
     const char* source_name = "local";
     if (persist_to_flash) {
-        uint8_t package_bytes[sizeof(PlcLinkedProgramPackageHeaderV1) + 7u] = {};
+        if (!runtime_map_ok) {
+            response["ok"] = false;
+            response["error"] = "runtimeMapFailed";
+            return true;
+        }
+
+        const PlcMirrorProgramParamsV1 package_params = make_mirror_program_params(input_channel,
+                                                                                    output_channel,
+                                                                                    input_runtime_index,
+                                                                                    output_runtime_index,
+                                                                                    _plcRuntimePublisher->storeEpoch());
+        uint8_t package_bytes[sizeof(PlcLinkedProgramPackageHeaderV1) + 7u + sizeof(PlcMirrorProgramParamsV1)] = {};
         size_t package_size = 0u;
         flash_status = build_mirror_program_package(_pointCatalog,
                                                     *_plcRuntimePublisher,
                                                     deviceId,
-                                                    channel,
+                                                    input_channel,
+                                                    output_channel,
+                                                    package_params,
                                                     package_bytes,
                                                     sizeof(package_bytes),
                                                     package_size);
@@ -1733,7 +1836,8 @@ bool NodeNetCore::handlePlcLoadMirrorRequest(const JsonDocument& request, JsonDo
 
     if (slot_id == 0u && runtime_map_ok) {
         setPlcSlotRuntimeDiagnostics(static_cast<uint8_t>(slot_id),
-                                     channel,
+                                     input_channel,
+                                     output_channel,
                                      source_name,
                                      input_runtime_index,
                                      output_runtime_index);

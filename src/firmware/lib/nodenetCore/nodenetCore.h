@@ -51,7 +51,8 @@ class NodeNetCore
         bool updatePointCommandState(const PointIdentity& id, const PointCommandState& state);
         void attachPlcRuntimePublisher(const PlcRuntimePublisherV1* publisher);
         void setPlcSlotRuntimeDiagnostics(uint8_t slot_id,
-                          uint8_t channel,
+                                          uint8_t input_channel,
+                                          uint8_t output_channel,
                           const char* source,
                           uint16_t input_runtime_index,
                           uint16_t output_runtime_index);
@@ -151,7 +152,8 @@ class NodeNetCore
         struct PlcSlotRuntimeDiagnostics {
             bool valid = false;
             uint8_t slot_id = 0u;
-            uint8_t channel = 0u;
+            uint8_t input_channel = 0u;
+            uint8_t output_channel = 0u;
             char source[8] = {};
             uint16_t input_runtime_index = 0xFFFFu;
             uint16_t output_runtime_index = 0xFFFFu;
@@ -219,7 +221,7 @@ class NodeNetCore
         bool handlePointDeleteRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePlcStatusRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePlcSlotsRequest(const JsonDocument& request, JsonDocument& response);
-        bool handlePlcLoadMirrorRequest(const JsonDocument& request, JsonDocument& response);
+    bool handlePlcLoadRequest(const JsonDocument& request, JsonDocument& response);
 
         bool ensureFlashDbReady();
         bool savePointCatalog();

@@ -41,6 +41,13 @@ Both browse commands support pagination:
 - `total`: total number of matching elements
 - `hasMore`: `true` when more elements are available
 
+Transport note:
+
+- when requests are sent from a PC through the NodeNet master bridge, use `from = 255`
+- the firmware routes replies back to `request.from`
+- `from = 255` is treated as the desktop endpoint and the reply is re-emitted so the PC can receive it through the master
+- using `from = 5` or another regular NodeNet address sends the reply to that NodeNet node, not back to the PC link
+
 ## pointDefsReq
 
 Requests point definitions from the local catalog.
@@ -358,7 +365,7 @@ Requests detailed PLC runtime status for one slot.
 ```json
 {
   "cmd": "plcStatusReq",
-  "from": 5,
+  "from": 255,
   "to": 4,
   "slotId": 0
 }
@@ -384,7 +391,10 @@ Requests detailed PLC runtime status for one slot.
   "maxInstructionsPerScan": 16,
   "maxScanTimeUs": 5000,
   "source": "local",
-  "channel": 1,
+  "params": {
+    "inputChannel": 1,
+    "outputChannel": 1
+  },
   "runtimeMapOk": true,
   "inputRuntimeIndex": 0,
   "outputRuntimeIndex": 1,
@@ -410,7 +420,7 @@ Requests a compact inventory of PLC slots with pagination.
 ```json
 {
   "cmd": "plcSlotsReq",
-  "from": 5,
+  "from": 255,
   "to": 4,
   "offset": 0,
   "limit": 4
@@ -455,7 +465,7 @@ Requests a compact inventory of PLC slots with pagination.
 }
 ```
 
-## plcLoadMirrorReq
+## plcLoadReq
 
 Loads the built-in boolean mirror PLC program into a chosen slot.
 
@@ -465,11 +475,15 @@ This is a firmware-side service command intended for runtime validation before t
 
 ```json
 {
-  "cmd": "plcLoadMirrorReq",
-  "from": 5,
+  "cmd": "plcLoadReq",
+  "from": 255,
   "to": 4,
   "slotId": 0,
-  "channel": 1,
+  "programType": "mirrorBool",
+  "params": {
+    "inputChannel": 1,
+    "outputChannel": 1
+  },
   "persistToFlash": true
 }
 ```
@@ -477,18 +491,24 @@ This is a firmware-side service command intended for runtime validation before t
 Fields:
 
 - `slotId`: target PLC slot, `0..15`
-- `channel`: Waveshare mirror pair number, `1..8`
+- `programType`: currently `mirrorBool`
+- `params.inputChannel`: Waveshare input channel, `1..8`
+- `params.outputChannel`: Waveshare output channel, `1..8`
 - `persistToFlash`: optional, only accepted for `slotId = 0`
 
 ### Response
 
 ```json
 {
-  "cmd": "plcLoadMirrorRes",
+  "cmd": "plcLoadRes",
   "to": 5,
   "ok": true,
   "slotId": 0,
-  "channel": 1,
+  "programType": "mirrorBool",
+  "params": {
+    "inputChannel": 1,
+    "outputChannel": 1
+  },
   "persistToFlash": true,
   "loadStatus": 0,
   "flashStatus": 0,

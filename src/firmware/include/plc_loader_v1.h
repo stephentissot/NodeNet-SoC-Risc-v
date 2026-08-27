@@ -20,10 +20,17 @@ static constexpr uint32_t kPlcLinkedProgramPackageMagicV1 = 0x31474B50u;
 static constexpr uint32_t kPlcSlotDirectoryMagicV1 = 0x31524453u;
 static constexpr uint32_t kPlcSlotStackSizeBytesV1 = 1024u;
 static constexpr uint32_t kPlcSlotTimerSizeBytesV1 = 512u;
+static constexpr uint32_t kPlcSlotParamsSizeBytesV1 = 256u;
 static constexpr uint32_t kPlcSlotScratchSizeBytesV1 = 512u;
 static constexpr uint32_t kPlcSlotStackEntryBytesV1 = 8u;
 static constexpr uint32_t kPlcSlotTimerEntryBytesV1 = 8u;
 static constexpr uint32_t kPlcSlotManifestStatusLoadedV1 = 1u;
+static constexpr uint32_t kPlcSlotParamsMagicV1 = 0x31524150u;
+
+enum PlcProgramKindV1 : uint16_t {
+    kPlcProgramKindUnknown = 0u,
+    kPlcProgramKindMirrorBool = 1u,
+};
 
 enum PlcSlotLoadStatusV1 : uint8_t {
     kPlcSlotLoadOk = 0u,
@@ -36,9 +43,27 @@ enum PlcSlotLoadStatusV1 : uint8_t {
     kPlcSlotLoadAbiMismatch = 7u,
     kPlcSlotLoadChecksumMismatch = 8u,
     kPlcSlotLoadFlashReadFailed = 9u,
+    kPlcSlotLoadParamsTooLarge = 10u,
 };
 
 #pragma pack(push, 1)
+struct PlcSlotParamsHeaderV1 {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t program_kind;
+    uint16_t payload_size;
+    uint16_t flags;
+    uint32_t load_epoch;
+};
+
+struct PlcMirrorProgramParamsV1 {
+    PlcSlotParamsHeaderV1 header;
+    uint16_t input_channel;
+    uint16_t output_channel;
+    uint16_t input_runtime_index;
+    uint16_t output_runtime_index;
+};
+
 struct PlcProgramControlBlockV1 {
     uint32_t magic;
     uint16_t version;
@@ -57,6 +82,8 @@ struct PlcProgramControlBlockV1 {
     uint32_t timer_count;
     uint32_t max_instructions_per_scan;
     uint32_t max_scan_time_us;
+    uint32_t params_base;
+    uint32_t params_size;
 };
 
 struct PlcLinkedImageHeaderV1 {
@@ -70,7 +97,7 @@ struct PlcLinkedImageHeaderV1 {
     uint16_t relocation_count;
     uint32_t runtime_header_addr;
     uint32_t linked_code_checksum;
-    uint32_t reserved0;
+    uint32_t params_size;
 };
 
 struct PlcLinkedProgramPackageHeaderV1 {
@@ -87,7 +114,7 @@ struct PlcLinkedProgramPackageHeaderV1 {
     uint32_t runtime_header_addr;
     uint32_t store_epoch;
     uint32_t linked_code_checksum;
-    uint32_t reserved0;
+    uint32_t params_size;
 };
 
 struct PlcSlotDirectoryHeaderV1 {
@@ -112,6 +139,8 @@ struct PlcSlotManifestV1 {
     uint32_t stack_size;
     uint32_t timer_base;
     uint32_t timer_count;
+    uint32_t params_base;
+    uint32_t params_size;
     uint32_t scratch_base;
     uint32_t scratch_size;
     uint32_t runtime_header_addr;
@@ -120,11 +149,13 @@ struct PlcSlotManifestV1 {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(PlcProgramControlBlockV1) == 64u, "Unexpected control block size");
+static_assert(sizeof(PlcSlotParamsHeaderV1) == 16u, "Unexpected params header size");
+static_assert(sizeof(PlcMirrorProgramParamsV1) == 24u, "Unexpected mirror params size");
+static_assert(sizeof(PlcProgramControlBlockV1) == 72u, "Unexpected control block size");
 static_assert(sizeof(PlcLinkedImageHeaderV1) == 36u, "Unexpected linked image header size");
 static_assert(sizeof(PlcLinkedProgramPackageHeaderV1) == 48u, "Unexpected linked program package header size");
 static_assert(sizeof(PlcSlotDirectoryHeaderV1) == 16u, "Unexpected slot directory header size");
-static_assert(sizeof(PlcSlotManifestV1) == 64u, "Unexpected slot manifest size");
+static_assert(sizeof(PlcSlotManifestV1) == 72u, "Unexpected slot manifest size");
 
 struct PlcSlotLayoutV1 {
     uint32_t linked_image_header_addr;
@@ -134,6 +165,8 @@ struct PlcSlotLayoutV1 {
     uint32_t stack_size;
     uint32_t timer_base;
     uint32_t timer_size;
+    uint32_t params_base;
+    uint32_t params_capacity;
     uint32_t scratch_base;
     uint32_t scratch_size;
 };
@@ -180,7 +213,9 @@ public:
         layout.linked_code_addr = alignUp(slot_base + static_cast<uint32_t>(sizeof(PlcLinkedImageHeaderV1)), 16u);
         layout.scratch_base = slot_limit - kPlcSlotScratchSizeBytesV1;
         layout.scratch_size = kPlcSlotScratchSizeBytesV1;
-        layout.timer_base = layout.scratch_base - kPlcSlotTimerSizeBytesV1;
+        layout.params_base = layout.scratch_base - kPlcSlotParamsSizeBytesV1;
+        layout.params_capacity = kPlcSlotParamsSizeBytesV1;
+        layout.timer_base = layout.params_base - kPlcSlotTimerSizeBytesV1;
         layout.timer_size = kPlcSlotTimerSizeBytesV1;
         layout.stack_base = layout.timer_base - kPlcSlotStackSizeBytesV1;
         layout.stack_size = kPlcSlotStackSizeBytesV1;
@@ -264,6 +299,67 @@ public:
         return result;
     }
 
+    static bool writeSlotParams(uint16_t slot_id, const void* params_bytes, uint32_t params_size)
+    {
+        if (slot_id >= kPlcSlotCountV1) {
+            return false;
+        }
+
+        const PlcSlotLayoutV1 layout = slotLayout(slot_id);
+        if (params_size > layout.params_capacity) {
+            return false;
+        }
+
+        uint8_t* params_dst = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(layout.params_base));
+        std::memset(params_dst, 0, layout.params_capacity);
+        if (params_size != 0u) {
+            if (params_bytes == nullptr) {
+                return false;
+            }
+            std::memcpy(params_dst, params_bytes, params_size);
+        }
+
+        auto* linked_header = reinterpret_cast<PlcLinkedImageHeaderV1*>(static_cast<uintptr_t>(layout.linked_image_header_addr));
+        linked_header->params_size = params_size;
+
+        auto* slot_manifest = reinterpret_cast<PlcSlotManifestV1*>(static_cast<uintptr_t>(slotManifestAddress(slot_id)));
+        slot_manifest->params_base = layout.params_base;
+        slot_manifest->params_size = params_size;
+
+        auto* control_block = reinterpret_cast<PlcProgramControlBlockV1*>(static_cast<uintptr_t>(slotControlAddress(slot_id)));
+        control_block->params_base = layout.params_base;
+        control_block->params_size = params_size;
+        return true;
+    }
+
+    static bool readMirrorProgramParams(uint16_t slot_id, PlcMirrorProgramParamsV1& params_out)
+    {
+        if (slot_id >= kPlcSlotCountV1) {
+            return false;
+        }
+
+        const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+            static_cast<uintptr_t>(slotControlAddress(slot_id)));
+        if (control_block->magic != kPlcProgramControlBlockMagicV1 ||
+            control_block->slot_id != slot_id ||
+            control_block->params_base == 0u ||
+            control_block->params_size < sizeof(PlcMirrorProgramParamsV1)) {
+            return false;
+        }
+
+        const auto* params = reinterpret_cast<const PlcMirrorProgramParamsV1*>(
+            static_cast<uintptr_t>(control_block->params_base));
+        if (params->header.magic != kPlcSlotParamsMagicV1 ||
+            params->header.version != kPlcRuntimeAbiV1Version ||
+            params->header.program_kind != kPlcProgramKindMirrorBool ||
+            params->header.payload_size < sizeof(PlcMirrorProgramParamsV1)) {
+            return false;
+        }
+
+        params_out = *params;
+        return true;
+    }
+
     static PlcSlotLoadResultV1 loadLinkedProgramPackageIntoSlot(const PlcRuntimePublisherV1& publisher,
                                                                 uint16_t slot_id,
                                                                 const uint8_t* package_bytes,
@@ -286,7 +382,8 @@ public:
 
         PlcLinkedProgramPackageHeaderV1 package_header = {};
         const uint8_t* linked_code_bytes = nullptr;
-        result.status = parseLinkedProgramPackage(package_bytes, package_size, package_header, linked_code_bytes);
+        const uint8_t* params_bytes = nullptr;
+        result.status = parseLinkedProgramPackage(package_bytes, package_size, package_header, linked_code_bytes, params_bytes);
         if (result.status != kPlcSlotLoadOk) {
             return result;
         }
@@ -330,6 +427,11 @@ public:
                                 package_header.runtime_header_addr,
                                 package_header.store_epoch,
                                 package_header.linked_code_checksum);
+
+        if (!writeSlotParams(slot_id, params_bytes, package_header.params_size)) {
+            result.status = kPlcSlotLoadParamsTooLarge;
+            return result;
+        }
 
         result.status = kPlcSlotLoadOk;
         return result;
@@ -416,6 +518,21 @@ public:
                                 package_header.store_epoch,
                                 package_header.linked_code_checksum);
 
+        uint8_t params_bytes[kPlcSlotParamsSizeBytesV1] = {};
+        if (package_header.params_size != 0u) {
+            if (!flashReadBytes(flash,
+                                flash_offset + static_cast<uint32_t>(sizeof(PlcLinkedProgramPackageHeaderV1)) + package_header.code_size,
+                                params_bytes,
+                                package_header.params_size)) {
+                result.status = kPlcSlotLoadFlashReadFailed;
+                return result;
+            }
+        }
+        if (!writeSlotParams(slot_id, params_bytes, package_header.params_size)) {
+            result.status = kPlcSlotLoadParamsTooLarge;
+            return result;
+        }
+
         result.status = kPlcSlotLoadOk;
         return result;
     }
@@ -451,7 +568,8 @@ private:
     static PlcSlotLoadStatusV1 parseLinkedProgramPackage(const uint8_t* package_bytes,
                                                          size_t package_size,
                                                          PlcLinkedProgramPackageHeaderV1& package_header,
-                                                         const uint8_t*& linked_code_bytes)
+                                                         const uint8_t*& linked_code_bytes,
+                                                         const uint8_t*& params_bytes)
     {
         if (package_bytes == nullptr || package_size < sizeof(PlcLinkedProgramPackageHeaderV1)) {
             return kPlcSlotLoadParseFailed;
@@ -466,6 +584,7 @@ private:
 
         package_header = *header;
         linked_code_bytes = package_bytes + sizeof(PlcLinkedProgramPackageHeaderV1);
+        params_bytes = linked_code_bytes + package_header.code_size;
         return kPlcSlotLoadOk;
     }
 
@@ -482,6 +601,12 @@ private:
 
         const uint32_t code_offset = static_cast<uint32_t>(sizeof(PlcLinkedProgramPackageHeaderV1));
         if ((code_offset + header.code_size) > package_capacity) {
+            return kPlcSlotLoadParseFailed;
+        }
+        if (header.params_size > kPlcSlotParamsSizeBytesV1) {
+            return kPlcSlotLoadParamsTooLarge;
+        }
+        if ((code_offset + header.code_size + header.params_size) > package_capacity) {
             return kPlcSlotLoadParseFailed;
         }
         return kPlcSlotLoadOk;
@@ -541,6 +666,7 @@ private:
         next_header.relocation_count = relocation_count;
         next_header.runtime_header_addr = runtime_header_addr;
         next_header.linked_code_checksum = linked_code_checksum;
+        next_header.params_size = 0u;
         std::memcpy(linked_header, &next_header, sizeof(next_header));
 
         auto* directory_header = reinterpret_cast<PlcSlotDirectoryHeaderV1*>(
@@ -566,6 +692,8 @@ private:
         next_manifest.stack_size = layout.stack_size / kPlcSlotStackEntryBytesV1;
         next_manifest.timer_base = layout.timer_base;
         next_manifest.timer_count = layout.timer_size / kPlcSlotTimerEntryBytesV1;
+        next_manifest.params_base = layout.params_base;
+        next_manifest.params_size = 0u;
         next_manifest.scratch_base = layout.scratch_base;
         next_manifest.scratch_size = layout.scratch_size;
         next_manifest.runtime_header_addr = runtime_header_addr;
@@ -588,7 +716,12 @@ private:
         next.timer_count = layout.timer_size / kPlcSlotTimerEntryBytesV1;
         next.max_instructions_per_scan = max_instructions_per_scan;
         next.max_scan_time_us = max_scan_time_us;
+        next.params_base = layout.params_base;
+        next.params_size = 0u;
         std::memcpy(control_block, &next, sizeof(next));
+
+        uint8_t* params_dst = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(layout.params_base));
+        std::memset(params_dst, 0, layout.params_capacity);
     }
 
     static uint32_t slotManifestTableBase()
