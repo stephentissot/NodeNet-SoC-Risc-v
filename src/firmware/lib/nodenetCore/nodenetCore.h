@@ -50,6 +50,11 @@ class NodeNetCore
         bool updatePointState(const PointIdentity& id, const PointState& state);
         bool updatePointCommandState(const PointIdentity& id, const PointCommandState& state);
         void attachPlcRuntimePublisher(const PlcRuntimePublisherV1* publisher);
+        void setPlcSlotRuntimeDiagnostics(uint8_t slot_id,
+                          uint8_t channel,
+                          const char* source,
+                          uint16_t input_runtime_index,
+                          uint16_t output_runtime_index);
 
         HardwareType hardwareType = HardwareType::UNDEFINED;
 
@@ -134,6 +139,7 @@ class NodeNetCore
         NodeLogger* _logger = nullptr;
         Flash* _flash = nullptr;
         PlcCore _plcCore;
+        const PlcRuntimePublisherV1* _plcRuntimePublisher = nullptr;
         PointCatalog _pointCatalog;
         bool _pointCatalogAutosaveEnabled = true;
         bool _pointCatalogDirty = false;
@@ -141,6 +147,15 @@ class NodeNetCore
         MessageQueue<kOutputQueueCapacity> _outputQueue;
         volatile bool _inputQueueOverflow = false;
         volatile bool _outputQueueOverflow = false;
+
+        struct PlcSlotRuntimeDiagnostics {
+            bool valid = false;
+            uint8_t slot_id = 0u;
+            uint8_t channel = 0u;
+            char source[8] = {};
+            uint16_t input_runtime_index = 0xFFFFu;
+            uint16_t output_runtime_index = 0xFFFFu;
+        } _plcSlotRuntimeDiagnostics;
 
         static void nodenet_broadcast_callback_trampoline(const NodeNetMessage& msg);
         static void nodenet_message_callback_trampoline(const NodeNetMessage& msg);
@@ -202,6 +217,7 @@ class NodeNetCore
         bool handlePointStatesRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePointUpsertRequest(const JsonDocument& request, JsonDocument& response);
         bool handlePointDeleteRequest(const JsonDocument& request, JsonDocument& response);
+        bool handlePlcStatusRequest(const JsonDocument& request, JsonDocument& response);
 
         bool ensureFlashDbReady();
         bool savePointCatalog();

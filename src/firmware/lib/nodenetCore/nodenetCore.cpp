@@ -2,6 +2,8 @@
 #include <cstdio>
 #include <cstring>
 #include "flash.h"
+#include "plc_loader_v1.h"
+#include "plc_runtime_abi.h"
 #include "sdram.h"
 
 // Broadcast whoIs example {"cmd":"WhoIs", "from":5, "to": 4}
@@ -120,6 +122,62 @@ static uint8_t response_destination_from_request(const JsonDocument& request) {
 
 static bool json_variant_is_integer(JsonVariantConst value) {
     return value.is<int>() || value.is<unsigned int>() || value.is<long>() || value.is<unsigned long>();
+}
+
+static bool plc_control_block_loaded(const PlcProgramControlBlockV1& control_block, uint16_t slot_id) {
+    return control_block.magic == kPlcProgramControlBlockMagicV1 &&
+           control_block.slot_id == slot_id &&
+           control_block.bytecode_size != 0u &&
+           control_block.bytecode_base != 0u;
+}
+
+static const char* plc_slot_state_name(const PlcProgramControlBlockV1& control_block, uint16_t slot_id) {
+    if (!plc_control_block_loaded(control_block, slot_id)) {
+        return "empty";
+    }
+    if ((control_block.status & 0x80000000u) != 0u) {
+        return "faulted";
+    }
+    if (control_block.status == 2u) {
+        return "running";
+    }
+    return "loaded";
+}
+
+static bool resolve_waveshare_channel_runtime_indices(const PointCatalog& catalog,
+                                                      const PlcRuntimePublisherV1* publisher,
+                                                      const char* device_id,
+                                                      uint8_t channel,
+                                                      uint16_t& input_runtime_index,
+                                                      uint16_t& output_runtime_index) {
+    if (publisher == nullptr || device_id == nullptr || channel == 0u || channel > 8u) {
+        return false;
+    }
+
+    char input_point_id[16] = {};
+    char output_point_id[16] = {};
+    (void)snprintf(input_point_id, sizeof(input_point_id), "input%u", static_cast<unsigned>(channel));
+    (void)snprintf(output_point_id, sizeof(output_point_id), "output%u", static_cast<unsigned>(channel));
+
+    PointIdentity input_id = {};
+    PointIdentity output_id = {};
+    copy_text(input_id.device_id, sizeof(input_id.device_id), device_id);
+    copy_text(input_id.feature, sizeof(input_id.feature), "modbus0.waveshare8ch");
+    copy_text(input_id.point_id, sizeof(input_id.point_id), input_point_id);
+    copy_text(output_id.device_id, sizeof(output_id.device_id), device_id);
+    copy_text(output_id.feature, sizeof(output_id.feature), "modbus0.waveshare8ch");
+    copy_text(output_id.point_id, sizeof(output_id.point_id), output_point_id);
+
+    const uint16_t resolved_input = publisher->runtimeIndexForIdentity(catalog, input_id);
+    const uint16_t resolved_output = publisher->runtimeIndexForIdentity(catalog, output_id);
+    if (resolved_input == PlcRuntimePublisherV1::kInvalidPointIndex ||
+        resolved_output == PlcRuntimePublisherV1::kInvalidPointIndex) {
+        return false;
+    }
+
+    input_runtime_index = resolved_input;
+    output_runtime_index = resolved_output;
+    return true;
 }
 
 static uint32_t point_catalog_checksum(const uint8_t* data, size_t len) {
@@ -441,7 +499,24 @@ bool NodeNetCore::updatePointCommandState(const PointIdentity& id, const PointCo
 
 void NodeNetCore::attachPlcRuntimePublisher(const PlcRuntimePublisherV1* publisher)
 {
+    _plcRuntimePublisher = publisher;
     _plcCore.attachRuntimePublisher(publisher);
+}
+
+void NodeNetCore::setPlcSlotRuntimeDiagnostics(uint8_t slot_id,
+                                               uint8_t channel,
+                                               const char* source,
+                                               uint16_t input_runtime_index,
+                                               uint16_t output_runtime_index)
+{
+    _plcSlotRuntimeDiagnostics.valid = true;
+    _plcSlotRuntimeDiagnostics.slot_id = slot_id;
+    _plcSlotRuntimeDiagnostics.channel = channel;
+    copy_text(_plcSlotRuntimeDiagnostics.source,
+              sizeof(_plcSlotRuntimeDiagnostics.source),
+              (source != nullptr && source[0] != '\0') ? source : "unknown");
+    _plcSlotRuntimeDiagnostics.input_runtime_index = input_runtime_index;
+    _plcSlotRuntimeDiagnostics.output_runtime_index = output_runtime_index;
 }
 
 
@@ -628,6 +703,9 @@ void NodeNetCore::processInputQueue()
                 break;
             case NodeNetCommands::Cmd::POINT_DELETE:
                 queueResponse = handlePointDeleteRequest(request, response);
+                break;
+            case NodeNetCommands::Cmd::PLC_STATUS_REQ:
+                queueResponse = handlePlcStatusRequest(request, response);
                 break;
             case NodeNetCommands::UPDATE_PROPERTY:{
                 if (!updateProperty(request)) {
@@ -1255,6 +1333,74 @@ bool NodeNetCore::handlePointDeleteRequest(const JsonDocument& request, JsonDocu
     } else if (!saved) {
         response["error"] = "saveFailed";
     }
+    return true;
+}
+
+bool NodeNetCore::handlePlcStatusRequest(const JsonDocument& request, JsonDocument& response)
+{
+    response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_STATUS_RES);
+
+    const uint8_t slot_id = request["slotId"] | 0u;
+    if (slot_id >= kPlcSlotCountV1) {
+        response["ok"] = false;
+        response["error"] = "slotOutOfRange";
+        return true;
+    }
+
+    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+    const bool loaded = plc_control_block_loaded(*control_block, slot_id);
+
+    response["ok"] = true;
+    response["slotId"] = slot_id;
+    response["state"] = plc_slot_state_name(*control_block, slot_id);
+    response["loaded"] = loaded;
+    response["status"] = loaded ? control_block->status : 0u;
+    response["pc"] = loaded ? control_block->pc : 0u;
+    response["cycleCounter"] = loaded ? control_block->cycle_counter : 0u;
+    response["faultCode"] = loaded ? control_block->fault_code : 0u;
+    response["faultInfo"] = loaded ? control_block->fault_info : 0u;
+    response["bytecodeBase"] = loaded ? control_block->bytecode_base : 0u;
+    response["bytecodeSize"] = loaded ? control_block->bytecode_size : 0u;
+    response["maxInstructionsPerScan"] = loaded ? control_block->max_instructions_per_scan : 0u;
+    response["maxScanTimeUs"] = loaded ? control_block->max_scan_time_us : 0u;
+
+    const bool has_slot_diag = _plcSlotRuntimeDiagnostics.valid && _plcSlotRuntimeDiagnostics.slot_id == slot_id;
+    response["source"] = has_slot_diag
+                             ? _plcSlotRuntimeDiagnostics.source
+                             : (loaded ? "unknown" : "none");
+
+    uint8_t channel = has_slot_diag ? _plcSlotRuntimeDiagnostics.channel : static_cast<uint8_t>(request["channel"] | 0u);
+    uint16_t input_runtime_index = has_slot_diag
+                                       ? _plcSlotRuntimeDiagnostics.input_runtime_index
+                                       : 0xFFFFu;
+    uint16_t output_runtime_index = has_slot_diag
+                                        ? _plcSlotRuntimeDiagnostics.output_runtime_index
+                                        : 0xFFFFu;
+    bool runtime_map_ok = input_runtime_index != 0xFFFFu && output_runtime_index != 0xFFFFu;
+    if (!runtime_map_ok) {
+        runtime_map_ok = resolve_waveshare_channel_runtime_indices(_pointCatalog,
+                                                                   _plcRuntimePublisher,
+                                                                   deviceId,
+                                                                   channel,
+                                                                   input_runtime_index,
+                                                                   output_runtime_index);
+    }
+
+    response["channel"] = channel;
+    response["runtimeMapOk"] = runtime_map_ok;
+    if (runtime_map_ok) {
+        response["inputRuntimeIndex"] = input_runtime_index;
+        response["outputRuntimeIndex"] = output_runtime_index;
+    }
+
+    if (_plcRuntimePublisher != nullptr) {
+        const PlcRuntimeHeaderV1 header = _plcRuntimePublisher->headerSnapshot();
+        response["runtimeStoreEpoch"] = header.store_epoch;
+        response["runtimePublishedCount"] = _plcRuntimePublisher->publishedCount();
+        response["runtimeHeaderAddr"] = header.descriptor_base;
+    }
+
     return true;
 }
 

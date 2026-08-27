@@ -63,6 +63,8 @@ public:
     POINT_STATES_RES,
     POINT_UPSERT,
     POINT_DELETE,
+    PLC_STATUS_REQ,
+    PLC_STATUS_RES,
   };
 
   // Parsing string -> enum
@@ -102,6 +104,8 @@ public:
     if(strcmp(cmd, "pointStatesRes") == 0)   return POINT_STATES_RES;
     if(strcmp(cmd, "pointUpsert") == 0)   return POINT_UPSERT;
     if(strcmp(cmd, "pointDelete") == 0)   return POINT_DELETE;
+    if(strcmp(cmd, "plcStatusReq") == 0)   return PLC_STATUS_REQ;
+    if(strcmp(cmd, "plcStatusRes") == 0)   return PLC_STATUS_RES;
 
     return CMD_UNKNOWN;
   }
@@ -143,6 +147,8 @@ public:
       case POINT_STATES_RES: return "pointStatesRes";
       case POINT_UPSERT: return "pointUpsert";
       case POINT_DELETE: return "pointDelete";
+      case PLC_STATUS_REQ: return "plcStatusReq";
+      case PLC_STATUS_RES: return "plcStatusRes";
       default:         return "Unknown";
     }
   }

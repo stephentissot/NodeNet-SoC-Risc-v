@@ -1851,6 +1851,16 @@ int main(void)
                                                 slot0_boot.channel,
                                                 &input_runtime_index,
                                                 &output_runtime_index)) {
+                  const char* slot0_source_name = (slot0_boot.source == PlcSlot0BootSource::FlashPackage)
+                                       ? "flash"
+                                       : ((slot0_boot.source == PlcSlot0BootSource::HardcodedMirror)
+                                           ? "local"
+                                           : "none");
+                  nodeNetCore.setPlcSlotRuntimeDiagnostics(0u,
+                                        slot0_boot.channel,
+                                        slot0_source_name,
+                                        input_runtime_index,
+                                        output_runtime_index);
                 oled_print("[PLC] IDX %u>%u",
                            static_cast<unsigned>(input_runtime_index),
                            static_cast<unsigned>(output_runtime_index));
