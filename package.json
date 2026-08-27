@@ -1,0 +1,42 @@
+{
+  "name": "@<scope>/colorlight_blink",
+  "version": "0.1.0",
+  "description": "A source xpm package with <your-description-here>",
+  "main": "",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/<user-id>/colorlight_blink.git"
+  },
+  "homepage": "https://github.com/<user-id>/colorlight_blink/",
+  "bugs": {
+    "url": "https://github.com/<user-id>/colorlight_blink/issues/"
+  },
+  "keywords": [
+    "xpack"
+  ],
+  "author": {
+    "name": "Stephen TISSOT",
+    "email": "stephen.tissot@bigsister.fr",
+    "url": "<author-url>"
+  },
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {},
+  "xpack": {
+    "minimumXpmRequired": "0.23.2",
+    "dependencies": {},
+    "devDependencies": {
+      "@xpack-dev-tools/riscv-none-elf-gcc": {
+        "specifier": "15.2.0-1.1",
+        "local": "link",
+        "platforms": "all"
+      }
+    },
+    "properties": {},
+    "actions": {},
+    "buildConfigurations": {}
+  }
+}
