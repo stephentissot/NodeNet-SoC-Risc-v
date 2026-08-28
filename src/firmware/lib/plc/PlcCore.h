@@ -43,6 +43,11 @@ private:
         uint16_t member_count = 0u;
     };
 
+    enum class PollState : uint8_t {
+        Idle = 0,
+        WaitingBatchResult
+    };
+
     PointCatalog* point_catalog_ = nullptr;
     ModbusMaster* modbus0_ = nullptr;
     NodeLogger* logger_ = nullptr;
@@ -53,17 +58,21 @@ private:
     size_t next_batch_index_ = 0u;
     uint32_t modbus_plan_hash_ = 0u;
     uint16_t modbus_batch_max_gap_ = 6u;
+    PollState poll_state_ = PollState::Idle;
+    ModbusPollBatch active_batch_ = {};
+    bool active_bit_values_[kMaxModbusBatchBits] = {};
+    uint16_t active_register_values_[kMaxModbusBatchRegisters] = {};
 
     void rebuildPollPlanIfNeeded();
     void rebuildPollPlan();
     uint32_t computeModbusPlanHash() const;
     void pollNextPoint();
-    bool pollBatch(const ModbusPollBatch& batch, uint32_t now_ms);
+    bool startBatchPoll(const ModbusPollBatch& batch);
+    bool completeActiveBatch(uint32_t now_ms);
+    void failActiveBatch(uint32_t now_ms, PointQuality batch_error);
     bool isBatchDue(const ModbusPollBatch& batch, uint32_t now_ms) const;
     void syncRuntimeSnapshot(uint32_t now_ms);
     void consumeRuntimeWrites(uint32_t now_ms);
-    bool readBatchBits(const ModbusPollBatch& batch, bool* bit_values);
-    bool readBatchRegisters(const ModbusPollBatch& batch, uint16_t* regs_out);
     bool decodeBitState(const PointDefinition& definition, bool bit_value, PointState& state) const;
     bool decodeRegisterState(const PointDefinition& definition,
                              const uint16_t* regs,

@@ -21,7 +21,16 @@ ModbusMaster::ModbusMaster(uint32_t base_addr, uint32_t clock_hz)
             interframe_chars_q1_(kDefaultInterframeCharsQ1),
       last_error_(Error::None),
       last_exception_code_(0u),
-      last_hw_status_(0u) {
+    last_hw_status_(0u),
+    async_read_kind_(AsyncReadKind::None),
+    async_slave_(0u),
+    async_function_(0u),
+    async_quantity_(0u),
+    async_deadline_ms_(0u),
+    async_active_(false),
+    async_result_ready_(false),
+    async_response_{},
+    async_response_len_(0u) {
 }
 
 void ModbusMaster::begin(uint32_t baudrate, uint32_t timeout_ms, uint8_t retries, uint8_t interFrameCharsQ1) {
@@ -41,6 +50,7 @@ void ModbusMaster::begin(uint32_t baudrate, uint32_t timeout_ms, uint8_t retries
     last_error_ = Error::None;
     last_exception_code_ = 0u;
     last_hw_status_ = 0u;
+    clearAsyncTransaction();
 }
 
 void ModbusMaster::setBaudrate(uint32_t baudrate) {
@@ -68,11 +78,41 @@ bool ModbusMaster::readCoils(uint8_t slave, uint16_t start_addr, uint16_t quanti
     return readBitFunction(slave, 0x01u, start_addr, quantity, out_values);
 }
 
+bool ModbusMaster::startReadCoils(uint8_t slave, uint16_t start_addr, uint16_t quantity) {
+    if (quantity == 0u || quantity > 2000u) {
+        last_error_ = Error::InvalidArg;
+        return false;
+    }
+
+    uint8_t req[4];
+    req[0] = static_cast<uint8_t>((start_addr >> 8) & 0xFFu);
+    req[1] = static_cast<uint8_t>(start_addr & 0xFFu);
+    req[2] = static_cast<uint8_t>((quantity >> 8) & 0xFFu);
+    req[3] = static_cast<uint8_t>(quantity & 0xFFu);
+    return startTransactionAsync(slave, 0x01u, req, sizeof(req), AsyncReadKind::Bits, quantity);
+}
+
 bool ModbusMaster::readDiscreteInputs(uint8_t slave,
                                       uint16_t start_addr,
                                       uint16_t quantity,
                                       bool* out_values) {
     return readBitFunction(slave, 0x02u, start_addr, quantity, out_values);
+}
+
+bool ModbusMaster::startReadDiscreteInputs(uint8_t slave,
+                                           uint16_t start_addr,
+                                           uint16_t quantity) {
+    if (quantity == 0u || quantity > 2000u) {
+        last_error_ = Error::InvalidArg;
+        return false;
+    }
+
+    uint8_t req[4];
+    req[0] = static_cast<uint8_t>((start_addr >> 8) & 0xFFu);
+    req[1] = static_cast<uint8_t>(start_addr & 0xFFu);
+    req[2] = static_cast<uint8_t>((quantity >> 8) & 0xFFu);
+    req[3] = static_cast<uint8_t>(quantity & 0xFFu);
+    return startTransactionAsync(slave, 0x02u, req, sizeof(req), AsyncReadKind::Bits, quantity);
 }
 
 bool ModbusMaster::readHoldingRegisters(uint8_t slave,
@@ -82,11 +122,113 @@ bool ModbusMaster::readHoldingRegisters(uint8_t slave,
     return readRegsFunction(slave, 0x03u, start_addr, quantity, out_values);
 }
 
+bool ModbusMaster::startReadHoldingRegisters(uint8_t slave,
+                                             uint16_t start_addr,
+                                             uint16_t quantity) {
+    if (quantity == 0u || quantity > 125u) {
+        last_error_ = Error::InvalidArg;
+        return false;
+    }
+
+    uint8_t req[4];
+    req[0] = static_cast<uint8_t>((start_addr >> 8) & 0xFFu);
+    req[1] = static_cast<uint8_t>(start_addr & 0xFFu);
+    req[2] = static_cast<uint8_t>((quantity >> 8) & 0xFFu);
+    req[3] = static_cast<uint8_t>(quantity & 0xFFu);
+    return startTransactionAsync(slave, 0x03u, req, sizeof(req), AsyncReadKind::Registers, quantity);
+}
+
 bool ModbusMaster::readInputRegisters(uint8_t slave,
                                       uint16_t start_addr,
                                       uint16_t quantity,
                                       uint16_t* out_values) {
     return readRegsFunction(slave, 0x04u, start_addr, quantity, out_values);
+}
+
+bool ModbusMaster::startReadInputRegisters(uint8_t slave,
+                                           uint16_t start_addr,
+                                           uint16_t quantity) {
+    if (quantity == 0u || quantity > 125u) {
+        last_error_ = Error::InvalidArg;
+        return false;
+    }
+
+    uint8_t req[4];
+    req[0] = static_cast<uint8_t>((start_addr >> 8) & 0xFFu);
+    req[1] = static_cast<uint8_t>(start_addr & 0xFFu);
+    req[2] = static_cast<uint8_t>((quantity >> 8) & 0xFFu);
+    req[3] = static_cast<uint8_t>(quantity & 0xFFu);
+    return startTransactionAsync(slave, 0x04u, req, sizeof(req), AsyncReadKind::Registers, quantity);
+}
+
+ModbusMaster::TransactionStatus ModbusMaster::pollTransaction() {
+    if (async_result_ready_) {
+        return TransactionStatus::Success;
+    }
+
+    if (!async_active_) {
+        return TransactionStatus::Idle;
+    }
+
+    const uint32_t status = readReg(status_reg_);
+    if ((status & STATUS_DONE) == 0u) {
+        const uint32_t now_ms = millis();
+        if (static_cast<int32_t>(now_ms - async_deadline_ms_) >= 0) {
+            abortTransaction();
+            last_error_ = Error::DriverTimeout;
+            last_hw_status_ = status;
+            return TransactionStatus::WatchdogTimeout;
+        }
+        return TransactionStatus::Busy;
+    }
+
+    last_hw_status_ = status;
+    captureResponseFrame();
+    async_active_ = false;
+
+    if ((status & STATUS_SUCCESS) == 0u) {
+        setLastErrorFromStatus(status);
+        if (last_error_ == Error::HwException && async_response_len_ >= 5u) {
+            last_exception_code_ = async_response_[2];
+        }
+        clearAsyncTransaction();
+        return TransactionStatus::Error;
+    }
+
+    last_error_ = Error::None;
+    async_result_ready_ = true;
+    return TransactionStatus::Success;
+}
+
+bool ModbusMaster::finishReadBits(bool* out_values, uint16_t quantity) {
+    if (!async_result_ready_ || async_read_kind_ != AsyncReadKind::Bits || out_values == nullptr) {
+        last_error_ = Error::InvalidArg;
+        return false;
+    }
+
+    const bool ok = decodeBitResponse(async_function_, quantity, async_response_, async_response_len_, out_values);
+    clearAsyncTransaction();
+    return ok;
+}
+
+bool ModbusMaster::finishReadRegisters(uint16_t* out_values, uint16_t quantity) {
+    if (!async_result_ready_ || async_read_kind_ != AsyncReadKind::Registers || out_values == nullptr) {
+        last_error_ = Error::InvalidArg;
+        return false;
+    }
+
+    const bool ok = decodeRegisterResponse(async_function_, quantity, async_response_, async_response_len_, out_values);
+    clearAsyncTransaction();
+    return ok;
+}
+
+bool ModbusMaster::transactionActive() const {
+    return async_active_ || async_result_ready_;
+}
+
+void ModbusMaster::abortTransaction() {
+    writeReg(control_reg_, CTRL_CLEAR_STATUS | CTRL_ABORT);
+    clearAsyncTransaction();
 }
 
 bool ModbusMaster::writeSingleCoil(uint8_t slave, uint16_t coil_addr, bool value) {
@@ -522,6 +664,145 @@ void ModbusMaster::setLastErrorFromStatus(uint32_t status) {
     last_error_ = Error::HwUnknown;
 }
 
+bool ModbusMaster::startTransactionAsync(uint8_t slave,
+                                         uint8_t function,
+                                         const uint8_t* req_data,
+                                         uint8_t req_len,
+                                         AsyncReadKind read_kind,
+                                         uint16_t quantity) {
+    if (req_data == nullptr || req_len > kMaxDataBytes) {
+        last_error_ = Error::InvalidArg;
+        return false;
+    }
+
+    if (transactionActive()) {
+        last_error_ = Error::Busy;
+        return false;
+    }
+
+    const uint32_t status = readReg(status_reg_);
+    if ((status & STATUS_BUSY) != 0u) {
+        last_hw_status_ = status;
+        last_error_ = Error::Busy;
+        return false;
+    }
+
+    last_exception_code_ = 0u;
+    last_hw_status_ = status;
+    clearAsyncTransaction();
+
+    writeReg(control_reg_, CTRL_CLEAR_STATUS);
+    writeReg(retry_reg_, retries_);
+    writeReg(slave_func_reg_, (static_cast<uint32_t>(slave) << 8) | static_cast<uint32_t>(function));
+    writeReg(tx_len_reg_, static_cast<uint32_t>(req_len));
+    for (uint8_t i = 0u; i < req_len; ++i) {
+        writeReg(tx_data_reg_, static_cast<uint32_t>(req_data[i]));
+    }
+    writeReg(control_reg_, CTRL_START);
+
+    async_read_kind_ = read_kind;
+    async_slave_ = slave;
+    async_function_ = function;
+    async_quantity_ = quantity;
+    async_active_ = true;
+    async_result_ready_ = false;
+    async_response_len_ = 0u;
+    async_deadline_ms_ = millis() + static_cast<uint32_t>((timeout_ms_ * (static_cast<uint32_t>(retries_) + 1u)) + 100u);
+    last_error_ = Error::None;
+    return true;
+}
+
+void ModbusMaster::clearAsyncTransaction() {
+    async_read_kind_ = AsyncReadKind::None;
+    async_slave_ = 0u;
+    async_function_ = 0u;
+    async_quantity_ = 0u;
+    async_deadline_ms_ = 0u;
+    async_active_ = false;
+    async_result_ready_ = false;
+    async_response_len_ = 0u;
+}
+
+void ModbusMaster::captureResponseFrame() {
+    const uint16_t count = static_cast<uint16_t>(readReg(rx_len_reg_) & 0x1FFu);
+    async_response_len_ = count > kMaxFrameBytes ? kMaxFrameBytes : count;
+    writeReg(rx_len_reg_, 0u);
+    for (uint16_t index = 0u; index < async_response_len_; ++index) {
+        async_response_[index] = static_cast<uint8_t>(readReg(rx_data_reg_) & 0xFFu);
+    }
+
+    if (async_response_len_ >= 2u) {
+        if (((async_slave_ != 0u) && (async_response_[0] != async_slave_)) ||
+            ((async_response_[1] & 0x7Fu) != async_function_)) {
+            last_error_ = Error::ResponseMismatch;
+        }
+    }
+}
+
+bool ModbusMaster::decodeBitResponse(uint8_t function,
+                                     uint16_t quantity,
+                                     const uint8_t* resp,
+                                     uint16_t resp_len,
+                                     bool* out_values) {
+    if (quantity == 0u || quantity > 2000u || resp == nullptr || out_values == nullptr) {
+        last_error_ = Error::InvalidArg;
+        return false;
+    }
+
+    const uint16_t expected_byte_count = static_cast<uint16_t>((quantity + 7u) / 8u);
+    const uint16_t expected_len = static_cast<uint16_t>(5u + expected_byte_count);
+    if (resp_len != expected_len) {
+        last_error_ = Error::ResponseLength;
+        return false;
+    }
+
+    if ((resp[1] & 0x7Fu) != function || resp[2] != static_cast<uint8_t>(expected_byte_count)) {
+        last_error_ = Error::ResponseFormat;
+        return false;
+    }
+
+    for (uint16_t i = 0u; i < quantity; ++i) {
+        const uint16_t byte_idx = static_cast<uint16_t>(3u + (i / 8u));
+        const uint8_t bit_mask = static_cast<uint8_t>(1u << (i & 0x7u));
+        out_values[i] = (resp[byte_idx] & bit_mask) != 0u;
+    }
+
+    last_error_ = Error::None;
+    return true;
+}
+
+bool ModbusMaster::decodeRegisterResponse(uint8_t function,
+                                          uint16_t quantity,
+                                          const uint8_t* resp,
+                                          uint16_t resp_len,
+                                          uint16_t* out_values) {
+    if (quantity == 0u || quantity > 125u || resp == nullptr || out_values == nullptr) {
+        last_error_ = Error::InvalidArg;
+        return false;
+    }
+
+    const uint16_t expected_byte_count = static_cast<uint16_t>(quantity * 2u);
+    const uint16_t expected_len = static_cast<uint16_t>(5u + expected_byte_count);
+    if (resp_len != expected_len) {
+        last_error_ = Error::ResponseLength;
+        return false;
+    }
+
+    if ((resp[1] & 0x7Fu) != function || resp[2] != static_cast<uint8_t>(expected_byte_count)) {
+        last_error_ = Error::ResponseFormat;
+        return false;
+    }
+
+    for (uint16_t i = 0u; i < quantity; ++i) {
+        const uint16_t idx = static_cast<uint16_t>(3u + i * 2u);
+        out_values[i] = static_cast<uint16_t>((static_cast<uint16_t>(resp[idx]) << 8) |
+                                              static_cast<uint16_t>(resp[idx + 1u]));
+    }
+
+    last_error_ = Error::None;
+    return true;
+}
+
 bool ModbusMaster::readBitFunction(uint8_t slave,
                                    uint8_t function,
                                    uint16_t start_addr,
@@ -544,26 +825,7 @@ bool ModbusMaster::readBitFunction(uint8_t slave,
         return false;
     }
 
-    const uint16_t expected_byte_count = static_cast<uint16_t>((quantity + 7u) / 8u);
-    const uint16_t expected_len = static_cast<uint16_t>(5u + expected_byte_count);
-    if (resp_len != expected_len) {
-        last_error_ = Error::ResponseLength;
-        return false;
-    }
-
-    if (resp[2] != static_cast<uint8_t>(expected_byte_count)) {
-        last_error_ = Error::ResponseFormat;
-        return false;
-    }
-
-    for (uint16_t i = 0; i < quantity; ++i) {
-        const uint16_t byte_idx = static_cast<uint16_t>(3u + (i / 8u));
-        const uint8_t bit_mask = static_cast<uint8_t>(1u << (i & 0x7u));
-        out_values[i] = (resp[byte_idx] & bit_mask) != 0u;
-    }
-
-    last_error_ = Error::None;
-    return true;
+    return decodeBitResponse(function, quantity, resp, resp_len, out_values);
 }
 
 bool ModbusMaster::readRegsFunction(uint8_t slave,
@@ -588,24 +850,5 @@ bool ModbusMaster::readRegsFunction(uint8_t slave,
         return false;
     }
 
-    const uint16_t expected_byte_count = static_cast<uint16_t>(quantity * 2u);
-    const uint16_t expected_len = static_cast<uint16_t>(5u + expected_byte_count);
-    if (resp_len != expected_len) {
-        last_error_ = Error::ResponseLength;
-        return false;
-    }
-
-    if (resp[2] != static_cast<uint8_t>(expected_byte_count)) {
-        last_error_ = Error::ResponseFormat;
-        return false;
-    }
-
-    for (uint16_t i = 0; i < quantity; ++i) {
-        const uint16_t idx = static_cast<uint16_t>(3u + i * 2u);
-        out_values[i] = static_cast<uint16_t>((static_cast<uint16_t>(resp[idx]) << 8) |
-                                              static_cast<uint16_t>(resp[idx + 1u]));
-    }
-
-    last_error_ = Error::None;
-    return true;
+    return decodeRegisterResponse(function, quantity, resp, resp_len, out_values);
 }

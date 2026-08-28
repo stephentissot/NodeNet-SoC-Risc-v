@@ -55,8 +55,12 @@ void PlcCore::begin(PointCatalog* point_catalog, ModbusMaster* modbus0, NodeLogg
     batch_count_ = 0u;
     next_batch_index_ = 0u;
     modbus_plan_hash_ = 0u;
+    poll_state_ = PollState::Idle;
+    active_batch_ = {};
     std::memset(batches_, 0, sizeof(batches_));
     std::memset(batch_members_, 0, sizeof(batch_members_));
+    std::memset(active_bit_values_, 0, sizeof(active_bit_values_));
+    std::memset(active_register_values_, 0, sizeof(active_register_values_));
 }
 
 void PlcCore::attachRuntimePublisher(const PlcRuntimePublisherV1* publisher)
@@ -77,7 +81,9 @@ void PlcCore::loop() {
 
     const uint32_t now_ms = millis();
     consumeRuntimeWrites(now_ms);
-    rebuildPollPlanIfNeeded();
+    if (poll_state_ == PollState::Idle) {
+        rebuildPollPlanIfNeeded();
+    }
     pollNextPoint();
     syncRuntimeSnapshot(now_ms);
 }
@@ -446,6 +452,31 @@ void PlcCore::pollNextPoint()
     }
 
     const uint32_t now_ms = millis();
+    if (poll_state_ == PollState::WaitingBatchResult) {
+        switch (modbus0_ == nullptr ? ModbusMaster::TransactionStatus::Error : modbus0_->pollTransaction()) {
+            case ModbusMaster::TransactionStatus::Busy:
+                return;
+            case ModbusMaster::TransactionStatus::Success:
+                (void)completeActiveBatch(now_ms);
+                poll_state_ = PollState::Idle;
+                active_batch_ = {};
+                return;
+            case ModbusMaster::TransactionStatus::WatchdogTimeout:
+            case ModbusMaster::TransactionStatus::Error:
+                failActiveBatch(now_ms,
+                                modbus0_ == nullptr ? PointQuality::BadConfigError
+                                                    : qualityFromModbusError(modbus0_->lastError()));
+                poll_state_ = PollState::Idle;
+                active_batch_ = {};
+                return;
+            case ModbusMaster::TransactionStatus::Idle:
+            default:
+                poll_state_ = PollState::Idle;
+                active_batch_ = {};
+                return;
+        }
+    }
+
     for (size_t attempts = 0u; attempts < batch_count_; ++attempts) {
         const size_t batch_index = next_batch_index_;
         next_batch_index_ = (next_batch_index_ + 1u) % batch_count_;
@@ -454,7 +485,15 @@ void PlcCore::pollNextPoint()
             continue;
         }
 
-        (void)pollBatch(batch, now_ms);
+        if (startBatchPoll(batch)) {
+            active_batch_ = batch;
+            poll_state_ = PollState::WaitingBatchResult;
+        } else {
+            failActiveBatch(now_ms,
+                            (batch.port_index != 0u || modbus0_ == nullptr)
+                                ? PointQuality::BadConfigError
+                                : qualityFromModbusError(modbus0_->lastError()));
+        }
         break;
     }
 }
@@ -485,58 +524,86 @@ bool PlcCore::isBatchDue(const ModbusPollBatch& batch, uint32_t now_ms) const
     return false;
 }
 
-bool PlcCore::pollBatch(const ModbusPollBatch& batch, uint32_t now_ms)
+bool PlcCore::startBatchPoll(const ModbusPollBatch& batch)
 {
-    if (point_catalog_ == nullptr) {
+    if (point_catalog_ == nullptr || modbus0_ == nullptr || batch.port_index != 0u) {
+        return false;
+    }
+
+    const bool is_bitwise = modbus_table_is_bitwise(batch.table);
+    if (is_bitwise) {
+        if (batch.table == ModbusTable::Coils) {
+            return modbus0_->startReadCoils(batch.slave_address, batch.start_address, batch.quantity);
+        }
+        if (batch.table == ModbusTable::DiscreteInputs) {
+            return modbus0_->startReadDiscreteInputs(batch.slave_address, batch.start_address, batch.quantity);
+        }
+        return false;
+    }
+
+    if (batch.table == ModbusTable::HoldingRegisters) {
+        return modbus0_->startReadHoldingRegisters(batch.slave_address, batch.start_address, batch.quantity);
+    }
+    if (batch.table == ModbusTable::InputRegisters) {
+        return modbus0_->startReadInputRegisters(batch.slave_address, batch.start_address, batch.quantity);
+    }
+
+    return false;
+}
+
+bool PlcCore::completeActiveBatch(uint32_t now_ms)
+{
+    if (point_catalog_ == nullptr || modbus0_ == nullptr || !active_batch_.valid) {
         return false;
     }
 
     const PointDefinition* definitions = point_catalog_->entries();
     const PointState* states = point_catalog_->states();
-    const bool is_bitwise = modbus_table_is_bitwise(batch.table);
+    const bool is_bitwise = modbus_table_is_bitwise(active_batch_.table);
 
     bool transaction_ok = false;
     PointQuality batch_error = PointQuality::BadConfigError;
-    bool bit_values[kMaxModbusBatchBits] = {};
-    uint16_t regs[kMaxModbusBatchRegisters] = {};
-
-    if (batch.port_index != 0u || modbus0_ == nullptr) {
-        batch_error = PointQuality::BadConfigError;
-    } else if (is_bitwise) {
-        transaction_ok = readBatchBits(batch, bit_values);
-        if (!transaction_ok) {
-            batch_error = qualityFromModbusError(modbus0_->lastError());
-        }
+    if (is_bitwise) {
+        transaction_ok = modbus0_->finishReadBits(active_bit_values_, active_batch_.quantity);
     } else {
-        transaction_ok = readBatchRegisters(batch, regs);
-        if (!transaction_ok) {
-            batch_error = qualityFromModbusError(modbus0_->lastError());
-        }
+        transaction_ok = modbus0_->finishReadRegisters(active_register_values_, active_batch_.quantity);
+    }
+    if (!transaction_ok) {
+        batch_error = qualityFromModbusError(modbus0_->lastError());
     }
 
-    for (uint16_t offset = 0u; offset < batch.member_count; ++offset) {
-        const ModbusPollBatchMember& member = batch_members_[batch.member_start + offset];
+    for (uint16_t offset = 0u; offset < active_batch_.member_count; ++offset) {
+        const ModbusPollBatchMember& member = batch_members_[active_batch_.member_start + offset];
         const size_t catalog_index = member.catalog_index;
         if (catalog_index >= point_catalog_->size()) {
             continue;
         }
 
         const PointDefinition& definition = definitions[catalog_index];
+        if (definition.backend != PointBackend::Modbus ||
+            definition.ref.modbus.port_index != active_batch_.port_index ||
+            definition.ref.modbus.slave_address != active_batch_.slave_address ||
+            definition.ref.modbus.table != active_batch_.table ||
+            definition.ref.modbus.address < active_batch_.start_address ||
+            static_cast<uint16_t>(definition.ref.modbus.address - active_batch_.start_address) != member.address_offset) {
+            continue;
+        }
+
         PointState next_state = states[catalog_index];
         bool point_ok = transaction_ok;
 
         if (transaction_ok) {
             if (is_bitwise) {
-                if (member.address_offset >= batch.quantity) {
+                if (member.address_offset >= active_batch_.quantity) {
                     point_ok = false;
                     next_state.quality = PointQuality::BadConfigError;
                 } else {
-                    point_ok = decodeBitState(definition, bit_values[member.address_offset], next_state);
+                    point_ok = decodeBitState(definition, active_bit_values_[member.address_offset], next_state);
                 }
             } else {
                 point_ok = decodeRegisterState(definition,
-                                               regs + member.address_offset,
-                                               static_cast<uint16_t>(batch.quantity - member.address_offset),
+                                               active_register_values_ + member.address_offset,
+                                               static_cast<uint16_t>(active_batch_.quantity - member.address_offset),
                                                next_state);
             }
         } else {
@@ -553,37 +620,37 @@ bool PlcCore::pollBatch(const ModbusPollBatch& batch, uint32_t now_ms)
     return transaction_ok;
 }
 
-        bool PlcCore::readBatchBits(const ModbusPollBatch& batch, bool* bit_values)
-        {
-            if (bit_values == nullptr || modbus0_ == nullptr) {
-                return false;
-            }
+void PlcCore::failActiveBatch(uint32_t now_ms, PointQuality batch_error)
+{
+    if (point_catalog_ == nullptr || !active_batch_.valid) {
+        return;
+    }
 
-            if (batch.table == ModbusTable::Coils) {
-                return modbus0_->readCoils(batch.slave_address, batch.start_address, batch.quantity, bit_values);
-            }
-            if (batch.table == ModbusTable::DiscreteInputs) {
-                return modbus0_->readDiscreteInputs(batch.slave_address, batch.start_address, batch.quantity, bit_values);
-            }
-
-            return false;
+    const PointDefinition* definitions = point_catalog_->entries();
+    const PointState* states = point_catalog_->states();
+    for (uint16_t offset = 0u; offset < active_batch_.member_count; ++offset) {
+        const ModbusPollBatchMember& member = batch_members_[active_batch_.member_start + offset];
+        const size_t catalog_index = member.catalog_index;
+        if (catalog_index >= point_catalog_->size()) {
+            continue;
         }
 
-        bool PlcCore::readBatchRegisters(const ModbusPollBatch& batch, uint16_t* regs_out)
-        {
-            if (regs_out == nullptr || modbus0_ == nullptr) {
-                return false;
-            }
-
-            if (batch.table == ModbusTable::HoldingRegisters) {
-                return modbus0_->readHoldingRegisters(batch.slave_address, batch.start_address, batch.quantity, regs_out);
-            }
-            if (batch.table == ModbusTable::InputRegisters) {
-                return modbus0_->readInputRegisters(batch.slave_address, batch.start_address, batch.quantity, regs_out);
-            }
-
-            return false;
+        const PointDefinition& definition = definitions[catalog_index];
+        if (definition.backend != PointBackend::Modbus ||
+            definition.ref.modbus.port_index != active_batch_.port_index ||
+            definition.ref.modbus.slave_address != active_batch_.slave_address ||
+            definition.ref.modbus.table != active_batch_.table ||
+            definition.ref.modbus.address < active_batch_.start_address ||
+            static_cast<uint16_t>(definition.ref.modbus.address - active_batch_.start_address) != member.address_offset) {
+            continue;
         }
+
+        PointState next_state = states[catalog_index];
+        next_state.quality = batch_error;
+        next_state.last_update_ms = now_ms;
+        (void)point_catalog_->updateState(definition.id, next_state);
+    }
+}
 
         bool PlcCore::decodeBitState(const PointDefinition& definition, bool bit_value, PointState& state) const
         {

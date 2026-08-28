@@ -33,6 +33,7 @@ constexpr uint32_t kPlcUploadVolatileStagingBase = SDRAM_PLC_UPLOAD_STAGING_BASE
 constexpr uint32_t kPlcUploadVolatileStagingSize = SDRAM_PLC_UPLOAD_STAGING_SIZE;
 constexpr uint8_t kPlcUploadDataFrameMagic = 0xA5u;
 constexpr uint16_t kPlcBytecodeChunkMaxBytes = 768u;
+constexpr size_t kPagedResponseSizeReserve = 64u;
 
 #pragma pack(push, 1)
 struct PlcFlashPackageHeader {
@@ -127,6 +128,79 @@ static bool strings_equal(const char* lhs, const char* rhs) {
     }
 
     return std::strcmp(lhs, rhs) == 0;
+}
+
+enum class PointPathMatchKind : uint8_t {
+    None = 0u,
+    Device,
+    Feature,
+    Point,
+};
+
+static bool path_matches_feature(const char* path, const PointDefinition& definition)
+{
+    if (path == nullptr) {
+        return false;
+    }
+
+    const char* device_id = definition.id.device_id;
+    const char* feature = definition.id.feature;
+    const size_t device_len = std::strlen(device_id);
+
+    if (std::strncmp(path, device_id, device_len) != 0 || path[device_len] != '.') {
+        return false;
+    }
+
+    return std::strcmp(path + device_len + 1u, feature) == 0;
+}
+
+static bool path_matches_point(const char* path, const PointDefinition& definition)
+{
+    if (path == nullptr) {
+        return false;
+    }
+
+    const char* device_id = definition.id.device_id;
+    const char* feature = definition.id.feature;
+    const char* point_id = definition.id.point_id;
+    const size_t device_len = std::strlen(device_id);
+    const size_t feature_len = std::strlen(feature);
+
+    if (std::strncmp(path, device_id, device_len) != 0 || path[device_len] != '.') {
+        return false;
+    }
+
+    const char* feature_start = path + device_len + 1u;
+    if (std::strncmp(feature_start, feature, feature_len) != 0 || feature_start[feature_len] != '.') {
+        return false;
+    }
+
+    return std::strcmp(feature_start + feature_len + 1u, point_id) == 0;
+}
+
+static PointPathMatchKind classify_point_catalog_path(const char* path,
+                                                      const PointDefinition* definitions,
+                                                      size_t definition_count)
+{
+    if (path == nullptr || path[0] == '\0') {
+        return PointPathMatchKind::Device;
+    }
+
+    PointPathMatchKind match = PointPathMatchKind::None;
+    for (size_t index = 0u; index < definition_count; ++index) {
+        if (path_matches_point(path, definitions[index])) {
+            return PointPathMatchKind::Point;
+        }
+        if (path_matches_feature(path, definitions[index])) {
+            match = PointPathMatchKind::Feature;
+            continue;
+        }
+        if (strings_equal(path, definitions[index].id.device_id)) {
+            match = PointPathMatchKind::Device;
+        }
+    }
+
+    return match;
 }
 
 static uint8_t* plc_upload_volatile_staging_ptr()
@@ -324,19 +398,6 @@ static void build_point_path(const PointDefinition& definition, char* out, size_
     out[out_size - 1u] = '\0';
 }
 
-static void build_feature_path(const PointDefinition& definition, char* out, size_t out_size) {
-    if (out == nullptr || out_size == 0u) {
-        return;
-    }
-
-    (void)snprintf(out,
-                   out_size,
-                   "%s.%s",
-                   definition.id.device_id,
-                   definition.id.feature);
-    out[out_size - 1u] = '\0';
-}
-
 static bool append_unique_string(JsonArray array, const char* value) {
     for (JsonVariantConst item : array) {
         const char* existing = item | "";
@@ -346,6 +407,285 @@ static bool append_unique_string(JsonArray array, const char* value) {
     }
 
     return array.add(value);
+}
+
+static bool response_can_append_item(size_t current_size, uint32_t emitted_count, size_t item_size)
+{
+    if (item_size > NODENET_MAX_PAYLOAD_SIZE) {
+        return false;
+    }
+
+    const size_t next_size = current_size + (emitted_count == 0u ? 0u : 1u) + item_size;
+    if (next_size > NODENET_MAX_PAYLOAD_SIZE) {
+        return false;
+    }
+
+    return next_size <= (NODENET_MAX_PAYLOAD_SIZE - kPagedResponseSizeReserve);
+}
+
+static void response_commit_item_size(size_t& current_size, uint32_t emitted_count, size_t item_size)
+{
+    current_size += (emitted_count == 0u ? 0u : 1u) + item_size;
+}
+
+static void append_device_features(JsonArray features,
+                                   const PointDefinition* definitions,
+                                   size_t definition_count,
+                                   const char* device_id)
+{
+    for (size_t feature_index = 0; feature_index < definition_count; ++feature_index) {
+        if (!strings_equal(definitions[feature_index].id.device_id, device_id)) {
+            continue;
+        }
+        if (!append_unique_string(features, definitions[feature_index].id.feature)) {
+            break;
+        }
+    }
+}
+
+static const char* plc_slot_state_name(const PlcProgramControlBlockV1& control_block, uint16_t slot_id);
+static const char* plc_slot_source_name(uint16_t slot_id,
+                                        bool has_runtime_diagnostics,
+                                        uint8_t runtime_slot_id,
+                                        const char* runtime_source);
+static void serialize_point_state(JsonObject obj,
+                                  const PointDefinition& definition,
+                                  const PointState& state,
+                                  uint32_t now_ms);
+
+static size_t decimal_u32_length(uint32_t value)
+{
+    size_t digits = 1u;
+    while (value >= 10u) {
+        value /= 10u;
+        digits += 1u;
+    }
+    return digits;
+}
+
+static size_t decimal_i32_length(int32_t value)
+{
+    if (value >= 0) {
+        return decimal_u32_length(static_cast<uint32_t>(value));
+    }
+
+    const uint32_t magnitude = static_cast<uint32_t>(-(value + 1)) + 1u;
+    return 1u + decimal_u32_length(magnitude);
+}
+
+static size_t escaped_json_string_length(const char* value)
+{
+    if (value == nullptr) {
+        return 0u;
+    }
+
+    size_t length = 0u;
+    for (const unsigned char* cursor = reinterpret_cast<const unsigned char*>(value); *cursor != '\0'; ++cursor) {
+        switch (*cursor) {
+            case '"':
+            case '\\':
+            case '\b':
+            case '\f':
+            case '\n':
+            case '\r':
+            case '\t':
+                length += 2u;
+                break;
+            default:
+                length += (*cursor < 0x20u) ? 6u : 1u;
+                break;
+        }
+    }
+
+    return length;
+}
+
+static size_t json_string_value_size(const char* value)
+{
+    return 2u + escaped_json_string_length(value);
+}
+
+static size_t json_field_prefix_size(const char* key)
+{
+    return 3u + std::strlen(key);
+}
+
+static size_t json_string_field_size(const char* key, const char* value)
+{
+    return json_field_prefix_size(key) + json_string_value_size(value);
+}
+
+static size_t json_u32_field_size(const char* key, uint32_t value)
+{
+    return json_field_prefix_size(key) + decimal_u32_length(value);
+}
+
+static size_t json_i32_field_size(const char* key, int32_t value)
+{
+    return json_field_prefix_size(key) + decimal_i32_length(value);
+}
+
+static size_t json_bool_field_size(const char* key, bool value)
+{
+    return json_field_prefix_size(key) + (value ? 4u : 5u);
+}
+
+static size_t json_float_field_size(const char* key)
+{
+    return json_field_prefix_size(key) + 24u;
+}
+
+static size_t count_unique_device_features(const PointDefinition* definitions,
+                                           size_t definition_count,
+                                           const char* device_id,
+                                           size_t* encoded_features_size = nullptr)
+{
+    size_t count = 0u;
+    size_t total_size = 0u;
+
+    for (size_t index = 0u; index < definition_count; ++index) {
+        if (!strings_equal(definitions[index].id.device_id, device_id)) {
+            continue;
+        }
+
+        bool first_for_feature = true;
+        for (size_t probe = 0u; probe < index; ++probe) {
+            if (strings_equal(definitions[probe].id.device_id, device_id) &&
+                strings_equal(definitions[probe].id.feature, definitions[index].id.feature)) {
+                first_for_feature = false;
+                break;
+            }
+        }
+        if (!first_for_feature) {
+            continue;
+        }
+
+        total_size += (count == 0u ? 0u : 1u) + json_string_value_size(definitions[index].id.feature);
+        count += 1u;
+    }
+
+    if (encoded_features_size != nullptr) {
+        *encoded_features_size = total_size;
+    }
+    return count;
+}
+
+static size_t measure_device_browse_entry(const PointDefinition* definitions,
+                                          size_t definition_count,
+                                          const char* device_id)
+{
+    size_t features_size = 0u;
+    count_unique_device_features(definitions, definition_count, device_id, &features_size);
+
+    size_t size = 2u;
+    size += json_string_field_size("deviceId", device_id);
+    size += 1u + json_field_prefix_size("features") + 2u + features_size;
+    return size;
+}
+
+static size_t measure_point_definition_entry(const PointDefinition& definition)
+{
+    size_t size = 2u;
+    size += json_string_field_size("deviceId", definition.id.device_id);
+    size += 1u + json_string_field_size("feature", definition.id.feature);
+    size += 1u + json_string_field_size("pointId", definition.id.point_id);
+    size += 1u + json_string_field_size("displayName", definition.display_name);
+    size += 1u + json_u32_field_size("backend", static_cast<uint8_t>(definition.backend));
+    size += 1u + json_u32_field_size("direction", static_cast<uint8_t>(definition.direction));
+    size += 1u + json_u32_field_size("valueType", static_cast<uint8_t>(definition.value_type));
+    size += 1u + json_u32_field_size("refreshMs", definition.polling.refresh_ms);
+    size += 1u + json_u32_field_size("timeoutMs", definition.polling.timeout_ms);
+    size += 1u + json_u32_field_size("stringCapacity", definition.string_capacity);
+    size += 1u + json_float_field_size("scale");
+    size += 1u + json_string_field_size("unit", definition.unit);
+
+    switch (definition.backend) {
+        case PointBackend::Modbus:
+            size += 1u + json_u32_field_size("portIndex", definition.ref.modbus.port_index);
+            size += 1u + json_u32_field_size("slaveAddress", definition.ref.modbus.slave_address);
+            size += 1u + json_u32_field_size("address", definition.ref.modbus.address);
+            size += 1u + json_u32_field_size("registerCount", definition.ref.modbus.register_count);
+            size += 1u + json_u32_field_size("table", static_cast<uint8_t>(definition.ref.modbus.table));
+            size += 1u + json_u32_field_size("access", static_cast<uint8_t>(definition.ref.modbus.access));
+            break;
+        case PointBackend::NodeNet:
+            size += 1u + json_string_field_size("remoteDeviceId", definition.ref.nodenet.remote_device_id);
+            size += 1u + json_string_field_size("remoteFeature", definition.ref.nodenet.remote_feature);
+            size += 1u + json_string_field_size("remotePointId", definition.ref.nodenet.remote_point_id);
+            break;
+        case PointBackend::Local:
+        default:
+            break;
+    }
+
+    return size;
+}
+
+static size_t estimate_point_state_value_size(const PointDefinition& definition,
+                                              const PointState& state)
+{
+    switch (definition.value_type) {
+        case PointValueType::Bool:
+            return json_bool_field_size("value", state.value.b);
+        case PointValueType::Uint16:
+            return json_u32_field_size("value", state.value.u16);
+        case PointValueType::Int16:
+            return json_i32_field_size("value", state.value.i16);
+        case PointValueType::Uint32:
+            return json_u32_field_size("value", state.value.u32);
+        case PointValueType::Int32:
+            return json_i32_field_size("value", state.value.i32);
+        case PointValueType::Enum:
+            return json_i32_field_size("value", state.value.enum_value);
+        case PointValueType::String:
+            return json_string_field_size("value", state.string_value);
+        case PointValueType::Float:
+            return json_field_prefix_size("value") + 24u;
+        default:
+            return json_field_prefix_size("value") + 4u;
+    }
+}
+
+static size_t measure_point_state_entry(const PointDefinition& definition,
+                                        const PointState& state,
+                                        uint32_t now_ms)
+{
+    const uint32_t last_update_age_ms = (state.last_update_ms == 0u) ? 0u : (now_ms - state.last_update_ms);
+    const uint32_t last_good_update_age_ms =
+        (state.last_good_update_ms == 0u) ? 0u : (now_ms - state.last_good_update_ms);
+
+    size_t size = 2u;
+    size += json_string_field_size("deviceId", definition.id.device_id);
+    size += 1u + json_string_field_size("feature", definition.id.feature);
+    size += 1u + json_string_field_size("pointId", definition.id.point_id);
+    size += 1u + json_u32_field_size("quality", static_cast<uint8_t>(state.quality));
+    size += 1u + json_u32_field_size("lastUpdateAgeMs", last_update_age_ms);
+    size += 1u + json_u32_field_size("lastGoodUpdateAgeMs", last_good_update_age_ms);
+    size += 1u + estimate_point_state_value_size(definition, state);
+    return size;
+}
+
+static size_t measure_plc_slot_status_entry(uint32_t slot_id,
+                                            const PlcProgramControlBlockV1& control_block,
+                                            bool loaded,
+                                            bool diagnostics_valid,
+                                            uint8_t diagnostics_slot_id,
+                                            const char* diagnostics_source)
+{
+    size_t size = 2u;
+    size += json_u32_field_size("slotId", slot_id);
+    size += 1u + json_string_field_size("state", plc_slot_state_name(control_block, static_cast<uint16_t>(slot_id)));
+    size += 1u + json_bool_field_size("loaded", loaded);
+    size += 1u + json_string_field_size("source",
+                                        plc_slot_source_name(static_cast<uint16_t>(slot_id),
+                                                             diagnostics_valid,
+                                                             diagnostics_slot_id,
+                                                             diagnostics_source));
+    size += 1u + json_u32_field_size("cycleCounter", loaded ? control_block.cycle_counter : 0u);
+    size += 1u + json_u32_field_size("faultCode", loaded ? control_block.fault_code : 0u);
+    size += 1u + json_u32_field_size("bytecodeSize", loaded ? control_block.bytecode_size : 0u);
+    size += 1u + json_u32_field_size("status", loaded ? control_block.status : 0u);
+    return size;
 }
 
 static uint8_t response_destination_from_request(const JsonDocument& request) {
@@ -1794,36 +2134,19 @@ bool NodeNetCore::handlePointDefinitionsRequest(const JsonDocument& request, Jso
     response["path"] = path;
     response["offset"] = offset;
     response["count"] = 0u;
+    response["total"] = 0u;
     response["hasMore"] = false;
 
     const PointDefinition* definitions = _pointCatalog.entries();
-    bool exact_point_match = false;
-    bool exact_feature_match = false;
-    bool exact_device_match = false;
-
-    if (path[0] != '\0') {
-        char feature_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + 2u] = {};
-        char point_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + sizeof(PointIdentity::point_id) + 3u] = {};
-        for (size_t index = 0; index < _pointCatalog.size(); ++index) {
-            build_point_path(definitions[index], point_path, sizeof(point_path));
-            if (strings_equal(path, point_path)) {
-                exact_point_match = true;
-                break;
-            }
-
-            build_feature_path(definitions[index], feature_path, sizeof(feature_path));
-            if (strings_equal(path, feature_path)) {
-                exact_feature_match = true;
-            }
-            if (strings_equal(path, definitions[index].id.device_id)) {
-                exact_device_match = true;
-            }
-        }
-    }
+    const PointPathMatchKind path_match = classify_point_catalog_path(path, definitions, _pointCatalog.size());
+    const bool exact_point_match = path_match == PointPathMatchKind::Point;
+    const bool exact_feature_match = path_match == PointPathMatchKind::Feature;
+    const bool exact_device_match = path_match == PointPathMatchKind::Device;
 
     if (path[0] == '\0' || exact_device_match) {
         response["kind"] = "devices";
         JsonArray devices = response["devices"].to<JsonArray>();
+        size_t response_size = measureJson(response);
         uint32_t matched_devices = 0u;
         uint32_t emitted_devices = 0u;
 
@@ -1853,27 +2176,25 @@ bool NodeNetCore::handlePointDefinitionsRequest(const JsonDocument& request, Jso
                 continue;
             }
 
+            const size_t device_size = measure_device_browse_entry(definitions,
+                                                                   _pointCatalog.size(),
+                                                                   definitions[index].id.device_id);
+            if (!response_can_append_item(response_size, emitted_devices, device_size)) {
+                response["hasMore"] = true;
+                break;
+            }
+
             JsonObject device = devices.add<JsonObject>();
             device["deviceId"] = definitions[index].id.device_id;
             JsonArray features = device["features"].to<JsonArray>();
 
-            for (size_t feature_index = 0; feature_index < _pointCatalog.size(); ++feature_index) {
-                if (!strings_equal(definitions[feature_index].id.device_id, definitions[index].id.device_id)) {
-                    continue;
-                }
-                if (!append_unique_string(features, definitions[feature_index].id.feature)) {
-                    break;
-                }
-            }
+            append_device_features(features,
+                                   definitions,
+                                   _pointCatalog.size(),
+                                   definitions[index].id.device_id);
 
             response["count"] = emitted_devices + 1u;
-            response["hasMore"] = false;
-            if (measureJson(response) > NODENET_MAX_PAYLOAD_SIZE) {
-                devices.remove(devices.size() - 1u);
-                response["count"] = emitted_devices;
-                response["hasMore"] = true;
-                break;
-            }
+            response_commit_item_size(response_size, emitted_devices, device_size);
 
             emitted_devices += 1u;
             matched_devices += 1u;
@@ -1905,22 +2226,19 @@ bool NodeNetCore::handlePointDefinitionsRequest(const JsonDocument& request, Jso
 
     response["kind"] = "points";
     JsonArray points = response["points"].to<JsonArray>();
+    size_t response_size = measureJson(response);
     uint32_t matched_points = 0u;
     uint32_t emitted_points = 0u;
 
     for (size_t index = 0; index < _pointCatalog.size(); ++index) {
-        char feature_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + 2u] = {};
-        char point_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + sizeof(PointIdentity::point_id) + 3u] = {};
         bool matches = false;
 
         if (path[0] == '\0') {
             matches = true;
         } else if (exact_point_match) {
-            build_point_path(definitions[index], point_path, sizeof(point_path));
-            matches = strings_equal(path, point_path);
+            matches = path_matches_point(path, definitions[index]);
         } else if (exact_feature_match) {
-            build_feature_path(definitions[index], feature_path, sizeof(feature_path));
-            matches = strings_equal(path, feature_path);
+            matches = path_matches_feature(path, definitions[index]);
         }
 
         if (!matches) {
@@ -1936,16 +2254,16 @@ bool NodeNetCore::handlePointDefinitionsRequest(const JsonDocument& request, Jso
             continue;
         }
 
-        JsonObject point = points.add<JsonObject>();
-        PointCatalog::serializeDefinition(point, definitions[index]);
-        response["count"] = emitted_points + 1u;
-        response["hasMore"] = false;
-        if (measureJson(response) > NODENET_MAX_PAYLOAD_SIZE) {
-            points.remove(points.size() - 1u);
-            response["count"] = emitted_points;
+        const size_t point_size = measure_point_definition_entry(definitions[index]);
+        if (!response_can_append_item(response_size, emitted_points, point_size)) {
             response["hasMore"] = true;
             break;
         }
+
+        JsonObject point = points.add<JsonObject>();
+        PointCatalog::serializeDefinition(point, definitions[index]);
+        response["count"] = emitted_points + 1u;
+        response_commit_item_size(response_size, emitted_points, point_size);
 
         emitted_points += 1u;
         matched_points += 1u;
@@ -1953,16 +2271,12 @@ bool NodeNetCore::handlePointDefinitionsRequest(const JsonDocument& request, Jso
 
     uint32_t total_points = 0u;
     for (size_t index = 0; index < _pointCatalog.size(); ++index) {
-        char feature_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + 2u] = {};
-        char point_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + sizeof(PointIdentity::point_id) + 3u] = {};
         bool matches = false;
 
         if (exact_point_match) {
-            build_point_path(definitions[index], point_path, sizeof(point_path));
-            matches = strings_equal(path, point_path);
+            matches = path_matches_point(path, definitions[index]);
         } else if (exact_feature_match) {
-            build_feature_path(definitions[index], feature_path, sizeof(feature_path));
-            matches = strings_equal(path, feature_path);
+            matches = path_matches_feature(path, definitions[index]);
         }
 
         if (matches) {
@@ -1985,37 +2299,20 @@ bool NodeNetCore::handlePointStatesRequest(const JsonDocument& request, JsonDocu
     response["path"] = path;
     response["offset"] = offset;
     response["count"] = 0u;
+    response["total"] = 0u;
     response["hasMore"] = false;
 
     const PointDefinition* definitions = _pointCatalog.entries();
     const PointState* states = _pointCatalog.states();
-    bool exact_point_match = false;
-    bool exact_feature_match = false;
-    bool exact_device_match = false;
-
-    if (path[0] != '\0') {
-        char feature_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + 2u] = {};
-        char point_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + sizeof(PointIdentity::point_id) + 3u] = {};
-        for (size_t index = 0; index < _pointCatalog.size(); ++index) {
-            build_point_path(definitions[index], point_path, sizeof(point_path));
-            if (strings_equal(path, point_path)) {
-                exact_point_match = true;
-                break;
-            }
-
-            build_feature_path(definitions[index], feature_path, sizeof(feature_path));
-            if (strings_equal(path, feature_path)) {
-                exact_feature_match = true;
-            }
-            if (strings_equal(path, definitions[index].id.device_id)) {
-                exact_device_match = true;
-            }
-        }
-    }
+    const PointPathMatchKind path_match = classify_point_catalog_path(path, definitions, _pointCatalog.size());
+    const bool exact_point_match = path_match == PointPathMatchKind::Point;
+    const bool exact_feature_match = path_match == PointPathMatchKind::Feature;
+    const bool exact_device_match = path_match == PointPathMatchKind::Device;
 
     if (path[0] == '\0' || exact_device_match) {
         response["kind"] = "devices";
         JsonArray devices = response["devices"].to<JsonArray>();
+        size_t response_size = measureJson(response);
         uint32_t matched_devices = 0u;
         uint32_t emitted_devices = 0u;
 
@@ -2045,27 +2342,25 @@ bool NodeNetCore::handlePointStatesRequest(const JsonDocument& request, JsonDocu
                 continue;
             }
 
+            const size_t device_size = measure_device_browse_entry(definitions,
+                                                                   _pointCatalog.size(),
+                                                                   definitions[index].id.device_id);
+            if (!response_can_append_item(response_size, emitted_devices, device_size)) {
+                response["hasMore"] = true;
+                break;
+            }
+
             JsonObject device = devices.add<JsonObject>();
             device["deviceId"] = definitions[index].id.device_id;
             JsonArray features = device["features"].to<JsonArray>();
 
-            for (size_t feature_index = 0; feature_index < _pointCatalog.size(); ++feature_index) {
-                if (!strings_equal(definitions[feature_index].id.device_id, definitions[index].id.device_id)) {
-                    continue;
-                }
-                if (!append_unique_string(features, definitions[feature_index].id.feature)) {
-                    break;
-                }
-            }
+            append_device_features(features,
+                                   definitions,
+                                   _pointCatalog.size(),
+                                   definitions[index].id.device_id);
 
             response["count"] = emitted_devices + 1u;
-            response["hasMore"] = false;
-            if (measureJson(response) > NODENET_MAX_PAYLOAD_SIZE) {
-                devices.remove(devices.size() - 1u);
-                response["count"] = emitted_devices;
-                response["hasMore"] = true;
-                break;
-            }
+            response_commit_item_size(response_size, emitted_devices, device_size);
 
             emitted_devices += 1u;
             matched_devices += 1u;
@@ -2097,22 +2392,19 @@ bool NodeNetCore::handlePointStatesRequest(const JsonDocument& request, JsonDocu
 
     response["kind"] = "points";
     JsonArray points = response["pointStates"].to<JsonArray>();
+    size_t response_size = measureJson(response);
     uint32_t matched_points = 0u;
     uint32_t emitted_points = 0u;
 
     for (size_t index = 0; index < _pointCatalog.size(); ++index) {
-        char feature_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + 2u] = {};
-        char point_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + sizeof(PointIdentity::point_id) + 3u] = {};
         bool matches = false;
 
         if (path[0] == '\0') {
             matches = true;
         } else if (exact_point_match) {
-            build_point_path(definitions[index], point_path, sizeof(point_path));
-            matches = strings_equal(path, point_path);
+            matches = path_matches_point(path, definitions[index]);
         } else if (exact_feature_match) {
-            build_feature_path(definitions[index], feature_path, sizeof(feature_path));
-            matches = strings_equal(path, feature_path);
+            matches = path_matches_feature(path, definitions[index]);
         }
 
         if (!matches) {
@@ -2128,16 +2420,16 @@ bool NodeNetCore::handlePointStatesRequest(const JsonDocument& request, JsonDocu
             continue;
         }
 
-        JsonObject point = points.add<JsonObject>();
-        serialize_point_state(point, definitions[index], states[index], now_ms);
-        response["count"] = emitted_points + 1u;
-        response["hasMore"] = false;
-        if (measureJson(response) > NODENET_MAX_PAYLOAD_SIZE) {
-            points.remove(points.size() - 1u);
-            response["count"] = emitted_points;
+        const size_t point_size = measure_point_state_entry(definitions[index], states[index], now_ms);
+        if (!response_can_append_item(response_size, emitted_points, point_size)) {
             response["hasMore"] = true;
             break;
         }
+
+        JsonObject point = points.add<JsonObject>();
+        serialize_point_state(point, definitions[index], states[index], now_ms);
+        response["count"] = emitted_points + 1u;
+        response_commit_item_size(response_size, emitted_points, point_size);
 
         emitted_points += 1u;
         matched_points += 1u;
@@ -2145,16 +2437,12 @@ bool NodeNetCore::handlePointStatesRequest(const JsonDocument& request, JsonDocu
 
     uint32_t total_points = 0u;
     for (size_t index = 0; index < _pointCatalog.size(); ++index) {
-        char feature_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + 2u] = {};
-        char point_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + sizeof(PointIdentity::point_id) + 3u] = {};
         bool matches = false;
 
         if (exact_point_match) {
-            build_point_path(definitions[index], point_path, sizeof(point_path));
-            matches = strings_equal(path, point_path);
+            matches = path_matches_point(path, definitions[index]);
         } else if (exact_feature_match) {
-            build_feature_path(definitions[index], feature_path, sizeof(feature_path));
-            matches = strings_equal(path, feature_path);
+            matches = path_matches_feature(path, definitions[index]);
         }
 
         if (matches) {
@@ -2309,6 +2597,7 @@ bool NodeNetCore::handlePlcSlotsRequest(const JsonDocument& request, JsonDocumen
     response["hasMore"] = false;
 
     JsonArray slots = response["slots"].to<JsonArray>();
+    size_t response_size = measureJson(response);
     uint32_t emitted = 0u;
 
     for (uint32_t slot_id = offset; slot_id < static_cast<uint32_t>(kPlcSlotCountV1); ++slot_id) {
@@ -2319,6 +2608,17 @@ bool NodeNetCore::handlePlcSlotsRequest(const JsonDocument& request, JsonDocumen
         const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
             static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(static_cast<uint16_t>(slot_id))));
         const bool loaded = plc_control_block_loaded(*control_block, static_cast<uint16_t>(slot_id));
+
+        const size_t slot_size = measure_plc_slot_status_entry(slot_id,
+                                                               *control_block,
+                                                               loaded,
+                                                               _plcSlotRuntimeDiagnostics.valid,
+                                                               _plcSlotRuntimeDiagnostics.slot_id,
+                                                               _plcSlotRuntimeDiagnostics.source);
+        if (!response_can_append_item(response_size, emitted, slot_size)) {
+            response["hasMore"] = true;
+            break;
+        }
 
         JsonObject slot = slots.add<JsonObject>();
         slot["slotId"] = slot_id;
@@ -2334,13 +2634,7 @@ bool NodeNetCore::handlePlcSlotsRequest(const JsonDocument& request, JsonDocumen
         slot["status"] = loaded ? control_block->status : 0u;
 
         response["count"] = emitted + 1u;
-        response["hasMore"] = false;
-        if (measureJson(response) > NODENET_MAX_PAYLOAD_SIZE) {
-            slots.remove(slots.size() - 1u);
-            response["count"] = emitted;
-            response["hasMore"] = true;
-            break;
-        }
+        response_commit_item_size(response_size, emitted, slot_size);
 
         emitted += 1u;
     }
