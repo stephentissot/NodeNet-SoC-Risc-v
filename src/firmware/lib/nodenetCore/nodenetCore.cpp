@@ -23,14 +23,43 @@ constexpr uint32_t kPointCatalogFlashVersion = 1u;
 constexpr uint32_t kPointCatalogFlashBase = Flash::kParamBase;
 constexpr uint32_t kPointCatalogFlashSectors = 3u;
 constexpr uint32_t kPointCatalogFlashSize = kPointCatalogFlashSectors * Flash::kSectorSize;
+constexpr uint32_t kPlcFlashPackageMagic = 0x314B4C50u; // "PLK1"
+constexpr uint32_t kPlcFlashPackageVersion = 1u;
+constexpr uint32_t kPlcFlashPackageBase = Flash::kPlcPackageSlotBase;
+constexpr uint32_t kPlcFlashPackageSize = Flash::kPlcPackageSlotSize;
 constexpr uint32_t kPlcBuiltinPublishPeriodMs = 250u;
 constexpr uint32_t kPlcUploadSessionTimeoutMs = 15000u;
-constexpr uint32_t kPlcUploadStagingBase = Flash::kPlcPackageSlotBase;
-constexpr uint32_t kPlcUploadStagingSize = Flash::kPlcPackageSlotSize;
 constexpr uint32_t kPlcUploadVolatileStagingBase = SDRAM_PLC_UPLOAD_STAGING_BASE;
 constexpr uint32_t kPlcUploadVolatileStagingSize = SDRAM_PLC_UPLOAD_STAGING_SIZE;
 constexpr uint8_t kPlcUploadDataFrameMagic = 0xA5u;
 constexpr uint16_t kPlcBytecodeChunkMaxBytes = 768u;
+
+#pragma pack(push, 1)
+struct PlcFlashPackageHeader {
+    uint32_t magic = 0u;
+    uint32_t version = 0u;
+    uint16_t slot_count = 0u;
+    uint16_t entry_size = 0u;
+    uint32_t payload_size = 0u;
+    uint32_t payload_checksum = 0u;
+    uint32_t flags = 0u;
+    uint32_t package_epoch = 0u;
+};
+
+struct PlcFlashPackageEntry {
+    uint16_t slot_id = 0u;
+    uint16_t reserved = 0u;
+    uint32_t flags = 0u;
+    uint32_t object_offset = 0u;
+    uint32_t object_size = 0u;
+    uint32_t object_checksum = 0u;
+};
+#pragma pack(pop)
+
+static_assert(sizeof(PlcFlashPackageHeader) == 28u, "Unexpected PLC flash package header size");
+static_assert(sizeof(PlcFlashPackageEntry) == 20u, "Unexpected PLC flash package entry size");
+
+constexpr uint32_t kPlcFlashPackageEntryPresent = 1u << 0;
 
 struct PlcUploadDataFrameHeader {
     uint8_t magic = 0u;
@@ -341,6 +370,15 @@ static bool plc_control_block_loaded(const PlcProgramControlBlockV1& control_blo
 static bool plc_slot_paused(const PlcProgramControlBlockV1& control_block)
 {
     return (control_block.control & kPlcSlotControlPausedV1) != 0u;
+}
+
+static bool plc_object_snapshot_header_valid(const PlcObjectSnapshotHeaderV1& header, uint16_t slot_id)
+{
+    return header.magic == kPlcObjectSnapshotMagicV1 &&
+           header.version == kPlcRuntimeAbiV1Version &&
+           header.slot_id == slot_id &&
+           header.object_size >= sizeof(PlcObjectFileHeaderV1) &&
+           header.object_size <= PlcSlotLoaderV1::slotObjectSnapshotCapacity();
 }
 
 static volatile uint32_t* plc_reg_ptr(uint32_t offset_bytes)
@@ -693,53 +731,12 @@ static PlcSlotLoadStatusV1 build_mirror_program_object_file(const char* device_i
                                                             size_t object_capacity,
                                                             size_t& object_size_out);
 
-static PlcSlotLoadResultV1 load_mirror_program_into_slot(const PointCatalog& catalog,
-                                                         const PlcRuntimePublisherV1& publisher,
-                                                         const char* device_id,
-                                                         uint16_t slot_id,
-                                                         uint8_t input_channel,
-                                                         uint8_t output_channel) {
-    PlcSlotLoadResultV1 result = {};
-    result.status = kPlcSlotLoadInvalidArgument;
-    result.parse_status = kPlcObjectParseOk;
-    result.link_result.status = kPlcObjectLinkInvalidArgument;
-
-    if (device_id == nullptr ||
-        input_channel == 0u || input_channel > 8u ||
-        output_channel == 0u || output_channel > 8u ||
-        slot_id >= kPlcSlotCountV1) {
-        return result;
-    }
-
-    PlcObjectSymbolRecordV1 symbols[2] = {};
-    PlcObjectRelocationRecordV1 relocations[2] = {};
-    build_waveshare_mirror_symbols(device_id, input_channel, output_channel, symbols, relocations);
-
-    uint8_t object_code[] = {
-        0x10u, 0x00u, 0x00u,
-        0x11u, 0x00u, 0x00u,
-        0x00u,
-    };
-
-    uint8_t object_bytes[sizeof(PlcObjectFileHeaderV1) + sizeof(object_code) + sizeof(symbols) + sizeof(relocations)] = {};
-    size_t object_size = 0u;
-    const PlcSlotLoadStatusV1 build_status = build_mirror_program_object_file(device_id,
-                                                                              input_channel,
-                                                                              output_channel,
-                                                                              object_bytes,
-                                                                              sizeof(object_bytes),
-                                                                              object_size);
-    if (build_status != kPlcSlotLoadOk) {
-        result.status = build_status;
-        return result;
-    }
-
-    return PlcSlotLoaderV1::loadObjectFileIntoSlot(publisher,
-                                                   catalog,
-                                                   slot_id,
-                                                   object_bytes,
-                                                   object_size);
-}
+static bool save_persisted_plc_slots_package(Flash* flash,
+                                             NodeLogger* logger,
+                                             const PlcRuntimePublisherV1* runtime_publisher,
+                                             uint16_t override_slot_id,
+                                             const uint8_t* override_object_bytes,
+                                             uint32_t override_object_size);
 
 static PlcSlotLoadStatusV1 build_mirror_program_object_file(const char* device_id,
                                                             uint8_t input_channel,
@@ -801,6 +798,133 @@ static PlcSlotLoadStatusV1 build_mirror_program_object_file(const char* device_i
     std::memcpy(object_out + relocation_offset, relocations, sizeof(relocations));
     object_size_out = object_size;
     return kPlcSlotLoadOk;
+}
+
+static bool save_persisted_plc_slots_package(Flash* flash,
+                                             NodeLogger* logger,
+                                             const PlcRuntimePublisherV1* runtime_publisher,
+                                             uint16_t override_slot_id,
+                                             const uint8_t* override_object_bytes,
+                                             uint32_t override_object_size)
+{
+    if (flash == nullptr) {
+        if (logger != nullptr) {
+            logger->Warning("Flash not ready, PLC slots not saved");
+        }
+        return false;
+    }
+
+    uint8_t* package_buffer = plc_upload_volatile_staging_ptr();
+    if (package_buffer == nullptr || kPlcUploadVolatileStagingSize < kPlcFlashPackageSize) {
+        if (logger != nullptr) {
+            logger->Warning("PLC flash package staging unavailable");
+        }
+        return false;
+    }
+
+    const uint8_t* preserved_override_bytes = override_object_bytes;
+    if (override_object_bytes == package_buffer) {
+        if (override_slot_id >= kPlcSlotCountV1 ||
+            override_object_size > PlcSlotLoaderV1::slotObjectSnapshotCapacity()) {
+            if (logger != nullptr) {
+                logger->Warning("PLC override object scratch unavailable for slot %u",
+                                static_cast<unsigned>(override_slot_id));
+            }
+            return false;
+        }
+
+        uint8_t* scratch_buffer = reinterpret_cast<uint8_t*>(
+            static_cast<uintptr_t>(PlcSlotLoaderV1::slotObjectSnapshotDataAddress(override_slot_id)));
+        std::memcpy(scratch_buffer, override_object_bytes, override_object_size);
+        preserved_override_bytes = scratch_buffer;
+    }
+
+    std::memset(package_buffer, 0xFF, kPlcFlashPackageSize);
+    auto* package_header = reinterpret_cast<PlcFlashPackageHeader*>(package_buffer);
+    auto* entries = reinterpret_cast<PlcFlashPackageEntry*>(package_buffer + sizeof(PlcFlashPackageHeader));
+    const uint32_t objects_base = static_cast<uint32_t>(sizeof(PlcFlashPackageHeader) +
+                                                        (sizeof(PlcFlashPackageEntry) * kPlcSlotCountV1));
+    uint32_t write_offset = objects_base;
+    uint32_t persisted_slot_count = 0u;
+
+    for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
+        PlcFlashPackageEntry& entry = entries[slot_id];
+        entry.slot_id = slot_id;
+
+        const uint8_t* object_bytes = nullptr;
+        uint32_t object_size = 0u;
+        uint32_t object_checksum = 0u;
+        if (preserved_override_bytes != nullptr && slot_id == override_slot_id) {
+            const auto* object_header = reinterpret_cast<const PlcObjectFileHeaderV1*>(preserved_override_bytes);
+            if (override_object_size < sizeof(PlcObjectFileHeaderV1) ||
+                override_object_size > PlcSlotLoaderV1::slotObjectSnapshotCapacity() ||
+                object_header->magic != kPlcObjectFileMagicV1 ||
+                object_header->version != kPlcObjectFileVersionV1 ||
+                object_header->total_size != override_object_size) {
+                if (logger != nullptr) {
+                    logger->Warning("PLC override object invalid for slot %u", static_cast<unsigned>(slot_id));
+                }
+                return false;
+            }
+
+            object_bytes = preserved_override_bytes;
+            object_size = override_object_size;
+            object_checksum = object_header->object_checksum;
+        } else {
+            const auto* snapshot_header = reinterpret_cast<const PlcObjectSnapshotHeaderV1*>(
+                static_cast<uintptr_t>(PlcSlotLoaderV1::slotObjectSnapshotHeaderAddress(slot_id)));
+            if (!plc_object_snapshot_header_valid(*snapshot_header, slot_id)) {
+                continue;
+            }
+
+            object_bytes = reinterpret_cast<const uint8_t*>(
+                static_cast<uintptr_t>(PlcSlotLoaderV1::slotObjectSnapshotDataAddress(slot_id)));
+            object_size = snapshot_header->object_size;
+            object_checksum = snapshot_header->object_checksum;
+        }
+
+        if (write_offset > kPlcFlashPackageSize || object_size > (kPlcFlashPackageSize - write_offset)) {
+            if (logger != nullptr) {
+                logger->Warning("PLC flash package too large while saving slot %u", static_cast<unsigned>(slot_id));
+            }
+            return false;
+        }
+
+        std::memcpy(package_buffer + write_offset, object_bytes, object_size);
+        entry.flags = kPlcFlashPackageEntryPresent;
+        entry.object_offset = write_offset;
+        entry.object_size = object_size;
+        entry.object_checksum = object_checksum;
+        write_offset += object_size;
+        ++persisted_slot_count;
+    }
+
+    package_header->magic = kPlcFlashPackageMagic;
+    package_header->version = kPlcFlashPackageVersion;
+    package_header->slot_count = kPlcSlotCountV1;
+    package_header->entry_size = static_cast<uint16_t>(sizeof(PlcFlashPackageEntry));
+    package_header->payload_size = write_offset - static_cast<uint32_t>(sizeof(PlcFlashPackageHeader));
+    package_header->payload_checksum = point_catalog_checksum(package_buffer + sizeof(PlcFlashPackageHeader),
+                                                              package_header->payload_size);
+    package_header->flags = persisted_slot_count;
+    package_header->package_epoch = runtime_publisher != nullptr
+                                        ? runtime_publisher->storeEpoch()
+                                        : millis();
+
+    if (!flash_erase_range(flash, kPlcFlashPackageBase, kPlcFlashPackageSize) ||
+        !flash_write_erased_bytes(flash, kPlcFlashPackageBase, package_buffer, write_offset)) {
+        if (logger != nullptr) {
+            logger->Warning("PLC flash package write failed");
+        }
+        return false;
+    }
+
+    if (logger != nullptr) {
+        logger->Info("PLC flash package saved (%u slots, %lu bytes)",
+                     static_cast<unsigned>(persisted_slot_count),
+                     static_cast<unsigned long>(write_offset));
+    }
+    return true;
 }
 
 static void serialize_point_state(JsonObject obj,
@@ -1637,9 +1761,6 @@ bool NodeNetCore::handleLocalPlcPointWrite(const PointDefinition& definition, Js
                 control_block->status == kPlcSlotStatusRunningV1) {
                 control_block->status = kPlcSlotStatusLoadedV1;
             }
-            if (slot_id == 0u) {
-                _plcCore.resetSlot0ExecutionCache();
-            }
             ok = true;
         }
     } else if (std::strcmp(definition.id.point_id, "clearFault") == 0) {
@@ -2265,25 +2386,47 @@ bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument
         response["error"] = "channelOutOfRange";
         return true;
     }
-    if (persist_to_flash && slot_id != 0u) {
-        response["ok"] = false;
-        response["error"] = "flashPersistSlot0Only";
-        return true;
-    }
-
-    const PlcSlotLoadResultV1 load_result = load_mirror_program_into_slot(_pointCatalog,
-                                                                          *_plcRuntimePublisher,
-                                                                          deviceId,
-                                                                          slot_id,
-                                                                          input_channel,
-                                                                          output_channel);
+    uint8_t object_bytes[sizeof(PlcObjectFileHeaderV1) + 7u +
+                         (sizeof(PlcObjectSymbolRecordV1) * 2u) +
+                         (sizeof(PlcObjectRelocationRecordV1) * 2u)] = {};
+    size_t object_size = 0u;
+    const PlcSlotLoadStatusV1 build_status = build_mirror_program_object_file(deviceId,
+                                                                              input_channel,
+                                                                              output_channel,
+                                                                              object_bytes,
+                                                                              sizeof(object_bytes),
+                                                                              object_size);
     response["slotId"] = slot_id;
     response["programType"] = "mirrorBool";
     response["persistToFlash"] = persist_to_flash;
-    response["loadStatus"] = static_cast<uint8_t>(load_result.status);
+    response["loadStatus"] = static_cast<uint8_t>(build_status);
     JsonObject params_out = response["params"].to<JsonObject>();
     params_out["inputChannel"] = input_channel;
     params_out["outputChannel"] = output_channel;
+    if (build_status != kPlcSlotLoadOk) {
+        response["ok"] = false;
+        response["error"] = "loadFailed";
+        return true;
+    }
+
+    if (persist_to_flash &&
+        !save_persisted_plc_slots_package(_flash,
+                                          _logger,
+                                          _plcRuntimePublisher,
+                                          slot_id,
+                                          object_bytes,
+                                          static_cast<uint32_t>(object_size))) {
+        response["ok"] = false;
+        response["error"] = "flashPersistFailed";
+        return true;
+    }
+
+    const PlcSlotLoadResultV1 load_result = PlcSlotLoaderV1::loadObjectFileIntoSlot(*_plcRuntimePublisher,
+                                                                                     _pointCatalog,
+                                                                                     slot_id,
+                                                                                     object_bytes,
+                                                                                     static_cast<uint32_t>(object_size));
+    response["loadStatus"] = static_cast<uint8_t>(load_result.status);
     if (load_result.status != kPlcSlotLoadOk) {
         response["ok"] = false;
         response["error"] = "loadFailed";
@@ -2312,60 +2455,8 @@ bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument
         }
     }
 
-    PlcSlotLoadStatusV1 flash_status = kPlcSlotLoadInvalidArgument;
     const char* source_name = "local";
-    if (persist_to_flash) {
-        if (!runtime_map_ok) {
-            response["ok"] = false;
-            response["error"] = "runtimeMapFailed";
-            return true;
-        }
-
-        const PlcMirrorProgramParamsV1 package_params = make_mirror_program_params(input_channel,
-                                                                                    output_channel,
-                                                                                    input_runtime_index,
-                                                                                    output_runtime_index,
-                                                                                    _plcRuntimePublisher->storeEpoch());
-        (void)package_params;
-        uint8_t object_bytes[sizeof(PlcObjectFileHeaderV1) + 7u + (2u * sizeof(PlcObjectSymbolRecordV1)) +
-                             (2u * sizeof(PlcObjectRelocationRecordV1))] = {};
-        size_t object_size = 0u;
-        flash_status = build_mirror_program_object_file(deviceId,
-                                                        input_channel,
-                                                        output_channel,
-                                                        object_bytes,
-                                                        sizeof(object_bytes),
-                                                        object_size);
-        if (flash_status == kPlcSlotLoadOk) {
-            const uint32_t erase_size = static_cast<uint32_t>(((object_size + Flash::kSectorSize - 1u) /
-                                                               Flash::kSectorSize) * Flash::kSectorSize);
-            if (!flash_erase_range(_flash, Flash::kPlcPackageSlotBase, erase_size) ||
-                !flash_write_erased_bytes(_flash, Flash::kPlcPackageSlotBase, object_bytes, object_size)) {
-                flash_status = kPlcSlotLoadFlashReadFailed;
-            } else {
-                const PlcSlotLoadResultV1 flash_load_result =
-                    PlcSlotLoaderV1::loadObjectFileFromFlash(*_plcRuntimePublisher,
-                                                             _pointCatalog,
-                                                             slot_id,
-                                                             *_flash,
-                                                             Flash::kPlcPackageSlotBase,
-                                                             Flash::kPlcPackageSlotSize);
-                flash_status = flash_load_result.status;
-                if (flash_status == kPlcSlotLoadOk) {
-                    source_name = "flash";
-                }
-            }
-        }
-
-        response["flashStatus"] = static_cast<uint8_t>(flash_status);
-        if (flash_status != kPlcSlotLoadOk) {
-            response["ok"] = false;
-            response["error"] = "flashPersistFailed";
-            return true;
-        }
-    }
-
-    if (slot_id == 0u && runtime_map_ok) {
+    if (runtime_map_ok) {
         setPlcSlotRuntimeDiagnostics(static_cast<uint8_t>(slot_id),
                                      input_channel,
                                      output_channel,
@@ -2381,6 +2472,7 @@ bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument
         response["inputRuntimeIndex"] = input_runtime_index;
         response["outputRuntimeIndex"] = output_runtime_index;
     }
+    response["rebootPersistent"] = persist_to_flash;
 
     const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
         static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
@@ -2553,17 +2645,12 @@ bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonD
         response["error"] = "slotOutOfRange";
         return true;
     }
-    if (persist_to_flash && slot_id != 0u) {
+    if (!auto_load) {
         response["ok"] = false;
-        response["error"] = "flashPersistSlot0Only";
+        response["error"] = persist_to_flash ? "flashUploadRequiresAutoLoad" : "volatileUploadRequiresAutoLoad";
         return true;
     }
-    if (!persist_to_flash && !auto_load) {
-        response["ok"] = false;
-        response["error"] = "volatileUploadRequiresAutoLoad";
-        return true;
-    }
-    const uint32_t staging_capacity = persist_to_flash ? kPlcUploadStagingSize : kPlcUploadVolatileStagingSize;
+    const uint32_t staging_capacity = kPlcUploadVolatileStagingSize;
     if (total_size < sizeof(PlcObjectFileHeaderV1) || total_size > staging_capacity) {
         response["ok"] = false;
         response["error"] = "sizeOutOfRange";
@@ -2574,17 +2661,7 @@ bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonD
         response["error"] = "unsupportedArtifactType";
         return true;
     }
-    if (persist_to_flash) {
-        if (!flash_erase_range(_flash,
-                               kPlcUploadStagingBase,
-                               static_cast<uint32_t>(((total_size + Flash::kSectorSize - 1u) / Flash::kSectorSize) * Flash::kSectorSize))) {
-            response["ok"] = false;
-            response["error"] = "stagingEraseFailed";
-            return true;
-        }
-    } else {
-        std::memset(plc_upload_volatile_staging_ptr(), 0xFF, static_cast<size_t>(staging_capacity));
-    }
+    std::memset(plc_upload_volatile_staging_ptr(), 0xFF, static_cast<size_t>(staging_capacity));
 
     resetPlcUploadSession();
     _plcUploadSession.active = true;
@@ -2601,7 +2678,7 @@ bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonD
     response["acceptedChunkSize"] = Flash::kPageSize;
     response["uploadId"] = _plcUploadSession.upload_id;
     response["persistToFlash"] = persist_to_flash;
-    response["stagingMedium"] = persist_to_flash ? "flash" : "sdram";
+    response["stagingMedium"] = "sdram";
     fillPlcUploadStatus(response, false);
     return true;
 }
@@ -2670,22 +2747,42 @@ bool NodeNetCore::handlePlcUploadCommitRequest(const JsonDocument& request, Json
         return true;
     }
 
+    const uint8_t* upload_object_bytes = plc_upload_volatile_staging_ptr();
+    if (_plcUploadSession.persist_to_flash) {
+        if (_plcUploadSession.slot_id >= kPlcSlotCountV1 ||
+            _plcUploadSession.total_size > PlcSlotLoaderV1::slotObjectSnapshotCapacity()) {
+            response["ok"] = false;
+            response["error"] = "flashPersistFailed";
+            fillPlcUploadStatus(response, false);
+            return true;
+        }
+
+        uint8_t* scratch_object_bytes = reinterpret_cast<uint8_t*>(
+            static_cast<uintptr_t>(PlcSlotLoaderV1::slotObjectSnapshotDataAddress(_plcUploadSession.slot_id)));
+        std::memcpy(scratch_object_bytes, upload_object_bytes, _plcUploadSession.total_size);
+        upload_object_bytes = scratch_object_bytes;
+    }
+
+    if (_plcUploadSession.persist_to_flash &&
+        !save_persisted_plc_slots_package(_flash,
+                                          _logger,
+                                          _plcRuntimePublisher,
+                                          _plcUploadSession.slot_id,
+                                          upload_object_bytes,
+                                          _plcUploadSession.total_size)) {
+        response["ok"] = false;
+        response["error"] = "flashPersistFailed";
+        fillPlcUploadStatus(response, false);
+        return true;
+    }
+
     PlcSlotLoadResultV1 load_result = {};
     if (_plcUploadSession.auto_load) {
-        if (_plcUploadSession.persist_to_flash) {
-            load_result = PlcSlotLoaderV1::loadObjectFileFromFlash(*_plcRuntimePublisher,
-                                           _pointCatalog,
-                                           _plcUploadSession.slot_id,
-                                           *_flash,
-                                           kPlcUploadStagingBase,
-                                           _plcUploadSession.total_size);
-        } else {
-            load_result = PlcSlotLoaderV1::loadObjectFileIntoSlot(*_plcRuntimePublisher,
-                                          _pointCatalog,
-                                          _plcUploadSession.slot_id,
-                                          plc_upload_volatile_staging_ptr(),
-                                          _plcUploadSession.total_size);
-        }
+        load_result = PlcSlotLoaderV1::loadObjectFileIntoSlot(*_plcRuntimePublisher,
+                                                              _pointCatalog,
+                                                              _plcUploadSession.slot_id,
+                                                              upload_object_bytes,
+                                                              _plcUploadSession.total_size);
         if (load_result.status != kPlcSlotLoadOk) {
             response["ok"] = false;
             response["error"] = "loadFailed";
@@ -2841,39 +2938,17 @@ bool NodeNetCore::handlePlcUploadDataChunk(uint32_t upload_id,
         response["error"] = "chunkChecksumMismatch";
         response["expectedOffset"] = _plcUploadSession.expected_offset;
     } else {
-        if (_plcUploadSession.persist_to_flash) {
-            uint8_t page[Flash::kPageSize] = {};
-            std::memset(page, 0xFF, sizeof(page));
-            std::memcpy(page, payload, payload_size);
-            if (!_flash->writePage(kPlcUploadStagingBase + offset, page)) {
-                response["ok"] = false;
-                response["error"] = "flashWriteFailed";
-                response["expectedOffset"] = _plcUploadSession.expected_offset;
-            } else {
-                _plcUploadSession.bytes_received += static_cast<uint32_t>(payload_size);
-                _plcUploadSession.expected_offset += static_cast<uint32_t>(payload_size);
-                _plcUploadSession.payload_checksum = checksum32_extend(_plcUploadSession.payload_checksum,
-                                                                       payload,
-                                                                       payload_size);
-                _plcUploadSession.last_activity_ms = millis();
-                _plcUploadSession.last_error_status = 0u;
-                response["ok"] = true;
-                response["bytesReceived"] = _plcUploadSession.bytes_received;
-                response["expectedOffset"] = _plcUploadSession.expected_offset;
-            }
-        } else {
-            std::memcpy(plc_upload_volatile_staging_ptr() + offset, payload, payload_size);
-            _plcUploadSession.bytes_received += static_cast<uint32_t>(payload_size);
-            _plcUploadSession.expected_offset += static_cast<uint32_t>(payload_size);
-            _plcUploadSession.payload_checksum = checksum32_extend(_plcUploadSession.payload_checksum,
-                                                                   payload,
-                                                                   payload_size);
-            _plcUploadSession.last_activity_ms = millis();
-            _plcUploadSession.last_error_status = 0u;
-            response["ok"] = true;
-            response["bytesReceived"] = _plcUploadSession.bytes_received;
-            response["expectedOffset"] = _plcUploadSession.expected_offset;
-        }
+        std::memcpy(plc_upload_volatile_staging_ptr() + offset, payload, payload_size);
+        _plcUploadSession.bytes_received += static_cast<uint32_t>(payload_size);
+        _plcUploadSession.expected_offset += static_cast<uint32_t>(payload_size);
+        _plcUploadSession.payload_checksum = checksum32_extend(_plcUploadSession.payload_checksum,
+                                                               payload,
+                                                               payload_size);
+        _plcUploadSession.last_activity_ms = millis();
+        _plcUploadSession.last_error_status = 0u;
+        response["ok"] = true;
+        response["bytesReceived"] = _plcUploadSession.bytes_received;
+        response["expectedOffset"] = _plcUploadSession.expected_offset;
     }
 
     if (!(response["ok"] | false)) {
@@ -3057,6 +3132,107 @@ bool NodeNetCore::loadPointCatalog()
     (void)savePointCatalog();
 
     return true;
+}
+
+bool NodeNetCore::savePersistedPlcSlots()
+{
+    return save_persisted_plc_slots_package(_flash,
+                                            _logger,
+                                            _plcRuntimePublisher,
+                                            kPlcSlotCountV1,
+                                            nullptr,
+                                            0u);
+}
+
+uint16_t NodeNetCore::restorePersistedPlcSlots()
+{
+    if (_flash == nullptr || _plcRuntimePublisher == nullptr) {
+        return 0u;
+    }
+
+    PlcFlashPackageHeader package_header = {};
+    if (!flash_read_bytes(_flash, kPlcFlashPackageBase, &package_header, sizeof(package_header)) ||
+        package_header.magic != kPlcFlashPackageMagic ||
+        package_header.version != kPlcFlashPackageVersion ||
+        package_header.slot_count != kPlcSlotCountV1 ||
+        package_header.entry_size != sizeof(PlcFlashPackageEntry) ||
+        package_header.payload_size < (sizeof(PlcFlashPackageEntry) * kPlcSlotCountV1) ||
+        package_header.payload_size > (kPlcFlashPackageSize - sizeof(PlcFlashPackageHeader))) {
+        return 0u;
+    }
+
+    uint8_t* payload_buffer = plc_upload_volatile_staging_ptr();
+    if (payload_buffer == nullptr || package_header.payload_size > kPlcUploadVolatileStagingSize) {
+        if (_logger != nullptr) {
+            _logger->Warning("PLC flash package payload staging unavailable");
+        }
+        return 0u;
+    }
+
+    if (!flash_read_bytes(_flash,
+                          kPlcFlashPackageBase + static_cast<uint32_t>(sizeof(PlcFlashPackageHeader)),
+                          payload_buffer,
+                          package_header.payload_size)) {
+        if (_logger != nullptr) {
+            _logger->Warning("PLC flash package payload read failed");
+        }
+        return 0u;
+    }
+
+    const uint32_t payload_checksum = point_catalog_checksum(payload_buffer, package_header.payload_size);
+    if (payload_checksum != package_header.payload_checksum) {
+        if (_logger != nullptr) {
+            _logger->Warning("PLC flash package checksum mismatch");
+        }
+        return 0u;
+    }
+
+    const auto* entries = reinterpret_cast<const PlcFlashPackageEntry*>(payload_buffer);
+    const uint32_t payload_end = static_cast<uint32_t>(sizeof(PlcFlashPackageHeader)) + package_header.payload_size;
+    const uint32_t objects_base = static_cast<uint32_t>(sizeof(PlcFlashPackageHeader) +
+                                                        (sizeof(PlcFlashPackageEntry) * kPlcSlotCountV1));
+    uint16_t restored_count = 0u;
+    _plcSlotRuntimeDiagnostics.valid = false;
+
+    for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
+        const PlcFlashPackageEntry& entry = entries[slot_id];
+        if ((entry.flags & kPlcFlashPackageEntryPresent) == 0u) {
+            continue;
+        }
+        if (entry.slot_id != slot_id ||
+            entry.object_size < sizeof(PlcObjectFileHeaderV1) ||
+            entry.object_offset < objects_base ||
+            entry.object_offset > payload_end ||
+            entry.object_size > (payload_end - entry.object_offset)) {
+            if (_logger != nullptr) {
+                _logger->Warning("PLC flash package entry invalid for slot %u", static_cast<unsigned>(slot_id));
+            }
+            continue;
+        }
+
+        const PlcSlotLoadResultV1 load_result = PlcSlotLoaderV1::loadObjectFileFromFlash(*_plcRuntimePublisher,
+                                                                                          _pointCatalog,
+                                                                                          slot_id,
+                                                                                          *_flash,
+                                                                                          kPlcFlashPackageBase + entry.object_offset,
+                                                                                          entry.object_size);
+        if (load_result.status != kPlcSlotLoadOk) {
+            if (_logger != nullptr) {
+                _logger->Warning("PLC flash restore failed for slot %u (status=%u)",
+                                 static_cast<unsigned>(slot_id),
+                                 static_cast<unsigned>(load_result.status));
+            }
+            continue;
+        }
+
+        ++restored_count;
+    }
+
+    publishBuiltinPlcPointStates(true);
+    if (_logger != nullptr && restored_count > 0u) {
+        _logger->Info("PLC flash package restored (%u slots)", static_cast<unsigned>(restored_count));
+    }
+    return restored_count;
 }
 
 void NodeNetCore::registerNodePointDefinition(JsonDocument& doc)

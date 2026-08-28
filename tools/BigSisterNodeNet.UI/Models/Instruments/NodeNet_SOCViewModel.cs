@@ -109,7 +109,7 @@ namespace BigSisterNodeNet.UI.Models.Instruments
             private set => SetProperty(ref _plcStatusMessage, value);
         }
 
-        public string PlcHintMessage => "Upload et download utilisent objectFileV1. Le slot 0 peut rester reboot-persistant via flash; les autres slots sont chargés en runtime. Les noms VAR réservés du runtime de slot sont rejetés à l'assemblage.";
+        public string PlcHintMessage => "Upload et download utilisent objectFileV1. Les uploads sont persistés en flash pour reprise au cold boot de tous les slots. Si un slot est vide, Download renvoie simplement indisponible. Les noms VAR réservés du runtime de slot sont rejetés à l'assemblage.";
 
         public bool IsUploadingPlcProgram
         {
@@ -198,7 +198,24 @@ namespace BigSisterNodeNet.UI.Models.Instruments
         private void ReadStates()
         {
             IsSettingsVisible = false;
-            _nodeNetSoc?.BrowsePointStates(BrowsePath ?? string.Empty);
+            var path = BrowsePath ?? string.Empty;
+            EnsurePointDefinitionsLoaded(path);
+            _nodeNetSoc?.BrowsePointStates(path);
+        }
+
+        private void EnsurePointDefinitionsLoaded(string path)
+        {
+            if (_nodeNetSoc == null)
+            {
+                return;
+            }
+
+            if (_nodeNetSoc.IsPointDefinitionPathLoaded(path))
+            {
+                return;
+            }
+
+            _nodeNetSoc.BrowsePointDefinitions(path);
         }
 
         private void AddFeature(PointDefinitionTreeNode node)
@@ -296,6 +313,11 @@ namespace BigSisterNodeNet.UI.Models.Instruments
                 var objectBytes = result?.PayloadBytes ?? Array.Empty<byte>();
                 PlcProgramSource = PlcMachineCodeDisassembler.DisassembleObjectFile(objectBytes).Source;
                 PlcStatusMessage = $"Download terminé pour le slot {SelectedPlcSlot}. {objectBytes.Length} octets lus.";
+            }
+            catch (PlcDeviceErrorException ex) when (string.Equals(ex.ErrorCode, "objectFileUnavailable", StringComparison.Ordinal))
+            {
+                PlcProgramSource = string.Empty;
+                PlcStatusMessage = $"Le slot {SelectedPlcSlot} ne contient aucun objectFileV1 téléchargeable.";
             }
             catch (Exception ex)
             {

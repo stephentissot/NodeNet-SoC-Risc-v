@@ -18,7 +18,6 @@ public:
     void attachRuntimePublisher(const PlcRuntimePublisherV1* publisher);
     void setModbusBatchMaxGap(uint16_t max_gap);
     void loop();
-    void resetSlot0ExecutionCache();
 
 private:
     static constexpr size_t kModbusRegisterBufferSize = 2u;
@@ -54,9 +53,6 @@ private:
     size_t next_batch_index_ = 0u;
     uint32_t modbus_plan_hash_ = 0u;
     uint16_t modbus_batch_max_gap_ = 6u;
-    uint32_t next_vm_scan_ms_ = 0u;
-    bool slot0_last_output_valid_ = false;
-    bool slot0_last_output_value_ = false;
 
     void rebuildPollPlanIfNeeded();
     void rebuildPollPlan();
@@ -73,13 +69,10 @@ private:
                              const uint16_t* regs,
                              uint16_t available_regs,
                              PointState& state) const;
-    void runSlot0Program();
-    bool executeSlot0Scan(uint32_t control_block_addr, uint32_t now_ms);
     bool readRuntimeBool(uint16_t runtime_index, bool& value_out) const;
     bool commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now_ms);
     bool readRuntimeInt16(uint16_t runtime_index, int16_t& value_out) const;
     bool commitRuntimeInt16(uint16_t runtime_index, int16_t value, uint32_t now_ms);
-    void faultSlot0(uint32_t control_block_addr, uint32_t fault_code, uint32_t fault_info);
     PointQuality qualityFromModbusError(ModbusMaster::Error error) const;
 };
 

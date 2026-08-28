@@ -31,6 +31,24 @@ namespace BigSisterNodeNet.Plc
         public IDictionary<string, object> FinalResponse { get; set; }
     }
 
+    public sealed class PlcDeviceErrorException : InvalidOperationException
+    {
+        public PlcDeviceErrorException(string message,
+                                       string errorCode,
+                                       string loadStatus,
+                                       IDictionary<string, object> response)
+            : base(message)
+        {
+            ErrorCode = errorCode ?? string.Empty;
+            LoadStatus = loadStatus ?? string.Empty;
+            Response = response;
+        }
+
+        public string ErrorCode { get; }
+        public string LoadStatus { get; }
+        public IDictionary<string, object> Response { get; }
+    }
+
     public sealed class PlcUploadClient
     {
         public byte[] BuildObjectFile(string machineCode, PlcUploadOptions options)
@@ -193,11 +211,12 @@ namespace BigSisterNodeNet.Plc
                 var loadStatus = response.TryGetValue("loadStatus", out var loadStatusValue) && loadStatusValue != null
                     ? Convert.ToString(loadStatusValue)
                     : string.Empty;
-                throw new InvalidOperationException(string.IsNullOrWhiteSpace(error)
+                var message = string.IsNullOrWhiteSpace(error)
                     ? "Device returned a rejected response."
                     : string.IsNullOrWhiteSpace(loadStatus)
                         ? $"Device returned error '{error}'."
-                        : $"Device returned error '{error}' (loadStatus={loadStatus}).");
+                        : $"Device returned error '{error}' (loadStatus={loadStatus}).";
+                throw new PlcDeviceErrorException(message, error, loadStatus, response);
             }
 
             return response;

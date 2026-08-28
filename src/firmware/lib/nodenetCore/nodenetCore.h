@@ -50,6 +50,7 @@ class NodeNetCore
         bool updatePointState(const PointIdentity& id, const PointState& state);
         bool updatePointCommandState(const PointIdentity& id, const PointCommandState& state);
         void attachPlcRuntimePublisher(const PlcRuntimePublisherV1* publisher);
+        uint16_t restorePersistedPlcSlots();
         void setPlcSlotRuntimeDiagnostics(uint8_t slot_id,
                                           uint8_t input_channel,
                                           uint8_t output_channel,
@@ -268,6 +269,7 @@ class NodeNetCore
         bool ensureFlashDbReady();
         bool savePointCatalog();
         bool loadPointCatalog();
+        bool savePersistedPlcSlots();
         void registerNodePointDefinition(JsonDocument& doc);
         void publishNodePointStates(JsonDocument& doc);
         void registerBuiltinPointDefinitions();

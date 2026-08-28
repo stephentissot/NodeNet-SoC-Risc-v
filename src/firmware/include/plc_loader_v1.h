@@ -252,6 +252,23 @@ public:
                control_limit <= sdram_limit;
     }
 
+    static void clearVolatileState()
+    {
+        if (!regionAvailable()) {
+            return;
+        }
+
+        std::memset(reinterpret_cast<void*>(static_cast<uintptr_t>(kPlcSlotBytecodeRegionBaseV1)),
+                    0,
+                    kPlcSlotBytecodeRegionSizeV1);
+        std::memset(reinterpret_cast<void*>(static_cast<uintptr_t>(kPlcSlotControlRegionBaseV1)),
+                    0,
+                    kPlcSlotControlRegionSizeV1);
+        std::memset(reinterpret_cast<void*>(static_cast<uintptr_t>(kPlcSlotObjectRegionBaseV1)),
+                    0,
+                    kPlcSlotObjectRegionSizeV1);
+    }
+
     static PlcSlotLoadResultV1 loadParsedObjectIntoSlot(const PlcRuntimePublisherV1& publisher,
                                                         const PointCatalog& catalog,
                                                         uint16_t slot_id,

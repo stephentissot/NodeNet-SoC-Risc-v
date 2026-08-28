@@ -13,24 +13,6 @@ float apply_numeric_scale(float value, const PointDefinition& definition) {
     return value * definition.scale;
 }
 
-enum SlotOpcode : uint8_t {
-    kSlotOpHalt = 0x00u,
-    kSlotOpLoadPointBool = 0x10u,
-    kSlotOpStorePointBool = 0x11u,
-    kSlotOpIncPointInt16 = 0x20u,
-    kSlotOpDecPointInt16 = 0x21u,
-};
-
-static constexpr uint32_t kPlcFaultInvalidOpcode = 0x0001u;
-static constexpr uint32_t kPlcFaultPointIndexOutOfRange = 0x0004u;
-static constexpr uint32_t kPlcFaultTypeMismatch = 0x0005u;
-static constexpr uint32_t kPlcFaultWriteRejected = 0x000Du;
-
-static bool plc_slot_paused(const volatile PlcProgramControlBlockV1& control_block)
-{
-    return (control_block.control & kPlcSlotControlPausedV1) != 0u;
-}
-
 static bool modbus_table_is_bitwise(ModbusTable table)
 {
     return table == ModbusTable::Coils || table == ModbusTable::DiscreteInputs;
@@ -73,9 +55,6 @@ void PlcCore::begin(PointCatalog* point_catalog, ModbusMaster* modbus0, NodeLogg
     batch_count_ = 0u;
     next_batch_index_ = 0u;
     modbus_plan_hash_ = 0u;
-    next_vm_scan_ms_ = millis();
-    slot0_last_output_valid_ = false;
-    slot0_last_output_value_ = false;
     std::memset(batches_, 0, sizeof(batches_));
     std::memset(batch_members_, 0, sizeof(batch_members_));
 }
@@ -89,12 +68,6 @@ void PlcCore::setModbusBatchMaxGap(uint16_t max_gap)
 {
     modbus_batch_max_gap_ = max_gap;
     modbus_plan_hash_ = 0u;
-}
-
-void PlcCore::resetSlot0ExecutionCache()
-{
-    slot0_last_output_valid_ = false;
-    slot0_last_output_value_ = false;
 }
 
 void PlcCore::loop() {
@@ -142,25 +115,35 @@ void PlcCore::consumeRuntimeWrites(uint32_t now_ms)
             continue;
         }
 
+        bool consumed = false;
+
         switch (definition.value_type) {
         case PointValueType::Bool: {
             const bool value = (runtime_values[runtime_index].raw0 & 1u) != 0u;
-            (void)commitRuntimeBool(runtime_index, value, runtime_status.last_update_ms != 0u
-                                                             ? runtime_status.last_update_ms
-                                                             : now_ms);
+            consumed = commitRuntimeBool(runtime_index,
+                                         value,
+                                         runtime_status.last_update_ms != 0u
+                                             ? runtime_status.last_update_ms
+                                             : now_ms);
             break;
         }
 
         case PointValueType::Int16: {
             const int16_t value = static_cast<int16_t>(runtime_values[runtime_index].raw0 & 0xFFFFu);
-            (void)commitRuntimeInt16(runtime_index, value, runtime_status.last_update_ms != 0u
-                                                               ? runtime_status.last_update_ms
-                                                               : now_ms);
+            consumed = commitRuntimeInt16(runtime_index,
+                                          value,
+                                          runtime_status.last_update_ms != 0u
+                                              ? runtime_status.last_update_ms
+                                              : now_ms);
             break;
         }
 
         default:
             break;
+        }
+
+        if (consumed) {
+            runtime_statuses[runtime_index].last_writer = kPlcRuntimeWriterCpu;
         }
     }
 }
@@ -301,136 +284,6 @@ void PlcCore::rebuildPollPlan()
         ++member_cursor;
         ++batch.member_count;
     }
-}
-
-void PlcCore::runSlot0Program()
-{
-    if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
-        return;
-    }
-
-    const uint32_t now_ms = millis();
-    if ((int32_t)(now_ms - next_vm_scan_ms_) < 0) {
-        return;
-    }
-    next_vm_scan_ms_ = now_ms + kVmScanPeriodMs;
-
-    volatile PlcProgramControlBlockV1* control_block = reinterpret_cast<volatile PlcProgramControlBlockV1*>(
-        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(0u)));
-    if (control_block->magic != kPlcProgramControlBlockMagicV1 ||
-        control_block->slot_id != 0u ||
-        control_block->bytecode_size == 0u ||
-        control_block->bytecode_base == 0u ||
-        (control_block->status & kPlcSlotStatusFaultedV1) != 0u ||
-        plc_slot_paused(*control_block)) {
-        return;
-    }
-
-    (void)executeSlot0Scan(PlcSlotLoaderV1::slotControlAddress(0u), now_ms);
-}
-
-bool PlcCore::executeSlot0Scan(uint32_t control_block_addr, uint32_t now_ms)
-{
-    volatile PlcProgramControlBlockV1& control_block =
-        *reinterpret_cast<volatile PlcProgramControlBlockV1*>(static_cast<uintptr_t>(control_block_addr));
-
-    if (control_block.bytecode_size == 0u) {
-        return false;
-    }
-
-    const uint8_t* code = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(control_block.bytecode_base));
-    const uint32_t entry_pc = control_block.pc < control_block.bytecode_size ? control_block.pc : 0u;
-    uint32_t pc = entry_pc;
-    uint32_t instructions = 0u;
-    bool accumulator = false;
-
-    while (instructions < control_block.max_instructions_per_scan) {
-        if (pc >= control_block.bytecode_size) {
-            faultSlot0(control_block_addr, kPlcFaultInvalidOpcode, pc);
-            return false;
-        }
-
-        const uint8_t opcode = code[pc++];
-        ++instructions;
-
-        switch (opcode) {
-        case kSlotOpHalt:
-            control_block.status = kPlcSlotStatusRunningV1;
-            control_block.pc = entry_pc;
-            control_block.cycle_counter += 1u;
-            return true;
-
-        case kSlotOpLoadPointBool: {
-            if ((pc + 1u) >= control_block.bytecode_size) {
-                faultSlot0(control_block_addr, kPlcFaultPointIndexOutOfRange, pc - 1u);
-                return false;
-            }
-
-            const uint16_t runtime_index = static_cast<uint16_t>(code[pc]) |
-                                           static_cast<uint16_t>(code[pc + 1u] << 8u);
-            pc += 2u;
-            if (!readRuntimeBool(runtime_index, accumulator)) {
-                faultSlot0(control_block_addr, kPlcFaultTypeMismatch, runtime_index);
-                return false;
-            }
-            break;
-        }
-
-        case kSlotOpStorePointBool: {
-            if ((pc + 1u) >= control_block.bytecode_size) {
-                faultSlot0(control_block_addr, kPlcFaultPointIndexOutOfRange, pc - 1u);
-                return false;
-            }
-
-            const uint16_t runtime_index = static_cast<uint16_t>(code[pc]) |
-                                           static_cast<uint16_t>(code[pc + 1u] << 8u);
-            pc += 2u;
-            if (!slot0_last_output_valid_ || slot0_last_output_value_ != accumulator) {
-                if (!commitRuntimeBool(runtime_index, accumulator, now_ms)) {
-                    faultSlot0(control_block_addr, kPlcFaultWriteRejected, runtime_index);
-                    return false;
-                }
-                slot0_last_output_valid_ = true;
-                slot0_last_output_value_ = accumulator;
-            }
-            break;
-        }
-
-        case kSlotOpIncPointInt16:
-        case kSlotOpDecPointInt16: {
-            if ((pc + 1u) >= control_block.bytecode_size) {
-                faultSlot0(control_block_addr, kPlcFaultPointIndexOutOfRange, pc - 1u);
-                return false;
-            }
-
-            const uint16_t runtime_index = static_cast<uint16_t>(code[pc]) |
-                                           static_cast<uint16_t>(code[pc + 1u] << 8u);
-            pc += 2u;
-
-            int16_t current_value = 0;
-            if (!readRuntimeInt16(runtime_index, current_value)) {
-                faultSlot0(control_block_addr, kPlcFaultTypeMismatch, runtime_index);
-                return false;
-            }
-
-            const int16_t next_value = static_cast<int16_t>(opcode == kSlotOpIncPointInt16
-                                                                 ? current_value + 1
-                                                                 : current_value - 1);
-            if (!commitRuntimeInt16(runtime_index, next_value, now_ms)) {
-                faultSlot0(control_block_addr, kPlcFaultWriteRejected, runtime_index);
-                return false;
-            }
-            break;
-        }
-
-        default:
-            faultSlot0(control_block_addr, kPlcFaultInvalidOpcode, opcode);
-            return false;
-        }
-    }
-
-    faultSlot0(control_block_addr, 0x000Au, instructions);
-    return false;
 }
 
 bool PlcCore::readRuntimeBool(uint16_t runtime_index, bool& value_out) const
@@ -584,15 +437,6 @@ bool PlcCore::commitRuntimeInt16(uint16_t runtime_index, int16_t value, uint32_t
     const bool state_ok = point_catalog_->updateState(definition.id, next_state);
     const bool command_ok = point_catalog_->updateCommandState(definition.id, command_state);
     return ok && state_ok && command_ok;
-}
-
-void PlcCore::faultSlot0(uint32_t control_block_addr, uint32_t fault_code, uint32_t fault_info)
-{
-    volatile PlcProgramControlBlockV1& control_block = *reinterpret_cast<volatile PlcProgramControlBlockV1*>(
-        static_cast<uintptr_t>(control_block_addr));
-    control_block.status |= kPlcSlotStatusFaultedV1;
-    control_block.fault_code = fault_code;
-    control_block.fault_info = fault_info;
 }
 
 void PlcCore::pollNextPoint()
