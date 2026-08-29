@@ -290,6 +290,7 @@ static bool deserialize_persisted_entry(PointDefinition& definition, JsonVariant
 
 PointCatalog::PointCatalog() {
     resetIndex();
+    resetDirtyStateTracking();
 }
 
 void PointCatalog::clear() {
@@ -298,6 +299,7 @@ void PointCatalog::clear() {
     std::memset(point_state_storage(), 0, sizeof(PointState) * kMaxPoints);
     std::memset(command_states_, 0, sizeof(command_states_));
     resetIndex();
+    requestRuntimeFullSync();
 }
 
 size_t PointCatalog::size() const {
@@ -349,6 +351,7 @@ bool PointCatalog::upsert(const PointDefinition& definition) {
     const size_t existing_index = lookupIndex(definition.id);
     if (existing_index < count_) {
         copyDefinition(entries_[existing_index], definition);
+        requestRuntimeFullSync();
         return true;
     }
 
@@ -361,6 +364,7 @@ bool PointCatalog::upsert(const PointDefinition& definition) {
     command_states_[count_] = {};
     insertIndex(entries_[count_].id, count_);
     count_ += 1u;
+    requestRuntimeFullSync();
     return true;
 }
 
@@ -381,16 +385,18 @@ bool PointCatalog::remove(const PointIdentity& id) {
     command_states_[count_ - 1u] = {};
     count_ -= 1u;
     rebuildIndex();
+    requestRuntimeFullSync();
     return true;
 }
 
 bool PointCatalog::updateState(const PointIdentity& id, const PointState& state) {
-    PointState* stored = findState(id);
-    if (stored == nullptr) {
+    const size_t index = lookupIndex(id);
+    if (index >= count_) {
         return false;
     }
 
-    *stored = state;
+    point_state_storage()[index] = state;
+    markStateDirty(index);
     return true;
 }
 
@@ -447,6 +453,28 @@ bool PointCatalog::loadFromJson(const char* json) {
     return true;
 }
 
+bool PointCatalog::popDirtyStateIndex(size_t& index_out) {
+    if (dirty_state_queue_count_ == 0u) {
+        return false;
+    }
+
+    const uint16_t index = dirty_state_queue_[dirty_state_queue_head_];
+    dirty_state_queue_head_ = (dirty_state_queue_head_ + 1u) % kDirtyStateQueueCapacity;
+    --dirty_state_queue_count_;
+    setDirtyStateFlag(index, false);
+    index_out = index;
+    return true;
+}
+
+bool PointCatalog::runtimeFullSyncRequired() const {
+    return runtime_full_sync_required_;
+}
+
+void PointCatalog::acknowledgeRuntimeFullSync() {
+    runtime_full_sync_required_ = false;
+    resetDirtyStateTracking();
+}
+
 bool PointCatalog::saveToJson(char* out, size_t out_size) const {
     if (out == nullptr || out_size == 0u) {
         return false;
@@ -468,6 +496,59 @@ bool PointCatalog::saveToJson(char* out, size_t out_size) const {
     }
 
     return serializeJson(doc, out, out_size) == json_size;
+}
+
+void PointCatalog::resetDirtyStateTracking() {
+    std::memset(dirty_state_queue_, 0, sizeof(dirty_state_queue_));
+    std::memset(dirty_state_flags_, 0, sizeof(dirty_state_flags_));
+    dirty_state_queue_head_ = 0u;
+    dirty_state_queue_tail_ = 0u;
+    dirty_state_queue_count_ = 0u;
+}
+
+void PointCatalog::requestRuntimeFullSync() {
+    runtime_full_sync_required_ = true;
+    resetDirtyStateTracking();
+}
+
+void PointCatalog::markStateDirty(size_t index) {
+    if (runtime_full_sync_required_ || index >= kMaxPoints || dirtyStateFlag(index)) {
+        return;
+    }
+
+    if (dirty_state_queue_count_ >= kDirtyStateQueueCapacity) {
+        requestRuntimeFullSync();
+        return;
+    }
+
+    dirty_state_queue_[dirty_state_queue_tail_] = static_cast<uint16_t>(index);
+    dirty_state_queue_tail_ = (dirty_state_queue_tail_ + 1u) % kDirtyStateQueueCapacity;
+    ++dirty_state_queue_count_;
+    setDirtyStateFlag(index, true);
+}
+
+bool PointCatalog::dirtyStateFlag(size_t index) const {
+    if (index >= kMaxPoints) {
+        return false;
+    }
+
+    const size_t byte_index = index / 8u;
+    const uint8_t bit_mask = static_cast<uint8_t>(1u << (index % 8u));
+    return (dirty_state_flags_[byte_index] & bit_mask) != 0u;
+}
+
+void PointCatalog::setDirtyStateFlag(size_t index, bool dirty) {
+    if (index >= kMaxPoints) {
+        return;
+    }
+
+    const size_t byte_index = index / 8u;
+    const uint8_t bit_mask = static_cast<uint8_t>(1u << (index % 8u));
+    if (dirty) {
+        dirty_state_flags_[byte_index] |= bit_mask;
+    } else {
+        dirty_state_flags_[byte_index] &= static_cast<uint8_t>(~bit_mask);
+    }
 }
 
 bool PointCatalog::identitiesEqual(const PointIdentity& lhs, const PointIdentity& rhs) {

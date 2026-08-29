@@ -130,6 +130,56 @@ static bool strings_equal(const char* lhs, const char* rhs) {
     return std::strcmp(lhs, rhs) == 0;
 }
 
+static bool point_state_payload_equal(PointValueType value_type,
+                                      const PointState& lhs,
+                                      const PointState& rhs) {
+    if (lhs.quality != rhs.quality) {
+        return false;
+    }
+
+    switch (value_type) {
+    case PointValueType::Bool:
+        return lhs.value.b == rhs.value.b;
+    case PointValueType::Uint16:
+        return lhs.value.u16 == rhs.value.u16;
+    case PointValueType::Int16:
+        return lhs.value.i16 == rhs.value.i16;
+    case PointValueType::Uint32:
+        return lhs.value.u32 == rhs.value.u32;
+    case PointValueType::Int32:
+        return lhs.value.i32 == rhs.value.i32;
+    case PointValueType::Float:
+        return lhs.value.f32 == rhs.value.f32;
+    case PointValueType::Enum:
+        return lhs.value.enum_value == rhs.value.enum_value;
+    case PointValueType::String:
+        return std::strncmp(lhs.string_value, rhs.string_value, sizeof(lhs.string_value)) == 0;
+    default:
+        return false;
+    }
+}
+
+static bool publish_builtin_state_if_changed(NodeNetCore& core,
+                                             const PointIdentity& id,
+                                             PointState state,
+                                             uint32_t now_ms) {
+    const PointDefinition* definition = core.pointCatalog().find(id);
+    const PointState* current_state = core.pointCatalog().findState(id);
+    if (definition != nullptr && current_state != nullptr &&
+        point_state_payload_equal(definition->value_type, *current_state, state)) {
+        return true;
+    }
+
+    state.last_update_ms = now_ms;
+    if (state.quality == PointQuality::Good) {
+        state.last_good_update_ms = now_ms;
+    } else if (current_state != nullptr) {
+        state.last_good_update_ms = current_state->last_good_update_ms;
+    }
+
+    return core.updatePointState(id, state);
+}
+
 enum class PointPathMatchKind : uint8_t {
     None = 0u,
     Device,
@@ -3922,69 +3972,54 @@ void NodeNetCore::publishBuiltinPointStates()
 {
     PointIdentity id = {};
     PointState state = {};
+    const uint32_t now_ms = millis();
 
     make_point_identity(id, deviceId, "core", "instrumentName");
     copy_text(state.string_value, sizeof(state.string_value), instrumentName);
     state.quality = PointQuality::Good;
-    state.last_update_ms = millis();
-    state.last_good_update_ms = state.last_update_ms;
-    (void)updatePointState(id, state);
+    (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
 
     make_point_identity(id, deviceId, "core", "master");
     state = {};
     state.value.b = master;
     state.quality = PointQuality::Good;
-    state.last_update_ms = millis();
-    state.last_good_update_ms = state.last_update_ms;
-    (void)updatePointState(id, state);
+    (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
 
     make_point_identity(id, deviceId, "modbus0", "enabled");
     state = {};
     state.value.b = features.hasModbus0;
     state.quality = PointQuality::Good;
-    state.last_update_ms = millis();
-    state.last_good_update_ms = state.last_update_ms;
-    (void)updatePointState(id, state);
+    (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
 
     make_point_identity(id, deviceId, "modbus0", "speed");
     state = {};
     state.value.u32 = modbus0Settings.comSettings.baudrate;
     state.quality = PointQuality::Good;
-    state.last_update_ms = millis();
-    state.last_good_update_ms = state.last_update_ms;
-    (void)updatePointState(id, state);
+    (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
 
     make_point_identity(id, deviceId, "modbus0", "timeout");
     state = {};
     state.value.u32 = modbus0Settings.comSettings.timeout_ms;
     state.quality = PointQuality::Good;
-    state.last_update_ms = millis();
-    state.last_good_update_ms = state.last_update_ms;
-    (void)updatePointState(id, state);
+    (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
 
     make_point_identity(id, deviceId, "modbus0", "retries");
     state = {};
     state.value.u16 = modbus0Settings.comSettings.retries;
     state.quality = PointQuality::Good;
-    state.last_update_ms = millis();
-    state.last_good_update_ms = state.last_update_ms;
-    (void)updatePointState(id, state);
+    (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
 
     make_point_identity(id, deviceId, "modbus0", "maxGap");
     state = {};
     state.value.u16 = modbus0Settings.comSettings.max_gap;
     state.quality = PointQuality::Good;
-    state.last_update_ms = millis();
-    state.last_good_update_ms = state.last_update_ms;
-    (void)updatePointState(id, state);
+    (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
 
     make_point_identity(id, deviceId, "modbus0", "interframeCharsQ1");
     state = {};
     state.value.u16 = modbus0Settings.comSettings.interframe_chars_q1;
     state.quality = PointQuality::Good;
-    state.last_update_ms = millis();
-    state.last_good_update_ms = state.last_update_ms;
-    (void)updatePointState(id, state);
+    (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
 
     for (uint8_t channel = 0u; channel < 8u; ++channel) {
         char point_id[32] = {};
@@ -4212,9 +4247,7 @@ void NodeNetCore::publishBuiltinPlcPointStates(bool include_all_slots)
             state = {};
             state.value.b = value;
             state.quality = PointQuality::Good;
-            state.last_update_ms = now_ms;
-            state.last_good_update_ms = now_ms;
-            (void)updatePointState(id, state);
+            (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
         };
 
         auto publish_u16 = [&](const char* point_id, uint16_t value) {
@@ -4222,9 +4255,7 @@ void NodeNetCore::publishBuiltinPlcPointStates(bool include_all_slots)
             state = {};
             state.value.u16 = value;
             state.quality = PointQuality::Good;
-            state.last_update_ms = now_ms;
-            state.last_good_update_ms = now_ms;
-            (void)updatePointState(id, state);
+            (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
         };
 
         auto publish_u32 = [&](const char* point_id, uint32_t value) {
@@ -4232,9 +4263,7 @@ void NodeNetCore::publishBuiltinPlcPointStates(bool include_all_slots)
             state = {};
             state.value.u32 = value;
             state.quality = PointQuality::Good;
-            state.last_update_ms = now_ms;
-            state.last_good_update_ms = now_ms;
-            (void)updatePointState(id, state);
+            (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
         };
 
         auto publish_string = [&](const char* point_id, const char* value) {
@@ -4242,9 +4271,7 @@ void NodeNetCore::publishBuiltinPlcPointStates(bool include_all_slots)
             state = {};
             copy_text(state.string_value, sizeof(state.string_value), value);
             state.quality = PointQuality::Good;
-            state.last_update_ms = now_ms;
-            state.last_good_update_ms = now_ms;
-            (void)updatePointState(id, state);
+            (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
         };
 
         publish_bool("loaded", loaded);

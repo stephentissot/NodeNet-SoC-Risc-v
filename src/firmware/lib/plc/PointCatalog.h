@@ -38,6 +38,9 @@ public:
     bool remove(const PointIdentity& id);
     bool updateState(const PointIdentity& id, const PointState& state);
     bool updateCommandState(const PointIdentity& id, const PointCommandState& state);
+    bool popDirtyStateIndex(size_t& index_out);
+    bool runtimeFullSyncRequired() const;
+    void acknowledgeRuntimeFullSync();
 
     bool loadFromJson(const char* json);
     bool saveToJson(char* out, size_t out_size) const;
@@ -48,6 +51,7 @@ public:
 
 private:
     static constexpr uint16_t kInvalidIndex = 0xFFFFu;
+    static constexpr size_t kDirtyStateQueueCapacity = kMaxPoints;
 
     static bool identitiesEqual(const PointIdentity& lhs, const PointIdentity& rhs);
     static void copyDefinition(PointDefinition& dst, const PointDefinition& src);
@@ -57,11 +61,22 @@ private:
     void rebuildIndex();
     size_t lookupIndex(const PointIdentity& id) const;
     void insertIndex(const PointIdentity& id, size_t index);
+    void resetDirtyStateTracking();
+    void requestRuntimeFullSync();
+    void markStateDirty(size_t index);
+    bool dirtyStateFlag(size_t index) const;
+    void setDirtyStateFlag(size_t index, bool dirty);
 
     PointDefinition entries_[kMaxPoints] = {};
     PointCommandState command_states_[kMaxPoints] = {};
     uint16_t index_slots_[kIndexCapacity] = {};
     size_t count_ = 0u;
+    uint16_t dirty_state_queue_[kDirtyStateQueueCapacity] = {};
+    uint8_t dirty_state_flags_[(kMaxPoints + 7u) / 8u] = {};
+    size_t dirty_state_queue_head_ = 0u;
+    size_t dirty_state_queue_tail_ = 0u;
+    size_t dirty_state_queue_count_ = 0u;
+    bool runtime_full_sync_required_ = true;
 };
 
 #endif

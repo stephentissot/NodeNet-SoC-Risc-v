@@ -250,16 +250,19 @@ public:
             return false;
         }
 
-        const uint32_t definition_hash = hashCatalogDefinitions(catalog);
-        if (!header_written_ || definition_hash != definition_hash_) {
+        PointCatalog& mutable_catalog = const_cast<PointCatalog&>(catalog);
+        if (!header_written_ || mutable_catalog.runtimeFullSyncRequired()) {
             rebuildDescriptors(catalog);
-            definition_hash_ = definition_hash;
+            definition_hash_ = hashCatalogDefinitions(catalog);
             ++store_epoch_;
             writeHeader();
             header_written_ = true;
+            syncValuesAndStatus(catalog, now_ms);
+            mutable_catalog.acknowledgeRuntimeFullSync();
+            return true;
         }
 
-        syncValuesAndStatus(catalog, now_ms);
+        syncDirtyValuesAndStatus(mutable_catalog, now_ms);
         return true;
     }
 
@@ -593,8 +596,6 @@ private:
 
     void syncValuesAndStatus(const PointCatalog& catalog, uint32_t now_ms)
     {
-        volatile PlcPointValueV1* values = valuePtr();
-        volatile PlcPointStatusV1* statuses = statusPtr();
         const PointDefinition* definitions = catalog.entries();
         const PointState* states = catalog.states();
 
@@ -604,21 +605,48 @@ private:
                 continue;
             }
 
-            const PointDefinition& definition = definitions[i];
-            const PointState& state = states[i];
-
-            PlcPointValueV1 value = {};
-            value.raw0 = encodeValueRaw0(definition.value_type, state);
-            value.raw1 = 0u;
-            writeValue(values[runtime_index], value);
-
-            PlcPointStatusV1 status = {};
-            status.quality = static_cast<uint32_t>(state.quality);
-            status.last_update_ms = state.last_update_ms != 0u ? state.last_update_ms : now_ms;
-            status.last_writer = mapLastWriter(definition);
-            status.flags = 0u;
-            writeStatus(statuses[runtime_index], status);
+            syncPointValueAndStatus(definitions[i], states[i], runtime_index, now_ms);
         }
+    }
+
+    void syncDirtyValuesAndStatus(PointCatalog& catalog, uint32_t now_ms)
+    {
+        size_t catalog_index = 0u;
+        while (catalog.popDirtyStateIndex(catalog_index)) {
+            if (catalog_index >= catalog.size()) {
+                continue;
+            }
+
+            const uint16_t runtime_index = catalog_to_runtime_[catalog_index];
+            if (runtime_index == kInvalidPointIndex || runtime_index >= published_count_) {
+                continue;
+            }
+
+            const PointDefinition& definition = catalog.entries()[catalog_index];
+            const PointState& state = catalog.states()[catalog_index];
+            syncPointValueAndStatus(definition, state, runtime_index, now_ms);
+        }
+    }
+
+    void syncPointValueAndStatus(const PointDefinition& definition,
+                                 const PointState& state,
+                                 uint16_t runtime_index,
+                                 uint32_t now_ms)
+    {
+        volatile PlcPointValueV1* values = valuePtr();
+        volatile PlcPointStatusV1* statuses = statusPtr();
+
+        PlcPointValueV1 value = {};
+        value.raw0 = encodeValueRaw0(definition.value_type, state);
+        value.raw1 = 0u;
+        writeValue(values[runtime_index], value);
+
+        PlcPointStatusV1 status = {};
+        status.quality = static_cast<uint32_t>(state.quality);
+        status.last_update_ms = state.last_update_ms != 0u ? state.last_update_ms : now_ms;
+        status.last_writer = mapLastWriter(definition);
+        status.flags = 0u;
+        writeStatus(statuses[runtime_index], status);
     }
 
     void writeHeader()
