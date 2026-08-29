@@ -14,5 +14,6 @@ bool flashdb_set_i32(const char* key, int32_t value);
 bool flashdb_get_i32(const char* key, int32_t* value_out);
 bool flashdb_set_str(const char* key, const char* value);
 bool flashdb_get_str(const char* key, char* out, size_t out_size);
+bool flashdb_delete_key(const char* key);
 
 #endif

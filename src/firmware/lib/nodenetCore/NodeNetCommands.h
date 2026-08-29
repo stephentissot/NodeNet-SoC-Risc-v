@@ -83,6 +83,8 @@ public:
     PLC_BYTECODE_RES,
     PLC_OBJECT_FILE_REQ,
     PLC_OBJECT_FILE_RES,
+    DEVICE_TEMPLATE_LOAD_REQ,
+    DEVICE_TEMPLATE_LOAD_RES,
   };
 
   // Parsing string -> enum
@@ -142,6 +144,8 @@ public:
     if(strcmp(cmd, "plcBytecodeRes") == 0)   return PLC_BYTECODE_RES;
     if(strcmp(cmd, "plcObjectFileReq") == 0)   return PLC_OBJECT_FILE_REQ;
     if(strcmp(cmd, "plcObjectFileRes") == 0)   return PLC_OBJECT_FILE_RES;
+    if(strcmp(cmd, "deviceTemplateLoadReq") == 0)   return DEVICE_TEMPLATE_LOAD_REQ;
+    if(strcmp(cmd, "deviceTemplateLoadRes") == 0)   return DEVICE_TEMPLATE_LOAD_RES;
 
     return CMD_UNKNOWN;
   }
@@ -203,6 +207,8 @@ public:
       case PLC_BYTECODE_RES: return "plcBytecodeRes";
       case PLC_OBJECT_FILE_REQ: return "plcObjectFileReq";
       case PLC_OBJECT_FILE_RES: return "plcObjectFileRes";
+      case DEVICE_TEMPLATE_LOAD_REQ: return "deviceTemplateLoadReq";
+      case DEVICE_TEMPLATE_LOAD_RES: return "deviceTemplateLoadRes";
       default:         return "Unknown";
     }
   }

@@ -14,10 +14,20 @@ class PlcCore {
 public:
     PlcCore() = default;
 
+    // Binds the point catalog, Modbus master, and optional logger used by the PLC service.
     void begin(PointCatalog* point_catalog, ModbusMaster* modbus0, NodeLogger* logger = nullptr);
+
+    // Attaches the shared PLC runtime publisher used to mirror point data into SDRAM.
     void attachRuntimePublisher(const PlcRuntimePublisherV1* publisher);
+
+    // Sets the maximum address gap allowed when packing Modbus points into one batch.
     void setModbusBatchMaxGap(uint16_t max_gap);
+
+    // Runs one non-blocking PLC service iteration: consume writes, schedule polls, publish runtime state.
     void loop();
+
+    // Returns true while an asynchronous Modbus transaction is still in flight.
+    bool pollTransactionActive() const;
 
 private:
     static constexpr size_t kModbusRegisterBufferSize = 2u;
@@ -60,18 +70,34 @@ private:
     uint16_t modbus_batch_max_gap_ = 6u;
     PollState poll_state_ = PollState::Idle;
     ModbusPollBatch active_batch_ = {};
+        uint32_t active_batch_started_ms_ = 0u;
+    uint32_t active_batch_last_poll_ms_ = 0u;
+    uint32_t active_batch_max_poll_gap_ms_ = 0u;
+    uint32_t active_batch_poll_calls_ = 0u;
     bool active_bit_values_[kMaxModbusBatchBits] = {};
     uint16_t active_register_values_[kMaxModbusBatchRegisters] = {};
 
+    // Rebuilds the Modbus poll plan only when the catalog-derived hash changes.
     void rebuildPollPlanIfNeeded();
+
+    // Recomputes grouped Modbus poll batches from the current point catalog.
     void rebuildPollPlan();
+
+    // Hashes the Modbus-facing catalog state to detect when batching must be rebuilt.
     uint32_t computeModbusPlanHash() const;
+
+    // Advances the Modbus polling state machine by at most one step.
     void pollNextPoint();
+    bool batchPollUrgency(const ModbusPollBatch& batch, uint32_t now_ms, uint32_t& urgency_out) const;
     bool startBatchPoll(const ModbusPollBatch& batch);
     bool completeActiveBatch(uint32_t now_ms);
     void failActiveBatch(uint32_t now_ms, PointQuality batch_error);
     bool isBatchDue(const ModbusPollBatch& batch, uint32_t now_ms) const;
+
+    // Pushes CPU-owned point states into the shared PLC runtime windows.
     void syncRuntimeSnapshot(uint32_t now_ms);
+
+    // Consumes PLC VM writes from shared runtime memory and applies them to the catalog.
     void consumeRuntimeWrites(uint32_t now_ms);
     bool decodeBitState(const PointDefinition& definition, bool bit_value, PointState& state) const;
     bool decodeRegisterState(const PointDefinition& definition,

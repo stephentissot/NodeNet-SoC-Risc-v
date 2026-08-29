@@ -29,6 +29,10 @@ ModbusMaster::ModbusMaster(uint32_t base_addr, uint32_t clock_hz)
     async_deadline_ms_(0u),
     async_active_(false),
     async_result_ready_(false),
+        async_started_ms_(0u),
+        async_first_rx_ms_(0u),
+        async_last_rx_ms_(0u),
+        async_observed_rx_len_(0u),
     async_response_{},
     async_response_len_(0u) {
 }
@@ -173,6 +177,14 @@ ModbusMaster::TransactionStatus ModbusMaster::pollTransaction() {
     const uint32_t status = readReg(status_reg_);
     if ((status & STATUS_DONE) == 0u) {
         const uint32_t now_ms = millis();
+            const uint16_t observed_rx_len = static_cast<uint16_t>(readReg(rx_len_reg_) & 0x1FFu);
+            if (observed_rx_len > async_observed_rx_len_) {
+                async_observed_rx_len_ = observed_rx_len;
+                async_last_rx_ms_ = now_ms;
+                if (async_first_rx_ms_ == 0u) {
+                    async_first_rx_ms_ = now_ms;
+                }
+            }
         if (static_cast<int32_t>(now_ms - async_deadline_ms_) >= 0) {
             abortTransaction();
             last_error_ = Error::DriverTimeout;
@@ -400,6 +412,38 @@ uint8_t ModbusMaster::lastExceptionCode() const {
 
 uint32_t ModbusMaster::lastHwStatus() const {
     return last_hw_status_;
+}
+
+uint32_t ModbusMaster::debugBaudrate() const {
+    return baudrate_;
+}
+
+uint32_t ModbusMaster::debugTimeoutMs() const {
+    return timeout_ms_;
+}
+
+uint8_t ModbusMaster::debugRetries() const {
+    return retries_;
+}
+
+uint8_t ModbusMaster::debugInterframeCharsQ1() const {
+    return interframe_chars_q1_;
+}
+
+uint32_t ModbusMaster::debugAsyncStartedMs() const {
+    return async_started_ms_;
+}
+
+uint32_t ModbusMaster::debugAsyncFirstRxMs() const {
+    return async_first_rx_ms_;
+}
+
+uint32_t ModbusMaster::debugAsyncLastRxMs() const {
+    return async_last_rx_ms_;
+}
+
+uint16_t ModbusMaster::debugAsyncObservedRxLen() const {
+    return async_observed_rx_len_;
 }
 
 uint16_t ModbusMaster::regsToU16(uint16_t reg) {
@@ -708,6 +752,10 @@ bool ModbusMaster::startTransactionAsync(uint8_t slave,
     async_result_ready_ = false;
     async_response_len_ = 0u;
     async_deadline_ms_ = millis() + static_cast<uint32_t>((timeout_ms_ * (static_cast<uint32_t>(retries_) + 1u)) + 100u);
+                                            async_started_ms_ = millis();
+                                            async_first_rx_ms_ = 0u;
+                                            async_last_rx_ms_ = 0u;
+                                            async_observed_rx_len_ = 0u;
     last_error_ = Error::None;
     return true;
 }
@@ -721,6 +769,10 @@ void ModbusMaster::clearAsyncTransaction() {
     async_active_ = false;
     async_result_ready_ = false;
     async_response_len_ = 0u;
+        async_started_ms_ = 0u;
+        async_first_rx_ms_ = 0u;
+        async_last_rx_ms_ = 0u;
+        async_observed_rx_len_ = 0u;
 }
 
 void ModbusMaster::captureResponseFrame() {

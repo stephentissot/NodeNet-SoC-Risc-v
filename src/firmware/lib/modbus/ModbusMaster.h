@@ -79,6 +79,14 @@ public:
     Error lastError() const;
     uint8_t lastExceptionCode() const;
     uint32_t lastHwStatus() const;
+    uint32_t debugBaudrate() const;
+    uint32_t debugTimeoutMs() const;
+    uint8_t debugRetries() const;
+    uint8_t debugInterframeCharsQ1() const;
+    uint32_t debugAsyncStartedMs() const;
+    uint32_t debugAsyncFirstRxMs() const;
+    uint32_t debugAsyncLastRxMs() const;
+    uint16_t debugAsyncObservedRxLen() const;
 
     static uint16_t regsToU16(uint16_t reg);
     static int16_t regsToI16(uint16_t reg);
@@ -157,6 +165,10 @@ private:
     uint32_t async_deadline_ms_;
     bool async_active_;
     bool async_result_ready_;
+    uint32_t async_started_ms_;
+    uint32_t async_first_rx_ms_;
+    uint32_t async_last_rx_ms_;
+    uint16_t async_observed_rx_len_;
     uint8_t async_response_[kMaxFrameBytes];
     uint16_t async_response_len_;
 

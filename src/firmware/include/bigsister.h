@@ -43,5 +43,15 @@ static constexpr uint32_t NODENET0_BASE = 0x10006000u;
     while ((int32_t)(millis() - start - ms) < 0) {}
 }
 
+// Led blink helper
+[[maybe_unused]] static void led_d2_blink()
+{
+    *LED_D2 = 1u;delay(100u);*LED_D2 = 0u;delay(100u); // led_d2 on/off
+    *LED_D2 = 1u;delay(100u);*LED_D2 = 0u;delay(100u); // led_d2 on/off
+    *LED_D2 = 1u;delay(100u);*LED_D2 = 0u;delay(100u); // led_d2 on/off
+    *LED_D2 = 1u;delay(100u);*LED_D2 = 0u;delay(100u); // led_d2 on/off
+    delay(500u);
+}
+
 
 #endif /* BIGSISTER_H */

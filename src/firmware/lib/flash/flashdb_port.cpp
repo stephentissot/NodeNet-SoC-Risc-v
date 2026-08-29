@@ -302,3 +302,11 @@ bool flashdb_get_str(const char* key, char* out, size_t out_size) {
   out[n] = '\0';
   return true;
 }
+
+bool flashdb_delete_key(const char* key) {
+  if (!g_kvdb_ready || key == nullptr) {
+    return false;
+  }
+
+  return fdb_kv_del(&g_kvdb, key) == FDB_NO_ERR;
+}

@@ -476,6 +476,7 @@ module wb_modbus_master #(
           uart_tx_valid <= 1'b0;
           if (uart_rx_valid) begin
             gap_ctr <= 32'd0;
+              timeout_ctr <= 32'd0;
             rx_crc_full <= crc16_step(rx_crc_full, uart_rx_data);
             if (rx_count < MAX_FRAME_BYTES[8:0]) begin
               rx_frame[rx_count] <= uart_rx_data;
@@ -485,14 +486,13 @@ module wb_modbus_master #(
             end
           end else if (gap_ctr < interframe_cycles) begin
             gap_ctr <= gap_ctr + 32'd1;
+              if (timeout_ctr < timeout_cycles)
+                timeout_ctr <= timeout_ctr + 32'd1;
+              else
+                start_retry_or_finish(1'b1, 1'b0, 1'b0);
           end else begin
             state <= ST_EVAL_RESPONSE;
           end
-
-          if (timeout_ctr < timeout_cycles)
-            timeout_ctr <= timeout_ctr + 32'd1;
-          else
-            start_retry_or_finish(1'b1, 1'b0, 1'b0);
         end
 
         ST_EVAL_RESPONSE: begin

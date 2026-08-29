@@ -91,9 +91,10 @@ src/firmware/
 ├── link_app_sdram.ld    Runtime application linker script for execution from SDRAM
 ├── main.cpp             Application entry point executed after stage0 handoff
 ├── i2c.h            I2C MMIO driver (wb_i2c peripheral)
-├── sdram.h              SDRAM helpers (`SDRAM_DATA`, readiness wait, scratch-area self-tests)
-├── sdram.cpp            Single-TU SDRAM probe and scratch storage for self-tests
 └── lib/
+    ├── sdram/       SDRAM helpers and allocator backing store
+    │   ├── sdram.h
+    │   └── sdram.cpp
     ├── modbus/      Modbus RTU master MMIO driver for wb_modbus_master
     │   ├── ModbusMaster.h
     │   └── ModbusMaster.cpp
@@ -596,7 +597,7 @@ static void json_example(void)
 }
 ```
 
-This allocator is implemented in `sdram.cpp` as a simple free-list over `g_sdram_json_pool`. It supports `allocate()`, `deallocate()`, and `reallocate()`, which matches what ArduinoJson 7 expects from a custom allocator.
+This allocator is implemented in `lib/sdram/sdram.cpp` as a simple free-list over `g_sdram_json_pool`. It supports `allocate()`, `deallocate()`, and `reallocate()`, which matches what ArduinoJson 7 expects from a custom allocator.
 
 **SDRAM Regions (Memory Map)**:
 ```

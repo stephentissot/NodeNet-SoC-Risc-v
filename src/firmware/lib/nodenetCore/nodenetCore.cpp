@@ -2,22 +2,16 @@
 #include <cstdio>
 #include <cstring>
 #include "flash.h"
+#include "deviceTemplates/DeviceTemplates.h"
 #include "plc_loader_v1.h"
 #include "plc_runtime_abi.h"
 #include "sdram.h"
-
-// Broadcast whoIs example {"cmd":"WhoIs", "from":5, "to": 4}
-
-
-
 
 namespace {
 constexpr const char* kFlashDbConfigKey = "nodenet.config";
 constexpr const char* kFlashDbModbus0Key = "nodenet.modbus0";
 constexpr const char* kFlashDbPointCatalogKey = "nodenet.points";
 constexpr uint8_t kModbus0PortIndex = 0u;
-constexpr uint8_t kWaveshareDefaultSlaveAddress = 1u;
-constexpr uint8_t kEurotherm6100SlaveAddress = 2u;
 constexpr uint32_t kPointCatalogFlashMagic = 0x50434154u; // "PCAT"
 constexpr uint32_t kPointCatalogFlashVersion = 1u;
 constexpr uint32_t kPointCatalogFlashBase = Flash::kParamBase;
@@ -268,6 +262,106 @@ static bool starts_with(const char* text, const char* prefix)
     return std::strncmp(text, prefix, prefix_len) == 0;
 }
 
+static bool is_valid_feature_segment(const char* name)
+{
+    if (name == nullptr || name[0] == '\0') {
+        return false;
+    }
+
+    for (const char* cursor = name; *cursor != '\0'; ++cursor) {
+        const char c = *cursor;
+        const bool is_alpha = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+        const bool is_digit = c >= '0' && c <= '9';
+        if (!is_alpha && !is_digit && c != '_' && c != '-') {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool build_feature_instance_name(const char* feature_prefix,
+                                        const char* instance_name,
+                                        char* feature_out,
+                                        size_t feature_out_size)
+{
+    if (feature_prefix == nullptr || instance_name == nullptr || feature_out == nullptr || feature_out_size == 0u) {
+        return false;
+    }
+
+    const int written = std::snprintf(feature_out, feature_out_size, "%s.%s", feature_prefix, instance_name);
+    return written > 0 && static_cast<size_t>(written) < feature_out_size;
+}
+
+static bool feature_has_any_points(const PointCatalog& catalog, const char* device_id, const char* feature)
+{
+    if (device_id == nullptr || feature == nullptr) {
+        return false;
+    }
+
+    const PointDefinition* definitions = catalog.entries();
+    for (size_t index = 0u; index < catalog.size(); ++index) {
+        if (strings_equal(definitions[index].id.device_id, device_id) &&
+            strings_equal(definitions[index].id.feature, feature)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool feature_has_point(const PointCatalog& catalog,
+                              const char* device_id,
+                              const char* feature,
+                              const char* point_id)
+{
+    PointIdentity id = {};
+    make_point_identity(id, device_id, feature, point_id);
+    return catalog.find(id) != nullptr;
+}
+
+static bool resolve_waveshare_feature(const PointCatalog& catalog,
+                                      const char* device_id,
+                                      uint8_t input_channel,
+                                      uint8_t output_channel,
+                                      char* feature_out,
+                                      size_t feature_out_size)
+{
+    if (feature_out == nullptr || feature_out_size == 0u ||
+        device_id == nullptr || input_channel == 0u || input_channel > 8u ||
+        output_channel == 0u || output_channel > 8u) {
+        return false;
+    }
+
+    char input_point_id[16] = {};
+    char output_point_id[16] = {};
+    (void)std::snprintf(input_point_id, sizeof(input_point_id), "input%u", static_cast<unsigned>(input_channel));
+    (void)std::snprintf(output_point_id, sizeof(output_point_id), "output%u", static_cast<unsigned>(output_channel));
+
+    if (feature_has_point(catalog, device_id, "modbus0.waveshare8ch", input_point_id) &&
+        feature_has_point(catalog, device_id, "modbus0.waveshare8ch", output_point_id)) {
+        copy_text(feature_out, feature_out_size, "modbus0.waveshare8ch");
+        return true;
+    }
+
+    const PointDefinition* definitions = catalog.entries();
+    for (size_t index = 0u; index < catalog.size(); ++index) {
+        const PointDefinition& definition = definitions[index];
+        if (!strings_equal(definition.id.device_id, device_id) || !starts_with(definition.id.feature, "modbus0.")) {
+            continue;
+        }
+        if (!feature_has_point(catalog, device_id, definition.id.feature, input_point_id) ||
+            !feature_has_point(catalog, device_id, definition.id.feature, output_point_id)) {
+            continue;
+        }
+
+        copy_text(feature_out, feature_out_size, definition.id.feature);
+        return true;
+    }
+
+    return false;
+}
+
 static int hex_nibble_value(char c) {
     if (c >= '0' && c <= '9') {
         return c - '0';
@@ -448,17 +542,6 @@ static void build_point_path(const PointDefinition& definition, char* out, size_
     out[out_size - 1u] = '\0';
 }
 
-static bool append_unique_string(JsonArray array, const char* value) {
-    for (JsonVariantConst item : array) {
-        const char* existing = item | "";
-        if (strings_equal(existing, value)) {
-            return true;
-        }
-    }
-
-    return array.add(value);
-}
-
 static bool response_can_append_item(size_t current_size, uint32_t emitted_count, size_t item_size)
 {
     if (item_size > NODENET_MAX_PAYLOAD_SIZE) {
@@ -476,21 +559,6 @@ static bool response_can_append_item(size_t current_size, uint32_t emitted_count
 static void response_commit_item_size(size_t& current_size, uint32_t emitted_count, size_t item_size)
 {
     current_size += (emitted_count == 0u ? 0u : 1u) + item_size;
-}
-
-static void append_device_features(JsonArray features,
-                                   const PointDefinition* definitions,
-                                   size_t definition_count,
-                                   const char* device_id)
-{
-    for (size_t feature_index = 0; feature_index < definition_count; ++feature_index) {
-        if (!strings_equal(definitions[feature_index].id.device_id, device_id)) {
-            continue;
-        }
-        if (!append_unique_string(features, definitions[feature_index].id.feature)) {
-            break;
-        }
-    }
 }
 
 static const char* plc_slot_state_name(const PlcProgramControlBlockV1& control_block, uint16_t slot_id);
@@ -585,10 +653,12 @@ static size_t json_float_field_size(const char* key)
     return json_field_prefix_size(key) + 24u;
 }
 
-static size_t count_unique_device_features(const PointDefinition* definitions,
-                                           size_t definition_count,
-                                           const char* device_id,
-                                           size_t* encoded_features_size = nullptr)
+static size_t collect_unique_device_feature_indices(const PointDefinition* definitions,
+                                                    size_t definition_count,
+                                                    const char* device_id,
+                                                    uint16_t* feature_indices,
+                                                    size_t feature_indices_capacity,
+                                                    size_t* encoded_features_size = nullptr)
 {
     size_t count = 0u;
     size_t total_size = 0u;
@@ -598,18 +668,21 @@ static size_t count_unique_device_features(const PointDefinition* definitions,
             continue;
         }
 
-        bool first_for_feature = true;
-        for (size_t probe = 0u; probe < index; ++probe) {
-            if (strings_equal(definitions[probe].id.device_id, device_id) &&
-                strings_equal(definitions[probe].id.feature, definitions[index].id.feature)) {
-                first_for_feature = false;
+        bool already_seen = false;
+        for (size_t feature = 0u; feature < count; ++feature) {
+            if (strings_equal(definitions[feature_indices[feature]].id.feature,
+                              definitions[index].id.feature)) {
+                already_seen = true;
                 break;
             }
         }
-        if (!first_for_feature) {
+        if (already_seen) {
             continue;
         }
 
+        if (count < feature_indices_capacity) {
+            feature_indices[count] = static_cast<uint16_t>(index);
+        }
         total_size += (count == 0u ? 0u : 1u) + json_string_value_size(definitions[index].id.feature);
         count += 1u;
     }
@@ -624,13 +697,72 @@ static size_t measure_device_browse_entry(const PointDefinition* definitions,
                                           size_t definition_count,
                                           const char* device_id)
 {
+    uint16_t feature_indices[PointCatalog::kMaxPoints] = {};
     size_t features_size = 0u;
-    count_unique_device_features(definitions, definition_count, device_id, &features_size);
+    collect_unique_device_feature_indices(definitions,
+                                          definition_count,
+                                          device_id,
+                                          feature_indices,
+                                          PointCatalog::kMaxPoints,
+                                          &features_size);
 
     size_t size = 2u;
     size += json_string_field_size("deviceId", device_id);
     size += 1u + json_field_prefix_size("features") + 2u + features_size;
     return size;
+}
+
+static void append_device_features(JsonArray features,
+                                   const PointDefinition* definitions,
+                                   size_t definition_count,
+                                   const char* device_id)
+{
+    uint16_t feature_indices[PointCatalog::kMaxPoints] = {};
+    const size_t feature_count = collect_unique_device_feature_indices(definitions,
+                                                                       definition_count,
+                                                                       device_id,
+                                                                       feature_indices,
+                                                                       PointCatalog::kMaxPoints);
+    for (size_t feature = 0u; feature < feature_count; ++feature) {
+        if (!features.add(definitions[feature_indices[feature]].id.feature)) {
+            break;
+        }
+    }
+}
+
+static size_t collect_unique_device_indices(const PointDefinition* definitions,
+                                            size_t definition_count,
+                                            const char* filter_device_id,
+                                            uint16_t* device_indices,
+                                            size_t device_indices_capacity)
+{
+    const bool filtered = filter_device_id != nullptr && filter_device_id[0] != '\0';
+    size_t unique_count = 0u;
+
+    for (size_t index = 0u; index < definition_count; ++index) {
+        if (filtered && !strings_equal(definitions[index].id.device_id, filter_device_id)) {
+            continue;
+        }
+
+        bool already_seen = false;
+        for (size_t device = 0u; device < unique_count; ++device) {
+            if (strings_equal(definitions[device_indices[device]].id.device_id,
+                              definitions[index].id.device_id)) {
+                already_seen = true;
+                break;
+            }
+        }
+        if (already_seen) {
+            continue;
+        }
+
+        if (unique_count < device_indices_capacity) {
+            device_indices[unique_count] = static_cast<uint16_t>(index);
+        }
+        unique_count += 1u;
+    }
+
+    return unique_count;
 }
 
 static size_t measure_point_definition_entry(const PointDefinition& definition)
@@ -876,7 +1008,6 @@ static bool should_persist_point_definition(const PointDefinition& definition, c
 
     return !(strings_equal(definition.id.feature, "core") ||
              strings_equal(definition.id.feature, "modbus0") ||
-             starts_with(definition.id.feature, "modbus0.") ||
              strings_equal(definition.id.feature, "plc") ||
              starts_with(definition.id.feature, "plc.slot"));
 }
@@ -897,10 +1028,11 @@ static const char* plc_slot_source_name(uint16_t slot_id,
 static bool resolve_waveshare_runtime_index(const PointCatalog& catalog,
                                             const PlcRuntimePublisherV1* publisher,
                                             const char* device_id,
+                                            const char* feature,
                                             const char* point_prefix,
                                             uint8_t channel,
                                             uint16_t& runtime_index) {
-    if (publisher == nullptr || device_id == nullptr || point_prefix == nullptr || channel == 0u || channel > 8u) {
+    if (publisher == nullptr || device_id == nullptr || feature == nullptr || point_prefix == nullptr || channel == 0u || channel > 8u) {
         return false;
     }
 
@@ -909,7 +1041,7 @@ static bool resolve_waveshare_runtime_index(const PointCatalog& catalog,
 
     PointIdentity id = {};
     copy_text(id.device_id, sizeof(id.device_id), device_id);
-    copy_text(id.feature, sizeof(id.feature), "modbus0.waveshare8ch");
+    copy_text(id.feature, sizeof(id.feature), feature);
     copy_text(id.point_id, sizeof(id.point_id), point_id);
 
     runtime_index = publisher->runtimeIndexForIdentity(catalog, id);
@@ -923,6 +1055,7 @@ static bool resolve_waveshare_runtime_index(const PointCatalog& catalog,
 static bool resolve_waveshare_channel_runtime_indices(const PointCatalog& catalog,
                                                       const PlcRuntimePublisherV1* publisher,
                                                       const char* device_id,
+                                                      const char* feature,
                                                       uint8_t input_channel,
                                                       uint8_t output_channel,
                                                       uint16_t& input_runtime_index,
@@ -930,6 +1063,7 @@ static bool resolve_waveshare_channel_runtime_indices(const PointCatalog& catalo
     if (!resolve_waveshare_runtime_index(catalog,
                                          publisher,
                                          device_id,
+                                         feature,
                                          "input",
                                          input_channel,
                                          input_runtime_index)) {
@@ -938,6 +1072,7 @@ static bool resolve_waveshare_channel_runtime_indices(const PointCatalog& catalo
     if (!resolve_waveshare_runtime_index(catalog,
                                          publisher,
                                          device_id,
+                                         feature,
                                          "output",
                                          output_channel,
                                          output_runtime_index)) {
@@ -1078,6 +1213,7 @@ static bool flash_erase_range(Flash* flash, uint32_t flash_offset, uint32_t size
 }
 
 static void build_waveshare_mirror_symbols(const char* device_id,
+                                           const char* feature,
                                            uint8_t input_channel,
                                            uint8_t output_channel,
                                            PlcObjectSymbolRecordV1* symbols,
@@ -1093,7 +1229,7 @@ static void build_waveshare_mirror_symbols(const char* device_id,
     copy_text(symbols[0].symbol_name, sizeof(symbols[0].symbol_name), "input");
     symbols[0].symbol_kind = kPlcSymbolConstPointId;
     copy_text(symbols[0].point_id.device_id, sizeof(symbols[0].point_id.device_id), device_id);
-    copy_text(symbols[0].point_id.feature, sizeof(symbols[0].point_id.feature), "modbus0.waveshare8ch");
+    copy_text(symbols[0].point_id.feature, sizeof(symbols[0].point_id.feature), feature);
     copy_text(symbols[0].point_id.point_id, sizeof(symbols[0].point_id.point_id), input_point_id);
     symbols[0].expected_type = static_cast<uint8_t>(PointValueType::Bool);
     symbols[0].access = static_cast<uint8_t>(kPlcRuntimeLinkRead);
@@ -1101,7 +1237,7 @@ static void build_waveshare_mirror_symbols(const char* device_id,
     copy_text(symbols[1].symbol_name, sizeof(symbols[1].symbol_name), "output");
     symbols[1].symbol_kind = kPlcSymbolConstPointId;
     copy_text(symbols[1].point_id.device_id, sizeof(symbols[1].point_id.device_id), device_id);
-    copy_text(symbols[1].point_id.feature, sizeof(symbols[1].point_id.feature), "modbus0.waveshare8ch");
+    copy_text(symbols[1].point_id.feature, sizeof(symbols[1].point_id.feature), feature);
     copy_text(symbols[1].point_id.point_id, sizeof(symbols[1].point_id.point_id), output_point_id);
     symbols[1].expected_type = static_cast<uint8_t>(PointValueType::Bool);
     symbols[1].access = static_cast<uint8_t>(kPlcRuntimeLinkWrite);
@@ -1115,6 +1251,7 @@ static void build_waveshare_mirror_symbols(const char* device_id,
 }
 
 static PlcSlotLoadStatusV1 build_mirror_program_object_file(const char* device_id,
+                                                            const char* feature,
                                                             uint8_t input_channel,
                                                             uint8_t output_channel,
                                                             uint8_t* object_out,
@@ -1129,13 +1266,14 @@ static bool save_persisted_plc_slots_package(Flash* flash,
                                              uint32_t override_object_size);
 
 static PlcSlotLoadStatusV1 build_mirror_program_object_file(const char* device_id,
+                                                            const char* feature,
                                                             uint8_t input_channel,
                                                             uint8_t output_channel,
                                                             uint8_t* object_out,
                                                             size_t object_capacity,
                                                             size_t& object_size_out) {
     object_size_out = 0u;
-    if (device_id == nullptr || object_out == nullptr ||
+    if (device_id == nullptr || feature == nullptr || object_out == nullptr ||
         input_channel == 0u || input_channel > 8u ||
         output_channel == 0u || output_channel > 8u) {
         return kPlcSlotLoadInvalidArgument;
@@ -1143,7 +1281,7 @@ static PlcSlotLoadStatusV1 build_mirror_program_object_file(const char* device_i
 
     PlcObjectSymbolRecordV1 symbols[2] = {};
     PlcObjectRelocationRecordV1 relocations[2] = {};
-    build_waveshare_mirror_symbols(device_id, input_channel, output_channel, symbols, relocations);
+    build_waveshare_mirror_symbols(device_id, feature, input_channel, output_channel, symbols, relocations);
 
     uint8_t object_code[] = {
         0x10u, 0x00u, 0x00u,
@@ -1360,13 +1498,10 @@ static void serialize_point_state(JsonObject obj,
 
 }
 
-NodeNetCore* NodeNetCore::s_active_instance = nullptr;
-
 NodeNetCore::NodeNetCore(NodeNet* nodeNet) : _nodeNet(nodeNet)
 {
     // Initialize flash
     _flash = new Flash(FLASH_BASE);
-    s_active_instance = this;
 
     // Get deviceId from flash unique ID
     if (!_flash->readUniqueIdAscii(this->deviceId, sizeof(this->deviceId))) {
@@ -1394,8 +1529,6 @@ void NodeNetCore::begin()
     }
     hardwareType = HardwareType::NODENET_SOC;
     _logger = new NodeLogger(_nodeNet, 0x05);
-    _logger->Info("NodeNetCore initialized with deviceId: %s", deviceId);
-
     loadPreferences();
 
     (void)loadPointCatalog();
@@ -1407,7 +1540,6 @@ void NodeNetCore::begin()
         _pointCatalogDirty = false;
     }
 
-    // Start modbus features
     _modbus0 = new ModbusMaster(MODBUS1_BASE);
     _modbus0->begin(modbus0Settings.comSettings.baudrate,
                     modbus0Settings.comSettings.timeout_ms,
@@ -1416,19 +1548,15 @@ void NodeNetCore::begin()
     features.hasModbus0 = true;
     _plcCore.begin(&_pointCatalog, _modbus0, _logger);
     _plcCore.setModbusBatchMaxGap(modbus0Settings.comSettings.max_gap);
+    (void)restorePersistedPlcSlots();
 
     publishBuiltinPointStates();
     publishBuiltinPlcPointStates(true);
     _lastPlcBuiltinPointPublishMs = millis();
-
-    _nodeNet->SetCallbacks(nodenet_broadcast_callback_trampoline,
-                           nodenet_message_callback_trampoline);
-    _logger->Info("NodeNetCore IRQ callbacks armed");
-
     JsonDocument discoverMsg(&g_sdram_json_allocator);
     discoverMsg["cmd"] = "WhoIs";
     discoverMsg["from"] = addr;
-    discoverMsg["to"] = 0u; // Broadcast
+    discoverMsg["to"] = 0u;
     nodeHeader(discoverMsg);
     nodeFeatures(discoverMsg);
     enqueueOutputMessage(0u, discoverMsg);
@@ -1436,9 +1564,11 @@ void NodeNetCore::begin()
 
 void NodeNetCore::loop()
 {
+    pollIncomingMessage();
     processInputQueue();
-    processOutputQueue();
+
     _plcCore.loop();
+
     const uint32_t now_ms = millis();
     if (_plcUploadSession.active &&
         static_cast<uint32_t>(now_ms - _plcUploadSession.last_activity_ms) >= kPlcUploadSessionTimeoutMs) {
@@ -1448,6 +1578,7 @@ void NodeNetCore::loop()
         publishBuiltinPlcPointStates(false);
         _lastPlcBuiltinPointPublishMs = now_ms;
     }
+
     processOutputQueue();
 }
 
@@ -1486,9 +1617,21 @@ void NodeNetCore::savePreferences()
         return;
     }
 
-    if (_logger != nullptr) {
-        _logger->Info("Preferences saved");
+}
+
+void NodeNetCore::pollIncomingMessage()
+{
+    if (_nodeNet == nullptr) {
+        return;
     }
+
+    if (!_nodeNet->HasMessage()) {
+        return;
+    }
+
+    NodeNetMessage msg = _nodeNet->ReadMessage();
+    (void)enqueueInputMessage(msg);
+    NodeNet::FreeMessage(msg);
 }
 
 void NodeNetCore::loadPreferences()
@@ -1502,9 +1645,6 @@ void NodeNetCore::loadPreferences()
 
     char jsonBuffer[kPreferencesJsonMaxSize] = {};
     if (!flashdb_get_str(kFlashDbConfigKey, jsonBuffer, sizeof(jsonBuffer))) {
-        if (_logger != nullptr) {
-            _logger->Info("Preferences absent, using defaults");
-        }
         return;
     }
 
@@ -1512,16 +1652,18 @@ void NodeNetCore::loadPreferences()
     const DeserializationError error = deserializeJson(prefsDoc, jsonBuffer);
     if (error != DeserializationError::Ok) {
         if (_logger != nullptr) {
-            _logger->Warning("Preferences JSON parse failed: %s", error.c_str());
+            _logger->Warning("Preferences JSON parse failed: %s; clearing persisted preferences", error.c_str());
+        }
+        if (!flashdb_delete_key(kFlashDbConfigKey)) {
+            if (_logger != nullptr) {
+                _logger->Warning("Failed to clear invalid preferences entry");
+            }
         }
         return;
     }
 
     fromJson(prefsDoc);
 
-    if (_logger != nullptr) {
-        _logger->Info("Preferences loaded");
-    }
 }
 
 bool NodeNetCore::isInitialized()
@@ -1609,21 +1751,6 @@ void NodeNetCore::setPlcSlotRuntimeDiagnostics(uint8_t slot_id,
     _plcSlotRuntimeDiagnostics.output_runtime_index = output_runtime_index;
 }
 
-
-void NodeNetCore::nodenet_broadcast_callback_trampoline(const NodeNetMessage& msg)
-{
-    if (s_active_instance != nullptr) {
-        s_active_instance->onBroadcastMessage(msg);
-    }
-}
-
-void NodeNetCore::nodenet_message_callback_trampoline(const NodeNetMessage& msg)
-{
-    if (s_active_instance != nullptr) {
-        s_active_instance->onDirectMessage(msg);
-    }
-}
-
 void NodeNetCore::nodeHeader(JsonDocument& doc) const
 {
     doc["from"] = addr;
@@ -1637,16 +1764,6 @@ void NodeNetCore::nodeFeatures(JsonDocument& doc)
 {
     JsonObject features_doc = doc["features"].to<JsonObject>();
     features.toJson(features_doc);
-}
-
-void NodeNetCore::nodeInitialStatus(JsonDocument& doc)
-{
-    (void)doc;
-}
-
-void NodeNetCore::nodeUpdatedStatus(JsonDocument& doc)
-{
-    (void)doc;
 }
 
 bool NodeNetCore::enqueueInputMessage(const NodeNetMessage& msg)
@@ -1735,128 +1852,131 @@ void NodeNetCore::processInputQueue()
     }
 
     QueuedMessage msg;
-    while (dequeueInputMessage(msg)) {
-        if (msg.len == 0u) {
-            // Heartbeat received
-            continue;
+    if (!dequeueInputMessage(msg)) {
+        return;
+    }
+
+    if (msg.len == 0u) {
+        return;
+    }
+
+    if (_plcUploadSession.active && msg.len >= sizeof(PlcUploadDataFrameHeader) &&
+        msg.data[0] == kPlcUploadDataFrameMagic) {
+        if (!handlePlcUploadDataMessage(msg)) {
+            _logger->Warning("PLC upload data rejected src=%u len=%u", msg.srcAddr, msg.len);
         }
+        return;
+    }
 
-        if (_plcUploadSession.active && msg.len >= sizeof(PlcUploadDataFrameHeader) &&
-            msg.data[0] == kPlcUploadDataFrameMagic) {
-            if (!handlePlcUploadDataMessage(msg)) {
-                _logger->Warning("PLC upload data rejected src=%u len=%u", msg.srcAddr, msg.len);
-            }
-            continue;
-        }
+    JsonDocument request(&g_sdram_json_allocator);
+    const DeserializationError error = deserializeJson(request, msg.data, msg.len);
+    if (error != DeserializationError::Ok) {
+        _logger->Warning("%s JSON parse failed src=%u len=%u err=%s payload=%s",
+                         msg.broadcast ? "Broadcast" : "Direct",
+                         msg.srcAddr,
+                         msg.len,
+                         error.c_str(),
+                         msg.data);
+        return;
+    }
 
-        JsonDocument request(&g_sdram_json_allocator);
-        const DeserializationError error = deserializeJson(request, msg.data, msg.len);
-        if (error != DeserializationError::Ok) {            
-            _logger->Warning("%s JSON parse failed src=%u len=%u err=%s payload=%s",
-                             msg.broadcast ? "Broadcast" : "Direct",
-                             msg.srcAddr,
-                             msg.len,
-                             error.c_str(),
-                             msg.data);
-            continue;
-        }
+    NodeNetCommands::Cmd cmd = NodeNetCommands::parse(request["cmd"] | "");
+    JsonDocument response(&g_sdram_json_allocator);
+    response["to"] = request["from"] | 0u;
+    nodeHeader(response);
+    bool queueResponse = false;
 
-        NodeNetCommands::Cmd cmd = NodeNetCommands::parse(request["cmd"] | "");
-        JsonDocument response(&g_sdram_json_allocator);
-        response["to"] = request["from"] | 0u;
-        nodeHeader(response);
-        bool queueResponse = false;
-
-        switch (cmd) {
-            case NodeNetCommands::Cmd::DISCOVER_REQ:
-                // Reply first so discovery latency is not dominated by catalog persistence.
-                nodeHeader(response);             
-                response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::DISCOVER_RES);
-                nodeFeatures(response);
-                {
-                    const uint8_t destAddr = response_destination_from_request(request);
-                    if (!enqueueOutputMessage(destAddr, response)) {
-                        _logger->Warning("NodeNetCore response enqueue failed for dst=%u", msg.srcAddr);
-                    } else {
-                        processOutputQueue();
-                    }
+    switch (cmd) {
+        case NodeNetCommands::Cmd::DISCOVER_REQ:
+            // Reply first so discovery latency is not dominated by catalog persistence.
+            nodeHeader(response);
+            response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::DISCOVER_RES);
+            nodeFeatures(response);
+            {
+                const uint8_t destAddr = response_destination_from_request(request);
+                if (!enqueueOutputMessage(destAddr, response)) {
+                    _logger->Warning("NodeNetCore response enqueue failed for dst=%u", msg.srcAddr);
+                } else {
+                    processOutputQueue();
                 }
-
-                // Learn remote node metadata after the response is already on the wire.
-                registerNodePointDefinition(request);
-                publishNodePointStates(request);
-                break;
-            case NodeNetCommands::Cmd::DISCOVER_RES:
-                // Received discover response from another node, add points to catalog
-                registerNodePointDefinition(request);
-                publishNodePointStates(request);
-                break;
-            case NodeNetCommands::Cmd::POINT_DEFS_REQ:
-                queueResponse = handlePointDefinitionsRequest(request, response);
-                break;
-            case NodeNetCommands::Cmd::POINT_STATES_REQ:
-                queueResponse = handlePointStatesRequest(request, response);
-                break;
-            case NodeNetCommands::Cmd::POINT_UPSERT:
-                queueResponse = handlePointUpsertRequest(request, response);
-                break;
-            case NodeNetCommands::Cmd::POINT_DELETE:
-                queueResponse = handlePointDeleteRequest(request, response);
-                break;
-            case NodeNetCommands::Cmd::PLC_STATUS_REQ:
-                queueResponse = handlePlcStatusRequest(request, response);
-                break;
-            case NodeNetCommands::Cmd::PLC_SLOTS_REQ:
-                queueResponse = handlePlcSlotsRequest(request, response);
-                break;
-            case NodeNetCommands::Cmd::PLC_LOAD_REQ:
-                queueResponse = handlePlcLoadRequest(request, response);
-                break;
-            case NodeNetCommands::Cmd::PLC_BYTECODE_REQ:
-                queueResponse = handlePlcBytecodeRequest(request, response);
-                break;
-            case NodeNetCommands::Cmd::PLC_OBJECT_FILE_REQ:
-                queueResponse = handlePlcObjectFileRequest(request, response);
-                break;
-            case NodeNetCommands::Cmd::PLC_UPLOAD_BEGIN_REQ:
-                queueResponse = handlePlcUploadBeginRequest(request, response);
-                break;
-            case NodeNetCommands::Cmd::PLC_UPLOAD_STATUS_REQ:
-                queueResponse = handlePlcUploadStatusRequest(request, response);
-                break;
-            case NodeNetCommands::Cmd::PLC_UPLOAD_COMMIT_REQ:
-                queueResponse = handlePlcUploadCommitRequest(request, response);
-                break;
-            case NodeNetCommands::Cmd::PLC_UPLOAD_ABORT_REQ:
-                queueResponse = handlePlcUploadAbortRequest(request, response);
-                break;
-            case NodeNetCommands::Cmd::PLC_UPLOAD_DATA_REQ:
-                queueResponse = handlePlcUploadDataRequest(request, response);
-                break;
-            case NodeNetCommands::UPDATE_PROPERTY:{
-                if (!updateProperty(request)) {
-                    _logger->Warning("UpdateProperty rejected src=%u property=%s",
-                                     msg.srcAddr,
-                                     request["property"] | "<null>");
-                }
-                response["noResponse"] = true;
-                break;
             }
-            default:
-                
-                break;
-        }
 
-        if (!queueResponse) {
-            continue;
+            // Learn remote node metadata after the response is already on the wire.
+            registerNodePointDefinition(request);
+            publishNodePointStates(request);
+            return;
+        case NodeNetCommands::Cmd::DISCOVER_RES:
+            // Received discover response from another node, add points to catalog
+            registerNodePointDefinition(request);
+            publishNodePointStates(request);
+            return;
+        case NodeNetCommands::Cmd::POINT_DEFS_REQ:
+            queueResponse = handlePointDefinitionsRequest(request, response);
+            break;
+        case NodeNetCommands::Cmd::POINT_STATES_REQ:
+            queueResponse = handlePointStatesRequest(request, response);
+            break;
+        case NodeNetCommands::Cmd::POINT_UPSERT:
+            queueResponse = handlePointUpsertRequest(request, response);
+            break;
+        case NodeNetCommands::Cmd::POINT_DELETE:
+            queueResponse = handlePointDeleteRequest(request, response);
+            break;
+        case NodeNetCommands::Cmd::PLC_STATUS_REQ:
+            queueResponse = handlePlcStatusRequest(request, response);
+            break;
+        case NodeNetCommands::Cmd::PLC_SLOTS_REQ:
+            queueResponse = handlePlcSlotsRequest(request, response);
+            break;
+        case NodeNetCommands::Cmd::PLC_LOAD_REQ:
+            queueResponse = handlePlcLoadRequest(request, response);
+            break;
+        case NodeNetCommands::Cmd::PLC_BYTECODE_REQ:
+            queueResponse = handlePlcBytecodeRequest(request, response);
+            break;
+        case NodeNetCommands::Cmd::PLC_OBJECT_FILE_REQ:
+            queueResponse = handlePlcObjectFileRequest(request, response);
+            break;
+        case NodeNetCommands::Cmd::DEVICE_TEMPLATE_LOAD_REQ:
+            queueResponse = handleDeviceTemplateLoadRequest(request, response);
+            break;
+        case NodeNetCommands::Cmd::PLC_UPLOAD_BEGIN_REQ:
+            queueResponse = handlePlcUploadBeginRequest(request, response);
+            break;
+        case NodeNetCommands::Cmd::PLC_UPLOAD_STATUS_REQ:
+            queueResponse = handlePlcUploadStatusRequest(request, response);
+            break;
+        case NodeNetCommands::Cmd::PLC_UPLOAD_COMMIT_REQ:
+            queueResponse = handlePlcUploadCommitRequest(request, response);
+            break;
+        case NodeNetCommands::Cmd::PLC_UPLOAD_ABORT_REQ:
+            queueResponse = handlePlcUploadAbortRequest(request, response);
+            break;
+        case NodeNetCommands::Cmd::PLC_UPLOAD_DATA_REQ:
+            queueResponse = handlePlcUploadDataRequest(request, response);
+            break;
+        case NodeNetCommands::UPDATE_PROPERTY: {
+            if (!updateProperty(request)) {
+                _logger->Warning("UpdateProperty rejected src=%u property=%s",
+                                 msg.srcAddr,
+                                 request["property"] | "<null>");
+            }
+            response["noResponse"] = true;
+            break;
         }
+        default:
+            break;
+    }
 
-        const uint8_t destAddr = response_destination_from_request(request);
-        if (!enqueueOutputMessage(destAddr, response)) {
-            _logger->Warning("NodeNetCore response enqueue failed for dst=%u", msg.srcAddr);
-        } else {
-            processOutputQueue();
-        }
+    if (!queueResponse) {
+        return;
+    }
+
+    const uint8_t destAddr = response_destination_from_request(request);
+    if (!enqueueOutputMessage(destAddr, response)) {
+        _logger->Warning("NodeNetCore response enqueue failed for dst=%u", msg.srcAddr);
+    } else {
+        processOutputQueue();
     }
 }
 
@@ -1872,25 +1992,9 @@ void NodeNetCore::processOutputQueue()
     }
 
     QueuedMessage msg;
-    while (dequeueOutputMessage(msg)) {
+    if (dequeueOutputMessage(msg)) {
         _nodeNet->Send(msg.destAddr, msg.data, msg.len);
     }
-}
-
-void NodeNetCore::onBroadcastMessage(const NodeNetMessage& msg)
-{
-    if (_nodeNet == nullptr) {
-        return;
-    }
-    (void)enqueueInputMessage(msg);
-}
-
-void NodeNetCore::onDirectMessage(const NodeNetMessage& msg)
-{
-    if (_nodeNet == nullptr) {
-        return;
-    }
-    (void)enqueueInputMessage(msg);
 }
 
 bool NodeNetCore::updateProperty(const JsonDocument& request)
@@ -2197,79 +2301,44 @@ bool NodeNetCore::handlePointDefinitionsRequest(const JsonDocument& request, Jso
         response["kind"] = "devices";
         JsonArray devices = response["devices"].to<JsonArray>();
         size_t response_size = measureJson(response);
-        uint32_t matched_devices = 0u;
+        uint16_t device_indices[PointCatalog::kMaxPoints] = {};
+        const size_t total_devices = collect_unique_device_indices(definitions,
+                                                                   _pointCatalog.size(),
+                                                                   path,
+                                                                   device_indices,
+                                                                   PointCatalog::kMaxPoints);
         uint32_t emitted_devices = 0u;
 
-        for (size_t index = 0; index < _pointCatalog.size(); ++index) {
-            if (path[0] != '\0' && !strings_equal(definitions[index].id.device_id, path)) {
-                continue;
-            }
-
-            bool first_for_device = true;
-            for (size_t probe = 0; probe < index; ++probe) {
-                if (strings_equal(definitions[probe].id.device_id, definitions[index].id.device_id) &&
-                    (path[0] == '\0' || strings_equal(definitions[probe].id.device_id, path))) {
-                    first_for_device = false;
-                    break;
-                }
-            }
-            if (!first_for_device) {
-                continue;
-            }
-
-            if (matched_devices < offset) {
-                matched_devices += 1u;
-                continue;
-            }
+        for (size_t device_index = offset; device_index < total_devices; ++device_index) {
             if (emitted_devices >= limit) {
-                matched_devices += 1u;
-                continue;
+                break;
             }
 
+            const PointDefinition& definition = definitions[device_indices[device_index]];
             const size_t device_size = measure_device_browse_entry(definitions,
                                                                    _pointCatalog.size(),
-                                                                   definitions[index].id.device_id);
+                                                                   definition.id.device_id);
             if (!response_can_append_item(response_size, emitted_devices, device_size)) {
                 response["hasMore"] = true;
                 break;
             }
 
             JsonObject device = devices.add<JsonObject>();
-            device["deviceId"] = definitions[index].id.device_id;
+            device["deviceId"] = definition.id.device_id;
             JsonArray features = device["features"].to<JsonArray>();
 
             append_device_features(features,
                                    definitions,
                                    _pointCatalog.size(),
-                                   definitions[index].id.device_id);
+                                   definition.id.device_id);
 
             response["count"] = emitted_devices + 1u;
             response_commit_item_size(response_size, emitted_devices, device_size);
 
             emitted_devices += 1u;
-            matched_devices += 1u;
         }
 
-        uint32_t total_devices = 0u;
-        for (size_t index = 0; index < _pointCatalog.size(); ++index) {
-            if (path[0] != '\0' && !strings_equal(definitions[index].id.device_id, path)) {
-                continue;
-            }
-
-            bool first_for_device = true;
-            for (size_t probe = 0; probe < index; ++probe) {
-                if (strings_equal(definitions[probe].id.device_id, definitions[index].id.device_id) &&
-                    (path[0] == '\0' || strings_equal(definitions[probe].id.device_id, path))) {
-                    first_for_device = false;
-                    break;
-                }
-            }
-            if (first_for_device) {
-                total_devices += 1u;
-            }
-        }
-
-        response["total"] = total_devices;
+        response["total"] = static_cast<uint32_t>(total_devices);
         response["hasMore"] = (offset + (response["count"] | 0u)) < total_devices;
         return true;
     }
@@ -2363,79 +2432,44 @@ bool NodeNetCore::handlePointStatesRequest(const JsonDocument& request, JsonDocu
         response["kind"] = "devices";
         JsonArray devices = response["devices"].to<JsonArray>();
         size_t response_size = measureJson(response);
-        uint32_t matched_devices = 0u;
+        uint16_t device_indices[PointCatalog::kMaxPoints] = {};
+        const size_t total_devices = collect_unique_device_indices(definitions,
+                                                                   _pointCatalog.size(),
+                                                                   path,
+                                                                   device_indices,
+                                                                   PointCatalog::kMaxPoints);
         uint32_t emitted_devices = 0u;
 
-        for (size_t index = 0; index < _pointCatalog.size(); ++index) {
-            if (path[0] != '\0' && !strings_equal(definitions[index].id.device_id, path)) {
-                continue;
-            }
-
-            bool first_for_device = true;
-            for (size_t probe = 0; probe < index; ++probe) {
-                if (strings_equal(definitions[probe].id.device_id, definitions[index].id.device_id) &&
-                    (path[0] == '\0' || strings_equal(definitions[probe].id.device_id, path))) {
-                    first_for_device = false;
-                    break;
-                }
-            }
-            if (!first_for_device) {
-                continue;
-            }
-
-            if (matched_devices < offset) {
-                matched_devices += 1u;
-                continue;
-            }
+        for (size_t device_index = offset; device_index < total_devices; ++device_index) {
             if (emitted_devices >= limit) {
-                matched_devices += 1u;
-                continue;
+                break;
             }
 
+            const PointDefinition& definition = definitions[device_indices[device_index]];
             const size_t device_size = measure_device_browse_entry(definitions,
                                                                    _pointCatalog.size(),
-                                                                   definitions[index].id.device_id);
+                                                                   definition.id.device_id);
             if (!response_can_append_item(response_size, emitted_devices, device_size)) {
                 response["hasMore"] = true;
                 break;
             }
 
             JsonObject device = devices.add<JsonObject>();
-            device["deviceId"] = definitions[index].id.device_id;
+            device["deviceId"] = definition.id.device_id;
             JsonArray features = device["features"].to<JsonArray>();
 
             append_device_features(features,
                                    definitions,
                                    _pointCatalog.size(),
-                                   definitions[index].id.device_id);
+                                   definition.id.device_id);
 
             response["count"] = emitted_devices + 1u;
             response_commit_item_size(response_size, emitted_devices, device_size);
 
             emitted_devices += 1u;
-            matched_devices += 1u;
         }
 
-        uint32_t total_devices = 0u;
-        for (size_t index = 0; index < _pointCatalog.size(); ++index) {
-            if (path[0] != '\0' && !strings_equal(definitions[index].id.device_id, path)) {
-                continue;
-            }
-
-            bool first_for_device = true;
-            for (size_t probe = 0; probe < index; ++probe) {
-                if (strings_equal(definitions[probe].id.device_id, definitions[index].id.device_id) &&
-                    (path[0] == '\0' || strings_equal(definitions[probe].id.device_id, path))) {
-                    first_for_device = false;
-                    break;
-                }
-            }
-            if (first_for_device) {
-                total_devices += 1u;
-            }
-        }
-
-        response["total"] = total_devices;
+        response["total"] = static_cast<uint32_t>(total_devices);
         response["hasMore"] = (offset + (response["count"] | 0u)) < total_devices;
         return true;
     }
@@ -2552,6 +2586,121 @@ bool NodeNetCore::handlePointDeleteRequest(const JsonDocument& request, JsonDocu
     return true;
 }
 
+bool NodeNetCore::handleDeviceTemplateLoadRequest(const JsonDocument& request, JsonDocument& response)
+{
+    response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::DEVICE_TEMPLATE_LOAD_RES);
+
+    const char* template_id = request["templateId"] | "";
+    const char* feature_prefix = request["feature"] | "";
+    const char* instance_name = request["name"] | "";
+    const DeviceTemplate* device_template = find_device_template_by_id(template_id);
+
+    response["templateId"] = template_id;
+    response["feature"] = feature_prefix;
+    response["name"] = instance_name;
+
+    if (device_template == nullptr) {
+        response["ok"] = false;
+        response["error"] = "unsupportedTemplate";
+        return true;
+    }
+    if (!strings_equal(feature_prefix, "modbus0")) {
+        response["ok"] = false;
+        response["error"] = "unsupportedFeature";
+        return true;
+    }
+    if (!is_valid_feature_segment(instance_name)) {
+        response["ok"] = false;
+        response["error"] = "invalidName";
+        return true;
+    }
+
+    char full_feature[sizeof(PointIdentity::feature)] = {};
+    if (!build_feature_instance_name(feature_prefix, instance_name, full_feature, sizeof(full_feature))) {
+        response["ok"] = false;
+        response["error"] = "featureTooLong";
+        return true;
+    }
+
+    if (feature_has_any_points(_pointCatalog, deviceId, full_feature)) {
+        response["ok"] = false;
+        response["error"] = "featureAlreadyExists";
+        response["fullFeature"] = full_feature;
+        return true;
+    }
+
+    const uint8_t slave_address = static_cast<uint8_t>(request["slaveAddress"] | device_template->default_slave_address);
+    if (slave_address == 0u) {
+        response["ok"] = false;
+        response["error"] = "invalidSlaveAddress";
+        return true;
+    }
+
+    const size_t remaining_capacity = PointCatalog::kMaxPoints - _pointCatalog.size();
+    if (device_template->point_count > remaining_capacity) {
+        response["ok"] = false;
+        response["error"] = "catalogFull";
+        return true;
+    }
+
+    const bool autosave_enabled = _pointCatalogAutosaveEnabled;
+    const bool was_dirty = _pointCatalogDirty;
+    _pointCatalogAutosaveEnabled = false;
+
+    bool ok = true;
+    const uint32_t now_ms = millis();
+    for (size_t index = 0u; index < device_template->point_count; ++index) {
+        const DeviceTemplatePoint& template_point = device_template->points[index];
+        PointDefinition definition = {};
+        make_point_identity(definition.id, deviceId, full_feature, template_point.point_id);
+        copy_text(definition.display_name, sizeof(definition.display_name), template_point.display_name);
+        definition.backend = PointBackend::Modbus;
+        definition.direction = template_point.direction;
+        definition.value_type = template_point.value_type;
+        definition.polling.refresh_ms = template_point.refresh_ms;
+        definition.polling.timeout_ms = template_point.timeout_ms;
+        definition.string_capacity = template_point.string_capacity;
+        definition.scale = template_point.scale;
+        copy_text(definition.unit, sizeof(definition.unit), template_point.unit == nullptr ? "" : template_point.unit);
+        definition.ref.modbus.port_index = kModbus0PortIndex;
+        definition.ref.modbus.slave_address = slave_address;
+        definition.ref.modbus.address = template_point.address;
+        definition.ref.modbus.register_count = template_point.register_count;
+        definition.ref.modbus.table = template_point.table;
+        definition.ref.modbus.access = template_point.access;
+        if (!upsertPointDefinition(definition)) {
+            ok = false;
+            break;
+        }
+
+        PointState initial_state = {};
+        initial_state.quality = PointQuality::BadNotConnected;
+        initial_state.last_update_ms = now_ms;
+        (void)updatePointState(definition.id, initial_state);
+    }
+
+    _pointCatalogAutosaveEnabled = autosave_enabled;
+
+    bool saved = ok;
+    if (ok && _pointCatalogDirty && _pointCatalogDirty != was_dirty) {
+        saved = savePointCatalog();
+        if (saved) {
+            _pointCatalogDirty = false;
+        }
+    }
+
+    response["ok"] = ok && saved;
+    response["fullFeature"] = full_feature;
+    response["slaveAddress"] = slave_address;
+    response["count"] = static_cast<uint32_t>(device_template->point_count);
+    if (!ok) {
+        response["error"] = "loadFailed";
+    } else if (!saved) {
+        response["error"] = "saveFailed";
+    }
+    return true;
+}
+
 bool NodeNetCore::handlePlcStatusRequest(const JsonDocument& request, JsonDocument& response)
 {
     response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_STATUS_RES);
@@ -2606,13 +2755,22 @@ bool NodeNetCore::handlePlcStatusRequest(const JsonDocument& request, JsonDocume
                                                          : 0xFFFFu);
     bool runtime_map_ok = input_runtime_index != 0xFFFFu && output_runtime_index != 0xFFFFu;
     if (!runtime_map_ok) {
-        runtime_map_ok = resolve_waveshare_channel_runtime_indices(_pointCatalog,
-                                                                   _plcRuntimePublisher,
-                                                                   deviceId,
-                                                                   input_channel,
-                                                                   output_channel,
-                                                                   input_runtime_index,
-                                                                   output_runtime_index);
+        char waveshare_feature[sizeof(PointIdentity::feature)] = {};
+        if (resolve_waveshare_feature(_pointCatalog,
+                                      deviceId,
+                                      input_channel,
+                                      output_channel,
+                                      waveshare_feature,
+                                      sizeof(waveshare_feature))) {
+            runtime_map_ok = resolve_waveshare_channel_runtime_indices(_pointCatalog,
+                                                                       _plcRuntimePublisher,
+                                                                       deviceId,
+                                                                       waveshare_feature,
+                                                                       input_channel,
+                                                                       output_channel,
+                                                                       input_runtime_index,
+                                                                       output_runtime_index);
+        }
     }
 
     JsonObject params_doc = response["params"].to<JsonObject>();
@@ -2709,6 +2867,7 @@ bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument
     const JsonObjectConst params_obj = request["params"].as<JsonObjectConst>();
     uint8_t input_channel = static_cast<uint8_t>(params_obj["inputChannel"] | 0u);
     uint8_t output_channel = static_cast<uint8_t>(params_obj["outputChannel"] | 0u);
+    char waveshare_feature[sizeof(PointIdentity::feature)] = {};
 
     if (_plcRuntimePublisher == nullptr) {
         response["ok"] = false;
@@ -2730,11 +2889,22 @@ bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument
         response["error"] = "channelOutOfRange";
         return true;
     }
+    if (!resolve_waveshare_feature(_pointCatalog,
+                                   deviceId,
+                                   input_channel,
+                                   output_channel,
+                                   waveshare_feature,
+                                   sizeof(waveshare_feature))) {
+        response["ok"] = false;
+        response["error"] = "missingWaveshareDevice";
+        return true;
+    }
     uint8_t object_bytes[sizeof(PlcObjectFileHeaderV1) + 7u +
                          (sizeof(PlcObjectSymbolRecordV1) * 2u) +
                          (sizeof(PlcObjectRelocationRecordV1) * 2u)] = {};
     size_t object_size = 0u;
     const PlcSlotLoadStatusV1 build_status = build_mirror_program_object_file(deviceId,
+                                                                              waveshare_feature,
                                                                               input_channel,
                                                                               output_channel,
                                                                               object_bytes,
@@ -2782,6 +2952,7 @@ bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument
     const bool runtime_map_ok = resolve_waveshare_channel_runtime_indices(_pointCatalog,
                                                                           _plcRuntimePublisher,
                                                                           deviceId,
+                                                                          waveshare_feature,
                                                                           input_channel,
                                                                           output_channel,
                                                                           input_runtime_index,
@@ -2811,6 +2982,7 @@ bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument
 
     response["ok"] = true;
     response["source"] = source_name;
+    response["deviceFeature"] = waveshare_feature;
     response["runtimeMapOk"] = runtime_map_ok;
     if (runtime_map_ok) {
         response["inputRuntimeIndex"] = input_runtime_index;
@@ -3325,7 +3497,6 @@ bool NodeNetCore::savePointCatalog()
     }
 
     char jsonBuffer[PointCatalog::kMaxSerializedSize] = {};
-    const uint32_t save_start_ms = millis();
     JsonDocument point_catalog_doc;
     JsonArray points = point_catalog_doc["points"].to<JsonArray>();
     for (size_t index = 0u; index < _pointCatalog.size(); ++index) {
@@ -3361,7 +3532,6 @@ bool NodeNetCore::savePointCatalog()
     header.payload_size = static_cast<uint32_t>(payload_size);
     header.checksum = point_catalog_checksum(reinterpret_cast<const uint8_t*>(jsonBuffer), payload_size);
 
-    const uint32_t flash_write_start_ms = millis();
     for (uint32_t sector = 0u; sector < kPointCatalogFlashSectors; ++sector) {
         if (!_flash->eraseSector(kPointCatalogFlashBase + (sector * Flash::kSectorSize))) {
             if (_logger != nullptr) {
@@ -3380,15 +3550,6 @@ bool NodeNetCore::savePointCatalog()
             _logger->Warning("Point catalog raw flash write failed");
         }
         return false;
-    }
-
-    if (_logger != nullptr) {
-        const uint32_t flash_write_ms = millis() - flash_write_start_ms;
-        const uint32_t total_save_ms = millis() - save_start_ms;
-        _logger->Info("Point catalog saved (%u entries, flash=%lu ms, total=%lu ms)",
-                      static_cast<unsigned>(_pointCatalog.size()),
-                      static_cast<unsigned long>(flash_write_ms),
-                      static_cast<unsigned long>(total_save_ms));
     }
 
     return true;
@@ -3440,24 +3601,15 @@ bool NodeNetCore::loadPointCatalog()
             return false;
         }
 
-        if (_logger != nullptr) {
-            _logger->Info("Point catalog loaded (%u entries)", static_cast<unsigned>(_pointCatalog.size()));
-        }
         return true;
     }
 
     if (!ensureFlashDbReady()) {
-        if (_logger != nullptr) {
-            _logger->Info("Point catalog absent, starting empty");
-        }
         return true;
     }
 
     char pointCatalogJson[PointCatalog::kMaxSerializedSize] = {};
     if (!flashdb_get_str(kFlashDbPointCatalogKey, pointCatalogJson, sizeof(pointCatalogJson))) {
-        if (_logger != nullptr) {
-            _logger->Info("Point catalog absent, starting empty");
-        }
         return true;
     }
 
@@ -3467,10 +3619,6 @@ bool NodeNetCore::loadPointCatalog()
         }
         _pointCatalog.clear();
         return false;
-    }
-
-    if (_logger != nullptr) {
-        _logger->Info("Point catalog loaded (%u entries)", static_cast<unsigned>(_pointCatalog.size()));
     }
 
     (void)savePointCatalog();
@@ -3573,9 +3721,6 @@ uint16_t NodeNetCore::restorePersistedPlcSlots()
     }
 
     publishBuiltinPlcPointStates(true);
-    if (_logger != nullptr && restored_count > 0u) {
-        _logger->Info("PLC flash package restored (%u slots)", static_cast<unsigned>(restored_count));
-    }
     return restored_count;
 }
 
@@ -3722,73 +3867,6 @@ void NodeNetCore::registerBuiltinPointDefinitions()
     definition.polling.refresh_ms = 0u;
     definition.polling.timeout_ms = 0u;
     (void)upsertPointDefinition(definition);
-
-    for (uint8_t channel = 0u; channel < 8u; ++channel) {
-        char point_id[32] = {};
-        char display_name[32] = {};
-
-        definition = {};
-        (void)snprintf(point_id, sizeof(point_id), "output%u", static_cast<unsigned>(channel + 1u));
-        (void)snprintf(display_name, sizeof(display_name), "Output Channel %u", static_cast<unsigned>(channel + 1u));
-        make_point_identity(definition.id, deviceId, "modbus0.waveshare8ch", point_id);
-        copy_text(definition.display_name, sizeof(definition.display_name), display_name);
-        definition.backend = PointBackend::Modbus;
-        definition.direction = PointDirection::InOut;
-        definition.value_type = PointValueType::Bool;
-        definition.polling.refresh_ms = 1000u;
-        definition.polling.timeout_ms = 3000u;
-        definition.ref.modbus.port_index = kModbus0PortIndex;
-        definition.ref.modbus.slave_address = kWaveshareDefaultSlaveAddress;
-        definition.ref.modbus.address = channel;
-        definition.ref.modbus.register_count = 1u;
-        definition.ref.modbus.table = ModbusTable::Coils;
-        definition.ref.modbus.access = ModbusAccess::ReadWrite;
-        (void)upsertPointDefinition(definition);
-
-        definition = {};
-        (void)snprintf(point_id, sizeof(point_id), "input%u", static_cast<unsigned>(channel + 1u));
-        (void)snprintf(display_name, sizeof(display_name), "Input Channel %u", static_cast<unsigned>(channel + 1u));
-        make_point_identity(definition.id, deviceId, "modbus0.waveshare8ch", point_id);
-        copy_text(definition.display_name, sizeof(definition.display_name), display_name);
-        definition.backend = PointBackend::Modbus;
-        definition.direction = PointDirection::Input;
-        definition.value_type = PointValueType::Bool;
-        definition.polling.refresh_ms = 1000u;
-        definition.polling.timeout_ms = 3000u;
-        definition.ref.modbus.port_index = kModbus0PortIndex;
-        definition.ref.modbus.slave_address = kWaveshareDefaultSlaveAddress;
-        definition.ref.modbus.address = channel;
-        definition.ref.modbus.register_count = 1u;
-        definition.ref.modbus.table = ModbusTable::DiscreteInputs;
-        definition.ref.modbus.access = ModbusAccess::Read;
-        (void)upsertPointDefinition(definition);
-    }
-
-    static const uint16_t kEurothermPvAddresses[] = {41433u, 41436u, 41439u};
-    for (uint8_t channel = 0u; channel < 3u; ++channel) {
-        char point_id[32] = {};
-        char display_name[32] = {};
-
-        definition = {};
-        (void)snprintf(point_id, sizeof(point_id), "ch%u", static_cast<unsigned>(channel + 1u));
-        (void)snprintf(display_name, sizeof(display_name), "Eurotherm CH%u PV", static_cast<unsigned>(channel + 1u));
-        make_point_identity(definition.id, deviceId, "modbus0.eurotherm6100", point_id);
-        copy_text(definition.display_name, sizeof(definition.display_name), display_name);
-        definition.backend = PointBackend::Modbus;
-        definition.direction = PointDirection::Input;
-        definition.value_type = PointValueType::Float;
-        definition.scale = 0.0001f;
-        copy_text(definition.unit, sizeof(definition.unit), "V");
-        definition.polling.refresh_ms = 1000u;
-        definition.polling.timeout_ms = 3000u;
-        definition.ref.modbus.port_index = kModbus0PortIndex;
-        definition.ref.modbus.slave_address = kEurotherm6100SlaveAddress;
-        definition.ref.modbus.address = kEurothermPvAddresses[channel];
-        definition.ref.modbus.register_count = 1u;
-        definition.ref.modbus.table = ModbusTable::HoldingRegisters;
-        definition.ref.modbus.access = ModbusAccess::Read;
-        (void)upsertPointDefinition(definition);
-    }
 
     definition = {};
     make_point_identity(definition.id, deviceId, "plc", "slotCount");
@@ -4020,35 +4098,6 @@ void NodeNetCore::publishBuiltinPointStates()
     state.value.u16 = modbus0Settings.comSettings.interframe_chars_q1;
     state.quality = PointQuality::Good;
     (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
-
-    for (uint8_t channel = 0u; channel < 8u; ++channel) {
-        char point_id[32] = {};
-
-        (void)snprintf(point_id, sizeof(point_id), "output%u", static_cast<unsigned>(channel + 1u));
-        make_point_identity(id, deviceId, "modbus0.waveshare8ch", point_id);
-        state = {};
-        state.quality = PointQuality::BadNotConnected;
-        state.last_update_ms = millis();
-        (void)updatePointState(id, state);
-
-        (void)snprintf(point_id, sizeof(point_id), "input%u", static_cast<unsigned>(channel + 1u));
-        make_point_identity(id, deviceId, "modbus0.waveshare8ch", point_id);
-        state = {};
-        state.quality = PointQuality::BadNotConnected;
-        state.last_update_ms = millis();
-        (void)updatePointState(id, state);
-    }
-
-    for (uint8_t channel = 0u; channel < 3u; ++channel) {
-        char point_id[32] = {};
-
-        (void)snprintf(point_id, sizeof(point_id), "ch%u", static_cast<unsigned>(channel + 1u));
-        make_point_identity(id, deviceId, "modbus0.eurotherm6100", point_id);
-        state = {};
-        state.quality = PointQuality::BadNotConnected;
-        state.last_update_ms = millis();
-        (void)updatePointState(id, state);
-    }
 }
 
 void NodeNetCore::publishBuiltinPlcPointStates(bool include_all_slots)
@@ -4216,13 +4265,22 @@ void NodeNetCore::publishBuiltinPlcPointStates(bool include_all_slots)
                                                              : 0xFFFFu);
         bool runtime_map_ok = input_runtime_index != 0xFFFFu && output_runtime_index != 0xFFFFu;
         if (!runtime_map_ok) {
-            runtime_map_ok = resolve_waveshare_channel_runtime_indices(_pointCatalog,
-                                                                       _plcRuntimePublisher,
-                                                                       deviceId,
-                                                                       input_channel,
-                                                                       output_channel,
-                                                                       input_runtime_index,
-                                                                       output_runtime_index);
+            char waveshare_feature[sizeof(PointIdentity::feature)] = {};
+            if (resolve_waveshare_feature(_pointCatalog,
+                                          deviceId,
+                                          input_channel,
+                                          output_channel,
+                                          waveshare_feature,
+                                          sizeof(waveshare_feature))) {
+                runtime_map_ok = resolve_waveshare_channel_runtime_indices(_pointCatalog,
+                                                                           _plcRuntimePublisher,
+                                                                           deviceId,
+                                                                           waveshare_feature,
+                                                                           input_channel,
+                                                                           output_channel,
+                                                                           input_runtime_index,
+                                                                           output_runtime_index);
+            }
         }
 
         char params_summary[24] = {};

@@ -57,6 +57,10 @@ void PlcCore::begin(PointCatalog* point_catalog, ModbusMaster* modbus0, NodeLogg
     modbus_plan_hash_ = 0u;
     poll_state_ = PollState::Idle;
     active_batch_ = {};
+    active_batch_started_ms_ = 0u;
+    active_batch_last_poll_ms_ = 0u;
+    active_batch_max_poll_gap_ms_ = 0u;
+    active_batch_poll_calls_ = 0u;
     std::memset(batches_, 0, sizeof(batches_));
     std::memset(batch_members_, 0, sizeof(batch_members_));
     std::memset(active_bit_values_, 0, sizeof(active_bit_values_));
@@ -86,6 +90,11 @@ void PlcCore::loop() {
     }
     pollNextPoint();
     syncRuntimeSnapshot(now_ms);
+}
+
+bool PlcCore::pollTransactionActive() const
+{
+    return poll_state_ == PollState::WaitingBatchResult;
 }
 
 void PlcCore::syncRuntimeSnapshot(uint32_t now_ms)
@@ -216,7 +225,14 @@ void PlcCore::rebuildPollPlan()
     size_t sorted_indices[PointCatalog::kMaxPoints] = {};
     size_t sorted_count = 0u;
     for (size_t index = 0; index < point_catalog_->size(); ++index) {
-        if (definitions[index].backend != PointBackend::Modbus) {
+        const PointDefinition& definition = definitions[index];
+        if (definition.backend != PointBackend::Modbus) {
+            continue;
+        }
+
+        if (definition.ref.modbus.table == ModbusTable::Coils &&
+            (definition.ref.modbus.access == ModbusAccess::Write ||
+             definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
             continue;
         }
 
@@ -325,6 +341,7 @@ bool PlcCore::commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now
     }
 
     const PointDefinition& definition = point_catalog_->entries()[catalog_index];
+    const PointState& current_state = point_catalog_->states()[catalog_index];
     if (definition.value_type != PointValueType::Bool ||
         (definition.direction != PointDirection::Output && definition.direction != PointDirection::InOut)) {
         return false;
@@ -337,9 +354,14 @@ bool PlcCore::commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now
         definition.ref.modbus.table == ModbusTable::Coils &&
         (definition.ref.modbus.access == ModbusAccess::Write ||
          definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
-        ok = modbus0_->writeSingleCoil(definition.ref.modbus.slave_address,
-                                       definition.ref.modbus.address,
-                                       value);
+        const bool already_applied = current_state.quality == PointQuality::Good && current_state.value.b == value;
+        if (already_applied) {
+            ok = true;
+        } else {
+            ok = modbus0_->writeSingleCoil(definition.ref.modbus.slave_address,
+                                           definition.ref.modbus.address,
+                                           value);
+        }
     } else if (definition.backend == PointBackend::Local) {
         ok = true;
     }
@@ -453,6 +475,14 @@ void PlcCore::pollNextPoint()
 
     const uint32_t now_ms = millis();
     if (poll_state_ == PollState::WaitingBatchResult) {
+        ++active_batch_poll_calls_;
+        if (active_batch_last_poll_ms_ != 0u) {
+            const uint32_t poll_gap_ms = now_ms - active_batch_last_poll_ms_;
+            if (poll_gap_ms > active_batch_max_poll_gap_ms_) {
+                active_batch_max_poll_gap_ms_ = poll_gap_ms;
+            }
+        }
+        active_batch_last_poll_ms_ = now_ms;
         switch (modbus0_ == nullptr ? ModbusMaster::TransactionStatus::Error : modbus0_->pollTransaction()) {
             case ModbusMaster::TransactionStatus::Busy:
                 return;
@@ -460,6 +490,10 @@ void PlcCore::pollNextPoint()
                 (void)completeActiveBatch(now_ms);
                 poll_state_ = PollState::Idle;
                 active_batch_ = {};
+                active_batch_started_ms_ = 0u;
+                active_batch_last_poll_ms_ = 0u;
+                active_batch_max_poll_gap_ms_ = 0u;
+                active_batch_poll_calls_ = 0u;
                 return;
             case ModbusMaster::TransactionStatus::WatchdogTimeout:
             case ModbusMaster::TransactionStatus::Error:
@@ -468,42 +502,70 @@ void PlcCore::pollNextPoint()
                                                     : qualityFromModbusError(modbus0_->lastError()));
                 poll_state_ = PollState::Idle;
                 active_batch_ = {};
+                active_batch_started_ms_ = 0u;
+                active_batch_last_poll_ms_ = 0u;
+                active_batch_max_poll_gap_ms_ = 0u;
+                active_batch_poll_calls_ = 0u;
                 return;
             case ModbusMaster::TransactionStatus::Idle:
             default:
                 poll_state_ = PollState::Idle;
                 active_batch_ = {};
+                active_batch_started_ms_ = 0u;
+                active_batch_last_poll_ms_ = 0u;
+                active_batch_max_poll_gap_ms_ = 0u;
+                active_batch_poll_calls_ = 0u;
                 return;
         }
     }
 
+    size_t selected_batch_index = batch_count_;
+    uint32_t selected_urgency = 0u;
     for (size_t attempts = 0u; attempts < batch_count_; ++attempts) {
         const size_t batch_index = next_batch_index_;
         next_batch_index_ = (next_batch_index_ + 1u) % batch_count_;
         const ModbusPollBatch& batch = batches_[batch_index];
-        if (!batch.valid || !isBatchDue(batch, now_ms)) {
+        uint32_t batch_urgency = 0u;
+        if (!batch.valid || !batchPollUrgency(batch, now_ms, batch_urgency)) {
             continue;
         }
 
-        if (startBatchPoll(batch)) {
-            active_batch_ = batch;
-            poll_state_ = PollState::WaitingBatchResult;
-        } else {
-            failActiveBatch(now_ms,
-                            (batch.port_index != 0u || modbus0_ == nullptr)
-                                ? PointQuality::BadConfigError
-                                : qualityFromModbusError(modbus0_->lastError()));
+        if (selected_batch_index == batch_count_ || batch_urgency > selected_urgency) {
+            selected_batch_index = batch_index;
+            selected_urgency = batch_urgency;
         }
-        break;
+    }
+
+    if (selected_batch_index >= batch_count_) {
+        return;
+    }
+
+    const ModbusPollBatch& batch = batches_[selected_batch_index];
+    next_batch_index_ = (selected_batch_index + 1u) % batch_count_;
+
+    if (startBatchPoll(batch)) {
+        active_batch_ = batch;
+        active_batch_started_ms_ = now_ms;
+        active_batch_last_poll_ms_ = now_ms;
+        active_batch_max_poll_gap_ms_ = 0u;
+        active_batch_poll_calls_ = 0u;
+        poll_state_ = PollState::WaitingBatchResult;
+    } else {
+        failActiveBatch(now_ms,
+                        (batch.port_index != 0u || modbus0_ == nullptr)
+                            ? PointQuality::BadConfigError
+                            : qualityFromModbusError(modbus0_->lastError()));
     }
 }
 
-bool PlcCore::isBatchDue(const ModbusPollBatch& batch, uint32_t now_ms) const
+bool PlcCore::batchPollUrgency(const ModbusPollBatch& batch, uint32_t now_ms, uint32_t& urgency_out) const
 {
+    urgency_out = 0u;
     if (point_catalog_ == nullptr) {
         return false;
     }
 
+    bool due = false;
     const PointDefinition* definitions = point_catalog_->entries();
     const PointState* states = point_catalog_->states();
     for (uint16_t offset = 0u; offset < batch.member_count; ++offset) {
@@ -515,13 +577,30 @@ bool PlcCore::isBatchDue(const ModbusPollBatch& batch, uint32_t now_ms) const
 
         const PointDefinition& definition = definitions[catalog_index];
         const PointState& state = states[catalog_index];
-        if (definition.polling.refresh_ms == 0u ||
-            (now_ms - state.last_update_ms) >= definition.polling.refresh_ms) {
+        if (definition.polling.refresh_ms == 0u) {
+            urgency_out = UINT32_MAX;
             return true;
+        }
+
+        const uint32_t elapsed_ms = now_ms - state.last_update_ms;
+        if (elapsed_ms < definition.polling.refresh_ms) {
+            continue;
+        }
+
+        due = true;
+        const uint32_t overdue_ms = elapsed_ms - definition.polling.refresh_ms;
+        if (overdue_ms > urgency_out) {
+            urgency_out = overdue_ms;
         }
     }
 
-    return false;
+    return due;
+}
+
+bool PlcCore::isBatchDue(const ModbusPollBatch& batch, uint32_t now_ms) const
+{
+    uint32_t urgency = 0u;
+    return batchPollUrgency(batch, now_ms, urgency);
 }
 
 bool PlcCore::startBatchPoll(const ModbusPollBatch& batch)

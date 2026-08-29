@@ -51,6 +51,7 @@ class NodeNetCore
         bool updatePointCommandState(const PointIdentity& id, const PointCommandState& state);
         void attachPlcRuntimePublisher(const PlcRuntimePublisherV1* publisher);
         uint16_t restorePersistedPlcSlots();
+        bool hasActiveRealtimeWork() const { return _plcCore.pollTransactionActive(); }
         void setPlcSlotRuntimeDiagnostics(uint8_t slot_id,
                                           uint8_t input_channel,
                                           uint8_t output_channel,
@@ -137,8 +138,6 @@ class NodeNetCore
             volatile uint8_t tail = 0u;
         };
 
-        static NodeNetCore* s_active_instance;
-
         NodeNet* _nodeNet;
         ModbusMaster* _modbus0 = nullptr;
         NodeLogger* _logger = nullptr;
@@ -183,9 +182,6 @@ class NodeNetCore
         } _plcUploadSession;
         uint32_t _nextPlcUploadId = 1u;
 
-        static void nodenet_broadcast_callback_trampoline(const NodeNetMessage& msg);
-        static void nodenet_message_callback_trampoline(const NodeNetMessage& msg);
-
         // Private methods
 
         // Writes the common node identity fields into a JSON document.
@@ -195,14 +191,6 @@ class NodeNetCore
         // Serializes the feature flags into the JSON "features" object.
         // doc: destination JSON document that will receive the feature subtree.
         void nodeFeatures(JsonDocument& doc);
-
-        // Populates the JSON document with the initial status snapshot.
-        // doc: destination JSON document to populate.
-        void nodeInitialStatus(JsonDocument& doc);
-
-        // Updates the JSON document with the latest runtime status values.
-        // doc: destination JSON document to update.
-        void nodeUpdatedStatus(JsonDocument& doc);
 
         // Copies an IRQ-delivered message into the fixed input queue.
         // msg: transient message view received from the NodeNet IRQ callback.
@@ -221,59 +209,101 @@ class NodeNetCore
         // msg: destination object that receives the copied queued message.
         bool dequeueOutputMessage(QueuedMessage& msg);
 
+        // Rebuilds the PLC runtime descriptor map after point definitions change.
         void syncPlcRuntimeDefinitions();
 
         // Drains queued input messages, parses them, and generates responses.
         void processInputQueue();
 
+        // Polls the NodeNet mailbox directly and snapshots at most one incoming message.
+        void pollIncomingMessage();
+
         // Sends all queued outgoing messages through the NodeNet transport.
         void processOutputQueue();
-
-        // IRQ-side handler for broadcast traffic; only snapshots the message into the queue.
-        // msg: transient broadcast message received by the low-level driver.
-        void onBroadcastMessage(const NodeNetMessage& msg);
-
-        // IRQ-side handler for direct traffic; only snapshots the message into the queue.
-        // msg: transient direct message received by the low-level driver.
-        void onDirectMessage(const NodeNetMessage& msg);
 
         // Updates a mutable node property from a JSON request.
         // request: parsed JSON command containing at least "property" and "value".
         // Returns true when the property exists and the value type is accepted.
         bool updateProperty(const JsonDocument& request);
+        // Handles catalog definition queries and emits paged definition responses.
         bool handlePointDefinitionsRequest(const JsonDocument& request, JsonDocument& response);
+
+        // Handles state snapshot queries for the local point catalog.
         bool handlePointStatesRequest(const JsonDocument& request, JsonDocument& response);
+
+        // Creates or updates a point definition coming from a remote command.
         bool handlePointUpsertRequest(const JsonDocument& request, JsonDocument& response);
+
+        // Removes a point definition and its runtime state from the catalog.
         bool handlePointDeleteRequest(const JsonDocument& request, JsonDocument& response);
+
+        // Reports global PLC runtime health and publisher status.
         bool handlePlcStatusRequest(const JsonDocument& request, JsonDocument& response);
+
+        // Returns slot-level PLC metadata and runtime diagnostics.
         bool handlePlcSlotsRequest(const JsonDocument& request, JsonDocument& response);
+
+        // Loads a PLC program into a slot and wires it to runtime points.
         bool handlePlcLoadRequest(const JsonDocument& request, JsonDocument& response);
+
+        // Builds and returns PLC bytecode for simple generated programs.
         bool handlePlcBytecodeRequest(const JsonDocument& request, JsonDocument& response);
+
+        // Builds and returns a PLC object file ready to load or persist.
         bool handlePlcObjectFileRequest(const JsonDocument& request, JsonDocument& response);
+
+        // Expands a built-in device template into concrete point definitions.
+        bool handleDeviceTemplateLoadRequest(const JsonDocument& request, JsonDocument& response);
+
+        // Starts a multi-frame PLC upload session.
         bool handlePlcUploadBeginRequest(const JsonDocument& request, JsonDocument& response);
+
+        // Reports the current PLC upload session state.
         bool handlePlcUploadStatusRequest(const JsonDocument& request, JsonDocument& response);
+
+        // Finalizes a PLC upload and optionally persists the result.
         bool handlePlcUploadCommitRequest(const JsonDocument& request, JsonDocument& response);
+
+        // Aborts the active PLC upload session.
         bool handlePlcUploadAbortRequest(const JsonDocument& request, JsonDocument& response);
+
+        // Accepts PLC upload data sent as JSON payloads.
         bool handlePlcUploadDataRequest(const JsonDocument& request, JsonDocument& response);
         bool handleLocalPlcPointWrite(const PointDefinition& definition, JsonVariantConst value);
         bool handlePlcUploadDataMessage(const QueuedMessage& msg);
+
+        // Validates and stores one PLC upload chunk in the SDRAM staging window.
         bool handlePlcUploadDataChunk(uint32_t upload_id,
                           uint32_t offset,
                           const uint8_t* payload,
                           size_t payload_size,
                           uint16_t payload_checksum,
                           JsonDocument& response);
+
+        // Clears every field related to the active PLC upload transaction.
         void resetPlcUploadSession();
+
+        // Serializes the current PLC upload status into a response document.
         void fillPlcUploadStatus(JsonDocument& response, bool include_header) const;
 
         bool ensureFlashDbReady();
         bool savePointCatalog();
         bool loadPointCatalog();
         bool savePersistedPlcSlots();
+
+        // Mirrors basic node identity into the point catalog exposed over NodeNet.
         void registerNodePointDefinition(JsonDocument& doc);
+
+        // Publishes the latest remote node state snapshot into the local catalog.
         void publishNodePointStates(JsonDocument& doc);
+
+        // Registers the built-in local points that describe the node and PLC runtime.
         void registerBuiltinPointDefinitions();
+
+        // Refreshes built-in node points that come from local configuration state.
         void publishBuiltinPointStates();
+
+        // Refreshes built-in PLC points that come from slot status and runtime diagnostics.
         void publishBuiltinPlcPointStates(bool include_all_slots);
 
 };

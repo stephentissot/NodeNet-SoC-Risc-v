@@ -26,5 +26,4 @@ struct NodeInfo {
   unsigned long lastSeen;
   bool available = false;
   JsonDocument lastStatus; // Last status received from this node
-    //std::vector<EntityFeature> mqttFeatures;   // List of mqtt sensors/buttons... for this node
 };

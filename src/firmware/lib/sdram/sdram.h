@@ -104,7 +104,7 @@ public:
         uint32_t used;
     };
     static constexpr size_t kAlignment = alignof(uint64_t);
-    
+
 private:
     static constexpr size_t kMinBlockSize = sizeof(BlockHeader) + kAlignment;
     static constexpr uint32_t kUsedTag = 0x51A7A110u;

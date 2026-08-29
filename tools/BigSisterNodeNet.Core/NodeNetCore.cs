@@ -306,7 +306,9 @@ namespace BigSisterNodeNet.Core
             _commandThread.Start();
             _aliveThread.Start();
             // Load nodes from appData file
+#if !DEBUG
             LoadNodesFromFile(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BigSisterNodeNet", "nodes.json"));
+#endif
             // Send the first discovery message to find all nodes on the network
             Task.Run(async () =>
             {
