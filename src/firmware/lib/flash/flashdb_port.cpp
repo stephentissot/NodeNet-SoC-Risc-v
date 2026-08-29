@@ -13,10 +13,10 @@ static Flash* g_flash = nullptr;
 static fdb_kvdb g_kvdb;
 static bool g_kvdb_ready = false;
 
-// Keep FlashDB strictly inside firmware runtime data window and reserve
-// one sector for low-level flash self-test scratch.
-static constexpr uint32_t kFlashDbOffset = Flash::kRuntimeDataBase;
-static constexpr uint32_t kFlashDbSize = Flash::kRuntimeDataSize - Flash::kSectorSize;
+// Keep FlashDB away from the raw point-catalog and PLC package slots.
+// One sector at the end remains reserved for low-level flash self-test scratch.
+static constexpr uint32_t kFlashDbOffset = Flash::kFlashDbBase;
+static constexpr uint32_t kFlashDbSize = Flash::kFlashDbSize;
 static constexpr const char* kFlashDbPartitionName = "nodenet_kv";
 
 static bool read_span_raw(uint32_t flash_offset, uint8_t* out, size_t len) {
@@ -301,4 +301,12 @@ bool flashdb_get_str(const char* key, char* out, size_t out_size) {
   std::memcpy(out, value, n);
   out[n] = '\0';
   return true;
+}
+
+bool flashdb_delete_key(const char* key) {
+  if (!g_kvdb_ready || key == nullptr) {
+    return false;
+  }
+
+  return fdb_kv_del(&g_kvdb, key) == FDB_NO_ERR;
 }

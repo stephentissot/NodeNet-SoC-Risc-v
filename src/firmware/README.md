@@ -25,6 +25,65 @@ make firmware-app-build   # SDRAM application ELF only
 
 The build fails if HEX payload exceeds configured ROM capacity.
 
+## PLC Runtime Status
+
+The current firmware is PLC ready and exposes a relocatable `objectFileV1`
+deployment path.
+
+Current runtime scope:
+
+- V0 basic ISA is implemented end to end
+- firmware publishes the PLC runtime descriptor/value/status map in SDRAM
+- generic host-side deployment uses `objectFileV1` upload + firmware-side link/load
+- linked bytecode and original object file can both be read back over NodeNet
+- persisted PLC packages are restored automatically during boot after the runtime map is published
+
+Current V0 basic ISA instructions:
+
+- `HALT`
+- `LOAD_BOOL <symbol>`
+- `STORE_BOOL <symbol>`
+- `INC_INT <symbol>`
+- `DEC_INT <symbol>`
+- `DB <byte0>, <byte1>, ...`
+
+Current object-file declarations:
+
+- `CONST POINT_ID <symbol>, <deviceId.feature.pointId>`
+- `PARAM POINT_ID <symbol>`
+- `VAR <type> <name>`
+
+The built-in mirror package flow remains available as a convenience tool for
+quick validation and slot bring-up.
+
+From the project root:
+
+```bash
+make plc-mirror-package \
+    PLC_MIRROR_PAIRS=0:1 \
+    PLC_PACKAGE_STORE_EPOCH=1
+
+make plc-package-check
+make flash-plc-package
+```
+
+`PLC_MIRROR_PAIRS` is a comma-separated list of `input_runtime_index:output_runtime_index`
+pairs. The generated package is written to `src/firmware/build/plc_linked_package.img`
+by default and is intended as a convenience artifact for the built-in mirror program,
+not as the primary generic PLC deployment contract.
+
+If you want to call the tool directly:
+
+```bash
+python src/firmware/tools/pack_plc_mirror_program.py \
+    --pair 0:1 \
+    --output src/firmware/build/plc_linked_package.img \
+    --store-epoch 1
+```
+
+Use the current ABI `store_epoch` published by the firmware when packaging, or
+the loader will reject the package as stale.
+
 After cloning, fetch the u8g2 submodule first:
 ```bash
 git submodule update --init
@@ -52,9 +111,10 @@ src/firmware/
 ├── link_app_sdram.ld    Runtime application linker script for execution from SDRAM
 ├── main.cpp             Application entry point executed after stage0 handoff
 ├── i2c.h            I2C MMIO driver (wb_i2c peripheral)
-├── sdram.h              SDRAM helpers (`SDRAM_DATA`, readiness wait, scratch-area self-tests)
-├── sdram.cpp            Single-TU SDRAM probe and scratch storage for self-tests
 └── lib/
+    ├── sdram/       SDRAM helpers and allocator backing store
+    │   ├── sdram.h
+    │   └── sdram.cpp
     ├── modbus/      Modbus RTU master MMIO driver for wb_modbus_master
     │   ├── ModbusMaster.h
     │   └── ModbusMaster.cpp
@@ -235,7 +295,6 @@ NodeNet myNodeNet(
     NODENET0_BASE,
     0x01,
     1'000'000,
-    NODENET_PRIORITY_NORMAL,
     200,
     nullptr,
     nullptr);
@@ -265,7 +324,7 @@ static void onMessage(const NodeNetMessage& msg)
 int main()
 {
     NodeNet myNodeNet(NODENET0_BASE, 0x41, 1'000'000,
-                      NODENET_PRIORITY_NORMAL, 200, nullptr, nullptr);
+                      200, nullptr, nullptr);
 
     // Finish the rest of system init first.
     myNodeNet.SetCallbacks(onBroadcast, onMessage);
@@ -283,8 +342,10 @@ int main()
 ```cpp
 class NodeNet {
 public:
-    explicit NodeNet(uint32_t base, uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
-    void Init(uint8_t addr, NodeNetPriority priority, uint32_t led_blink_ms = 100u);
+    explicit NodeNet(uint32_t base, uint8_t addr, uint32_t uart_baud, uint32_t led_blink_ms = 100u,
+                     MessageCallback broadcastCallback = nullptr, MessageCallback messageCallback = nullptr);
+    void Init(uint8_t addr, uint32_t uart_baud, uint32_t led_blink_ms = 100u,
+              MessageCallback broadcastCallback = nullptr, MessageCallback messageCallback = nullptr);
     uint32_t Status() const;
     bool TxMailboxReady() const;
     bool TxHasSpace(uint16_t msg_len) const;
@@ -304,7 +365,7 @@ public:
 ```cpp
 int main() {
     constexpr uint32_t NODENET0_BASE = 0x10006000u;
-    NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
+    NodeNet myNodeNet(NODENET0_BASE, 0x01, 1'000'000, 200);
     
     while (1) {
         if (myNodeNet.HasMessage()) {
@@ -326,7 +387,7 @@ int main() {
 ```cpp
 int main() {
     constexpr uint32_t NODENET0_BASE = 0x10006000u;
-    NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
+    NodeNet myNodeNet(NODENET0_BASE, 0x01, 1'000'000, 200);
     
     // Send request to node 0x02
     myNodeNet.Send(0x02, "STATUS?", 7);
@@ -357,7 +418,7 @@ int main() {
 **Mailbox Debugging**:
 
 ```cpp
-NodeNet myNodeNet(NODENET0_BASE, 0x01, NODENET_PRIORITY_NORMAL, 200);
+NodeNet myNodeNet(NODENET0_BASE, 0x01, 1'000'000, 200);
 uint32_t status = myNodeNet.Status();
 bool tx_busy = (status & (NODENET_STATUS_TX_PENDING | NODENET_STATUS_TX_ACTIVE)) != 0;
 bool rx_ready = (status & NODENET_STATUS_RX_VALID) != 0;
@@ -414,8 +475,37 @@ flash.readUniqueIdAscii(device_id, sizeof(device_id));
 Implementation notes:
 - SPI SCK uses the ECP5 dedicated USRMCLK path (not a normal GPIO pin).
 - Firmware-side protection keeps writes/erases out of the boot region.
-- FlashDB uses partition `nodenet_kv` at `0x204000–0x243FFF`.
+- Raw point catalog uses `0x200000-0x202FFF`.
+- Persistent PLC package storage uses `0x204000-0x223FFF` and can retain multiple slots in one flash package.
+- FlashDB uses partition `nodenet_kv` at `0x224000-0x242FFF`.
+- `0x243000-0x243FFF` stays reserved for low-level flash self-test scratch.
+- Large PLC artifacts should prefer the raw PLC package slot over FlashDB.
 - The ASCII `deviceId` is derived from the 64-bit factory UID and contains only `a-z`, `A-Z`, and `0-9`.
+
+Host-side PLC package flow:
+
+```bash
+python src/firmware/tools/pack_plc_linked_package.py \
+    --input linked_code.bin \
+    --output src/firmware/build/plc_linked_package.img \
+    --symbol-count 12 \
+    --relocation-count 12 \
+    --runtime-header-addr 0x20100000 \
+    --store-epoch 1
+
+python src/firmware/tools/verify_plc_linked_package.py \
+    --input src/firmware/build/plc_linked_package.img \
+    --expect-runtime-header-addr 0x20100000 \
+    --expect-store-epoch 1
+
+make plc-package-check PLC_LINKED_CODE_INPUT=linked_code.bin \
+    PLC_PACKAGE_SYMBOL_COUNT=12 PLC_PACKAGE_RELOCATION_COUNT=12 \
+    PLC_PACKAGE_STORE_EPOCH=1
+
+make flash-plc-package PLC_LINKED_CODE_INPUT=linked_code.bin \
+    PLC_PACKAGE_SYMBOL_COUNT=12 PLC_PACKAGE_RELOCATION_COUNT=12 \
+    PLC_PACKAGE_STORE_EPOCH=1
+```
 
 Detailed register-level documentation is available in [../wbDevices/README_FLASH.md](../wbDevices/README_FLASH.md).
 
@@ -527,7 +617,7 @@ static void json_example(void)
 }
 ```
 
-This allocator is implemented in `sdram.cpp` as a simple free-list over `g_sdram_json_pool`. It supports `allocate()`, `deallocate()`, and `reallocate()`, which matches what ArduinoJson 7 expects from a custom allocator.
+This allocator is implemented in `lib/sdram/sdram.cpp` as a simple free-list over `g_sdram_json_pool`. It supports `allocate()`, `deallocate()`, and `reallocate()`, which matches what ArduinoJson 7 expects from a custom allocator.
 
 **SDRAM Regions (Memory Map)**:
 ```

@@ -29,6 +29,23 @@ FLASH_TOTAL_BYTES=0x800000
 FW_IMAGE_SLOT_BYTES=0x5BC000
 FW_IMAGE_VERIFY_TOOL=src/firmware/tools/verify_firmware_image.py
 FW_IMAGE_TEST_TOOL=src/firmware/tools/make_boot_test_images.py
+PLC_PACKAGE_PACK_TOOL=src/firmware/tools/pack_plc_linked_package.py
+PLC_PACKAGE_VERIFY_TOOL=src/firmware/tools/verify_plc_linked_package.py
+PLC_MIRROR_PACKAGE_TOOL=src/firmware/tools/pack_plc_mirror_program.py
+PLC_LINKED_CODE_INPUT ?=
+PLC_PACKAGE_IMAGE ?= src/firmware/build/plc_linked_package.img
+PLC_MIRROR_PAIRS ?=
+PLC_PACKAGE_FLASH_OFFSET ?= 0x204000
+PLC_PACKAGE_SLOT_BYTES ?= 0x20000
+PLC_PACKAGE_ABI_VERSION ?= 1
+PLC_PACKAGE_FLAGS ?= 0
+PLC_PACKAGE_ENTRY_OFFSET ?= 0
+PLC_PACKAGE_SYMBOL_COUNT ?= 0
+PLC_PACKAGE_RELOCATION_COUNT ?= 0
+PLC_PACKAGE_MAX_INSTRUCTIONS ?= 200
+PLC_PACKAGE_MAX_SCAN_US ?= 10000
+PLC_PACKAGE_RUNTIME_HEADER_ADDR ?= 0x20100000
+PLC_PACKAGE_STORE_EPOCH ?= 1
 FW_SKIP_RESET ?= 0
 FIRMWARE_PREV_HEX=$(BUILD)/nodenet_riscv.prev.hex
 FIRMWARE_PADDED_HEX=$(BUILD)/nodenet_riscv.padded.hex
@@ -59,6 +76,7 @@ FIRMWARE_DEPS := src/firmware/Makefile \
 # and does not accidentally pull in testbenches or any legacy i2c directory.
 SOURCES := src/top.sv \
            $(wildcard src/wbDevices/*.sv) \
+	   $(wildcard src/plc/*.sv) \
 	   $(wildcard src/modbus/*.sv) \
 		   $(wildcard src/sdram/*.sv) \
            src/picorv32/picorv32.v \
@@ -70,7 +88,7 @@ SOURCES += $(LITEDRAM_RTL)
 SOURCES := $(sort $(SOURCES))
 
 
-.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw-check-image flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only litedram-gen litedram-copy litedram-refresh
+.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw-check-image flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc plc-package plc-mirror-package plc-package-check plc-package-build-check plc-mirror-package-check flash-plc-package flash-plc-package-write bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only litedram-gen litedram-copy litedram-refresh
 
 all: firmware-build $(BUILD)/$(TOP).bit
 
@@ -225,6 +243,102 @@ flash-fw-test-size: firmware-image-tests
 
 flash-fw-test-crc: firmware-image-tests
 	$(MAKE) IMAGE_TO_FLASH=$(FIRMWARE_IMAGE_BAD_CRC) flash-fw-write-image
+
+plc-package:
+	@if [ -z "$(PLC_LINKED_CODE_INPUT)" ]; then \
+		echo "[PLCPKG][ERROR] PLC_LINKED_CODE_INPUT is empty"; \
+		exit 2; \
+	fi
+	@if [ ! -f $(PLC_LINKED_CODE_INPUT) ]; then \
+		echo "[PLCPKG][ERROR] Missing linked code input: $(PLC_LINKED_CODE_INPUT)"; \
+		exit 2; \
+	fi
+	$(PYTHON) $(PLC_PACKAGE_PACK_TOOL) \
+		--input $(PLC_LINKED_CODE_INPUT) \
+		--output $(PLC_PACKAGE_IMAGE) \
+		--abi-version $(PLC_PACKAGE_ABI_VERSION) \
+		--flags $(PLC_PACKAGE_FLAGS) \
+		--entry-offset $(PLC_PACKAGE_ENTRY_OFFSET) \
+		--symbol-count $(PLC_PACKAGE_SYMBOL_COUNT) \
+		--relocation-count $(PLC_PACKAGE_RELOCATION_COUNT) \
+		--max-instructions-per-scan $(PLC_PACKAGE_MAX_INSTRUCTIONS) \
+		--max-scan-time-us $(PLC_PACKAGE_MAX_SCAN_US) \
+		--runtime-header-addr $(PLC_PACKAGE_RUNTIME_HEADER_ADDR) \
+		--store-epoch $(PLC_PACKAGE_STORE_EPOCH)
+
+plc-mirror-package:
+	@if [ -z "$(PLC_MIRROR_PAIRS)" ]; then \
+		echo "[PLCMIRROR][ERROR] PLC_MIRROR_PAIRS is empty (expected INPUT:OUTPUT[,INPUT:OUTPUT...])"; \
+		exit 2; \
+	fi
+	@pair_args=$$(printf '%s' "$(PLC_MIRROR_PAIRS)" | awk -F',' '{for (i = 1; i <= NF; ++i) printf " --pair %s", $$i}'); \
+	$(PYTHON) $(PLC_MIRROR_PACKAGE_TOOL) $$pair_args \
+		--output $(PLC_PACKAGE_IMAGE) \
+		--abi-version $(PLC_PACKAGE_ABI_VERSION) \
+		--flags $(PLC_PACKAGE_FLAGS) \
+		--entry-offset $(PLC_PACKAGE_ENTRY_OFFSET) \
+		--symbol-count 0 \
+		--relocation-count $(PLC_PACKAGE_RELOCATION_COUNT) \
+		--max-instructions-per-scan $(PLC_PACKAGE_MAX_INSTRUCTIONS) \
+		--max-scan-time-us $(PLC_PACKAGE_MAX_SCAN_US) \
+		--runtime-header-addr $(PLC_PACKAGE_RUNTIME_HEADER_ADDR) \
+		--store-epoch $(PLC_PACKAGE_STORE_EPOCH)
+
+plc-package-check:
+	@if [ ! -f $(PLC_PACKAGE_IMAGE) ]; then \
+		echo "[PLCPKG][ERROR] Missing package: $(PLC_PACKAGE_IMAGE)"; \
+		exit 2; \
+	fi
+	@pkg_size=$$(wc -c < $(PLC_PACKAGE_IMAGE)); \
+	flash_total=$$(( $(FLASH_TOTAL_BYTES) )); \
+	offset=$$(( $(PLC_PACKAGE_FLASH_OFFSET) )); \
+	slot_size=$$(( $(PLC_PACKAGE_SLOT_BYTES) )); \
+	if [ $$pkg_size -gt $$slot_size ]; then \
+		echo "[PLCPKG][ERROR] package too large for slot: $$pkg_size > $$slot_size"; \
+		exit 2; \
+	fi; \
+	end_off=$$((offset + pkg_size)); \
+	if [ $$end_off -gt $$flash_total ]; then \
+		echo "[PLCPKG][ERROR] package exceeds flash range: end=$$end_off total=$$flash_total"; \
+		exit 2; \
+	fi
+	$(PYTHON) $(PLC_PACKAGE_VERIFY_TOOL) \
+		--input $(PLC_PACKAGE_IMAGE) \
+		--slot-size $(PLC_PACKAGE_SLOT_BYTES) \
+		--expect-runtime-header-addr $(PLC_PACKAGE_RUNTIME_HEADER_ADDR) \
+		--expect-store-epoch $(PLC_PACKAGE_STORE_EPOCH)
+
+plc-package-build-check: plc-package plc-package-check
+
+plc-mirror-package-check: plc-mirror-package plc-package-check
+
+flash-plc-package: plc-package-check
+	$(MAKE) IMAGE_TO_FLASH=$(PLC_PACKAGE_IMAGE) FLASH_IMAGE_OFFSET=$(PLC_PACKAGE_FLASH_OFFSET) FLASH_IMAGE_SLOT_BYTES=$(PLC_PACKAGE_SLOT_BYTES) flash-plc-package-write
+
+flash-plc-package-write:
+	@if [ -z "$(IMAGE_TO_FLASH)" ]; then \
+		echo "[PLCPKG][ERROR] IMAGE_TO_FLASH is empty"; \
+		exit 2; \
+	fi
+	@if [ ! -f $(IMAGE_TO_FLASH) ]; then \
+		echo "[PLCPKG][ERROR] Missing image: $(IMAGE_TO_FLASH)"; \
+		exit 2; \
+	fi
+	@img_size=$$(wc -c < $(IMAGE_TO_FLASH)); \
+	if [ $$img_size -gt $$(( $(FLASH_IMAGE_SLOT_BYTES) )) ]; then \
+		echo "[PLCPKG][ERROR] IMAGE_TO_FLASH larger than slot"; \
+		exit 2; \
+	fi
+	@ofl_verify=""; \
+	ofl_reset=""; \
+	if [ "$(FW_STRICT_VERIFY)" = "1" ]; then \
+		ofl_verify="--verify"; \
+	fi; \
+	if [ "$(FW_SKIP_RESET)" = "1" ]; then \
+		ofl_reset="--skip-reset"; \
+	fi; \
+	echo "[PLCPKG] openFPGALoader write offset=$(FLASH_IMAGE_OFFSET) strict=$(FW_STRICT_VERIFY) skip_reset=$(FW_SKIP_RESET)"; \
+	openFPGALoader -b colorlight-i9 -f $$ofl_reset --unprotect-flash $$ofl_verify -o $(FLASH_IMAGE_OFFSET) $(IMAGE_TO_FLASH)
 
 
 # Ensure bootloader hex tracks firmware source changes, but avoid forcing

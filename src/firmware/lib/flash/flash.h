@@ -49,13 +49,26 @@ public:
   static constexpr uint32_t kRuntimeDataEnd = kFirmwareSlotBase;           // 0x244000
   static constexpr uint32_t kRuntimeDataSize = kRuntimeDataEnd - kRuntimeDataBase;
 
-  // Dedicated sector for low-level flash self-test scratch.
-  static constexpr uint32_t kRuntimeTestSectorBase = kRuntimeDataEnd - kSectorSize;
-
   // Legacy parameter area kept for compatibility with older layouts.
   static constexpr uint32_t kParamBase = 0x200000UL;
   static constexpr uint32_t kParamSize = 16UL * 1024UL;
   static constexpr uint32_t kParamEnd = kParamBase + kParamSize;
+
+  // Raw flash regions used by firmware-side persistence.
+  static constexpr uint32_t kPointCatalogSlotBase = kParamBase;            // 0x200000
+  static constexpr uint32_t kPointCatalogSlotSize = 3UL * kSectorSize;     // 12 KB
+  static constexpr uint32_t kPointCatalogSlotEnd = kPointCatalogSlotBase + kPointCatalogSlotSize;
+  static constexpr uint32_t kPlcPackageSlotBase = 0x204000UL;
+  static constexpr uint32_t kPlcPackageSlotSize = 32UL * kSectorSize;       // 128 KB
+  static constexpr uint32_t kPlcPackageSlotEnd = kPlcPackageSlotBase + kPlcPackageSlotSize;
+
+  // Dedicated sector for low-level flash self-test scratch.
+  static constexpr uint32_t kRuntimeTestSectorBase = kRuntimeDataEnd - kSectorSize;
+
+  // Remaining runtime partition for FlashDB KV storage.
+  static constexpr uint32_t kFlashDbBase = kPlcPackageSlotEnd;
+  static constexpr uint32_t kFlashDbEnd = kRuntimeTestSectorBase;
+  static constexpr uint32_t kFlashDbSize = kFlashDbEnd - kFlashDbBase;
 
 private:
   uint32_t base_;

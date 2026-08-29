@@ -59,28 +59,25 @@ extern "C" void nodenet_irq_dispatch(void) {
 NodeNet::NodeNet(uint32_t base,
                  uint8_t addr,
                  uint32_t uart_baud,
-                 NodeNetPriority priority,
                  uint32_t led_blink_ms,
                  MessageCallback broadcastCallback,
                  MessageCallback messageCallback)
     : base_(base) {
-  Init(addr, uart_baud, priority, led_blink_ms, broadcastCallback, messageCallback);
+  Init(addr, uart_baud, led_blink_ms, broadcastCallback, messageCallback);
 }
 
 void NodeNet::Init(uint8_t addr,
                    uint32_t uart_baud,
-                   NodeNetPriority priority,
                    uint32_t led_blink_ms,
                    MessageCallback broadcastCallback,
                    MessageCallback messageCallback) {
   node_addr_ = addr;
   uart_baud_ = uart_baud;
-  priority_ = priority;
   broadcast_callback_ = broadcastCallback;
   message_callback_ = messageCallback;
   g_nodenet_irq_instance = this;
   Write(NODENET_UART_BAUD_OFS, ComputeUartDivisor(uart_baud));
-  Write(NODENET_CONFIG_OFS, ((uint32_t)priority << 8) | (uint32_t)addr);
+  Write(NODENET_CONFIG_OFS, (uint32_t)addr);
   Write(NODENET_LED_CFG_OFS, led_blink_ms);
   WriteNodeNetIrqConfig(base_, broadcast_callback_, message_callback_);
   ApplyNodeNetCpuIrqMask(broadcast_callback_ != nullptr ||

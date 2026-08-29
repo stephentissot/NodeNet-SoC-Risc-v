@@ -4,12 +4,15 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "ModbusTypes.h"
+
 class ModbusMaster {
 public:
     static constexpr uint32_t kDefaultClockHz = 25000000u;
-    static constexpr uint32_t kDefaultBaudrate = 115200u;
+    static constexpr uint32_t kDefaultBaudrate = 9600u;
     static constexpr uint32_t kDefaultTimeoutMs = 200u;
     static constexpr uint8_t kDefaultRetries = 1u;
+    static constexpr uint8_t kDefaultInterframeCharsQ1 = 14u;
 
     enum class Error : uint8_t {
         None = 0,
@@ -28,12 +31,22 @@ public:
         DriverTimeout
     };
 
+    enum class TransactionStatus : uint8_t {
+        Idle = 0,
+        Busy,
+        Success,
+        Error,
+        WatchdogTimeout
+    };
+
     explicit ModbusMaster(uint32_t base_addr, uint32_t clock_hz = kDefaultClockHz);
 
     void begin(uint32_t baudrate = kDefaultBaudrate,
                uint32_t timeout_ms = kDefaultTimeoutMs,
-               uint8_t retries = kDefaultRetries);
+               uint8_t retries = kDefaultRetries,
+               uint8_t interFrameCharsQ1 = kDefaultInterframeCharsQ1);
 
+    void setBaudrate(uint32_t baudrate);
     void setTimeoutMs(uint32_t timeout_ms);
     void setRetries(uint8_t retries);
     void setInterframeCharsQ1(uint8_t chars_q1);
@@ -42,6 +55,15 @@ public:
     bool readDiscreteInputs(uint8_t slave, uint16_t start_addr, uint16_t quantity, bool* out_values);
     bool readHoldingRegisters(uint8_t slave, uint16_t start_addr, uint16_t quantity, uint16_t* out_values);
     bool readInputRegisters(uint8_t slave, uint16_t start_addr, uint16_t quantity, uint16_t* out_values);
+    bool startReadCoils(uint8_t slave, uint16_t start_addr, uint16_t quantity);
+    bool startReadDiscreteInputs(uint8_t slave, uint16_t start_addr, uint16_t quantity);
+    bool startReadHoldingRegisters(uint8_t slave, uint16_t start_addr, uint16_t quantity);
+    bool startReadInputRegisters(uint8_t slave, uint16_t start_addr, uint16_t quantity);
+    TransactionStatus pollTransaction();
+    bool finishReadBits(bool* out_values, uint16_t quantity);
+    bool finishReadRegisters(uint16_t* out_values, uint16_t quantity);
+    bool transactionActive() const;
+    void abortTransaction();
     bool writeSingleCoil(uint8_t slave, uint16_t coil_addr, bool value);
     bool writeSingleCoilRaw(uint8_t slave, uint16_t coil_addr, uint16_t raw_value);
     bool writeSingleRegister(uint8_t slave, uint16_t reg_addr, uint16_t value);
@@ -57,6 +79,14 @@ public:
     Error lastError() const;
     uint8_t lastExceptionCode() const;
     uint32_t lastHwStatus() const;
+    uint32_t debugBaudrate() const;
+    uint32_t debugTimeoutMs() const;
+    uint8_t debugRetries() const;
+    uint8_t debugInterframeCharsQ1() const;
+    uint32_t debugAsyncStartedMs() const;
+    uint32_t debugAsyncFirstRxMs() const;
+    uint32_t debugAsyncLastRxMs() const;
+    uint16_t debugAsyncObservedRxLen() const;
 
     static uint16_t regsToU16(uint16_t reg);
     static int16_t regsToI16(uint16_t reg);
@@ -86,6 +116,7 @@ private:
 
     static constexpr uint32_t CTRL_START = (1u << 0);
     static constexpr uint32_t CTRL_CLEAR_STATUS = (1u << 1);
+    static constexpr uint32_t CTRL_ABORT = (1u << 2);
 
     static constexpr uint32_t STATUS_BUSY = (1u << 0);
     static constexpr uint32_t STATUS_DONE = (1u << 1);
@@ -100,6 +131,12 @@ private:
     static constexpr uint16_t kMaxDataBytes = 252u;
     static constexpr uint16_t kMaxFrameBytes = 256u;
 
+    enum class AsyncReadKind : uint8_t {
+        None = 0,
+        Bits,
+        Registers
+    };
+
     volatile uint32_t* const control_reg_;
     volatile uint32_t* const status_reg_;
     volatile uint32_t* const uart_div_reg_;
@@ -113,12 +150,27 @@ private:
     volatile uint32_t* const rx_data_reg_;
 
     uint32_t clock_hz_;
+    uint32_t baudrate_;
     uint32_t timeout_ms_;
     uint8_t retries_;
+    uint8_t interframe_chars_q1_;
 
     Error last_error_;
     uint8_t last_exception_code_;
     uint32_t last_hw_status_;
+    AsyncReadKind async_read_kind_;
+    uint8_t async_slave_;
+    uint8_t async_function_;
+    uint16_t async_quantity_;
+    uint32_t async_deadline_ms_;
+    bool async_active_;
+    bool async_result_ready_;
+    uint32_t async_started_ms_;
+    uint32_t async_first_rx_ms_;
+    uint32_t async_last_rx_ms_;
+    uint16_t async_observed_rx_len_;
+    uint8_t async_response_[kMaxFrameBytes];
+    uint16_t async_response_len_;
 
     uint32_t readReg(volatile uint32_t* reg) const;
     void writeReg(volatile uint32_t* reg, uint32_t value) const;
@@ -147,6 +199,24 @@ private:
 
     bool waitDone(uint32_t guard_timeout_ms);
     void setLastErrorFromStatus(uint32_t status);
+    bool startTransactionAsync(uint8_t slave,
+                               uint8_t function,
+                               const uint8_t* req_data,
+                               uint8_t req_len,
+                               AsyncReadKind read_kind,
+                               uint16_t quantity);
+    void clearAsyncTransaction();
+    void captureResponseFrame();
+    bool decodeBitResponse(uint8_t function,
+                           uint16_t quantity,
+                           const uint8_t* resp,
+                           uint16_t resp_len,
+                           bool* out_values);
+    bool decodeRegisterResponse(uint8_t function,
+                                uint16_t quantity,
+                                const uint8_t* resp,
+                                uint16_t resp_len,
+                                uint16_t* out_values);
 };
 
 #endif

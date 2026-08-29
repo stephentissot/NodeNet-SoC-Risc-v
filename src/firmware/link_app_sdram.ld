@@ -53,14 +53,22 @@ SECTIONS
         __bss_end = .;
     } > SDRAM
 
-    end = .;
-
     _stack_top = (ORIGIN(RAM) + LENGTH(RAM)) & ~15;
 
     .sdram (NOLOAD) :
     {
+        . = ALIGN(8);
         _sdram_start = .;
         *(.sdram .sdram.*)
+        . = ALIGN(8);
         _sdram_end = .;
     } > SDRAM
+
+    /* Keep the C heap after the reserved .sdram pool/scratch area when the
+     * application itself executes from SDRAM. Otherwise malloc/realloc-based
+     * JsonDocument instances can overwrite g_sdram_json_pool and corrupt the
+     * custom ArduinoJson allocator, which later surfaces as false NoMemory.
+     */
+    end = .;
+    _end = .;
 }

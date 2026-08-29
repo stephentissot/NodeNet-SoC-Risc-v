@@ -1,6 +1,6 @@
 # NodeNet SoC Risc-v — Colorlight i9 Multi-Node Embedded System
 
-A complete RISC-V System-on-Chip (SoC) design for the Colorlight i9 FPGA board, featuring a PicoRV32 processor, Wishbone bus interconnect, persistent SPI flash storage, I2C peripherals, and distributed RS485 multi-node communication via the NodeNet485 protocol.
+A complete RISC-V System-on-Chip (SoC) design for the Colorlight i9 FPGA board, featuring a PicoRV32 processor, Wishbone bus interconnect, persistent SPI flash storage, I2C peripherals, distributed RS485 multi-node communication via the NodeNet485 protocol, and a PLC runtime ready for relocatable object-file deployment.
 
 ## Overview
 
@@ -14,7 +14,37 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 - **Validated boot path**: stage0 in ROM validates an image header in SPI flash, copies the payload to SDRAM, checks CRC, then jumps to the application entry point
 - **Validated SDRAM path**: full firmware execution from SDRAM, 32-bit accesses, partial Wishbone writes, linker-placed `SDRAM_DATA` variables, and scratch-area self-tests
 
+Current project status:
+- **PLC Ready** with **V0 basic ISA**
+- runtime point catalog with `pointDefsReq` / `pointStatesReq` browsing and pagination
+- relocatable `objectFileV1` PLC upload, firmware-side link/load, linked-bytecode readback, and object-file readback
+- 16 PLC slots with reboot persistence in the raw PLC flash package and automatic restore after boot
+- OLED boot progress screen plus post-boot slot status screen
+
 ## Features
+
+### NodeNet PLC
+- NodeNet PLC catalog browsing supports `pointDefsReq` and `pointStatesReq` with hierarchical paths of the form `deviceId.feature.pointId`.
+- Point definitions can be created or updated with `pointUpsert`, and removed with `pointDelete`.
+- Modbus-backed points are polled by the PLC runtime and exposed through the same NodeNet command surface.
+- The PLC runtime publishes a shared SDRAM descriptor/value/status map, and PLC VM writes are consumed through the runtime write queue.
+- Generic PLC deployment uses relocatable `objectFileV1` artifacts; the built-in `plcLoadReq` mirror helper remains available for fast validation.
+
+PLC feature summary:
+- Main feature status: PLC Ready with V0 basic ISA
+- Runtime architecture: shared SDRAM PLC ABI, point runtime descriptors, value/status windows, slot loader/linker, persistent flash package restore at boot
+- Deployment model: host builds relocatable `objectFileV1`, firmware links it against the live point catalog, loads it into one of 16 slots, and can persist the slot set for reboot restore
+- Operating surface: NodeNet browse/update commands for point definitions and point states, PLC slot control/status points, raw PLC upload flow, linked-bytecode readback, and original object-file readback
+
+PLC documentation index:
+- Command surface and JSON examples: [README_NODENET_PLC_COMMANDS.md](README_NODENET_PLC_COMMANDS.md)
+- PLC VM runtime architecture and ABI: [Documentation/plc_vm_spec_v1.md](Documentation/plc_vm_spec_v1.md)
+- PLC assembly / object-file format: [Documentation/plc_assembly_spec_v1.md](Documentation/plc_assembly_spec_v1.md)
+- Firmware runtime and flash layout: [src/firmware/README.md](src/firmware/README.md)
+- Stage0 boot flow and runtime handoff: [src/firmware/README_BOOT.md](src/firmware/README_BOOT.md)
+- NodeNet transport details: [src/wbDevices/README_NODENET.md](src/wbDevices/README_NODENET.md)
+- SPI flash persistence details: [src/wbDevices/README_FLASH.md](src/wbDevices/README_FLASH.md)
+- Desktop PLC object-file tooling: [tools/BigSisterNodeNet.Plc/README.md](tools/BigSisterNodeNet.Plc/README.md)
 
 ### NodeNet Validation Snapshot (2026-08-20)
 - Automatic heartbeat in HDL validated on hardware at ~10 s period.
@@ -78,12 +108,15 @@ This project demonstrates a scalable embedded systems design on a cost-effective
 
 - **SPI Flash Module** (`wb_flash.sv`, `spi_master.sv`):
   - Wishbone interface to on-board SPI flash (W25Q64, 8 MB)
-  - Memory layout: 2 MB boot config (protected) + 16 KB params + 256 KB FlashDB KV + app data
+  - Memory layout: 2 MB boot config (protected) + 12 KB point catalog + 4 KB compatibility gap + 128 KB PLC package + 124 KB FlashDB KV + 4 KB self-test scratch + app data
   - C++ firmware uses low-level page/sector API (`Flash`) plus FlashDB wrapper (`flashdb_port`)
   - Exposes the factory-programmed 64-bit Winbond UID as a stable ASCII device ID
   - Boot region protection: firmware rejects writes/erases to 0x000000–0x1FFFFF
-  - Parameter storage at 0x200000–0x203FFF (16 KB, 4 sectors)
-  - FlashDB KV partition at 0x204000–0x243FFF (256 KB)
+  - Point catalog storage at 0x200000–0x202FFF (12 KB, 3 sectors)
+  - Compatibility gap at 0x203000–0x203FFF (4 KB)
+  - Persistent PLC package at 0x204000–0x223FFF (128 KB)
+  - FlashDB KV partition at 0x224000–0x242FFF (124 KB)
+  - Flash low-level self-test scratch at 0x243000–0x243FFF (4 KB)
   - Wishbone address: 0x10007000
   - See [src/wbDevices/README_FLASH.md](src/wbDevices/README_FLASH.md) for details
 ### Firmware
@@ -235,8 +268,11 @@ Address Range               Size      Purpose
 0x20000000–0x207FFFFF     8 MB     SDRAM — Runtime app image + large buffers/logs
 ────────────────────────────────────────────────────────────
 0x00000000–0x1FFFFF       2 MB     SPI Flash — FPGA boot config (PROTECTED)
-0x200000–0x203FFF         16 KB    SPI Flash — Parameter storage
-0x204000–0x243FFF         256 KB   SPI Flash — FlashDB KV partition
+0x200000-0x202FFF         12 KB    SPI Flash — Point catalog
+0x203000-0x203FFF         4 KB     SPI Flash — Compatibility gap / reserved
+0x204000-0x223FFF         128 KB   SPI Flash — Persistent PLC package
+0x224000-0x242FFF         124 KB   SPI Flash — FlashDB KV partition
+0x243000-0x243FFF         4 KB     SPI Flash — Flash low-level self-test scratch
 0x244000–0x7FFFFF         5.73 MB  SPI Flash — Stage0 application image slot
 ```
 
