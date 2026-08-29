@@ -35,8 +35,6 @@ private:
     static constexpr size_t kMaxModbusBatchMembers = PointCatalog::kMaxPoints;
     static constexpr uint16_t kMaxModbusBatchRegisters = 125u;
     static constexpr uint16_t kMaxModbusBatchBits = 256u;
-    static constexpr uint32_t kVmScanPeriodMs = 50u;
-
     struct ModbusPollBatchMember {
         uint16_t catalog_index = 0u;
         uint16_t address_offset = 0u;
@@ -99,6 +97,7 @@ private:
 
     // Consumes PLC VM writes from shared runtime memory and applies them to the catalog.
     void consumeRuntimeWrites(uint32_t now_ms);
+    bool consumeRuntimeWriteIndex(uint16_t runtime_index, uint32_t now_ms);
     bool decodeBitState(const PointDefinition& definition, bool bit_value, PointState& state) const;
     bool decodeRegisterState(const PointDefinition& definition,
                              const uint16_t* regs,

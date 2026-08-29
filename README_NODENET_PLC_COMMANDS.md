@@ -1,8 +1,10 @@
 # NodeNet PLC Commands
 
-This document describes the NodeNet PLC commands implemented by the firmware for browsing point definitions, browsing point states, creating or updating points, and deleting points.
+This document describes the NodeNet PLC commands implemented by the firmware for browsing point definitions, browsing point states, managing PLC slots, and deploying PLC programs.
 
 These commands are handled in the NodeNet core and operate on the local point catalog.
+
+Current status: the project is **PLC Ready** with a **V0 basic ISA**. The canonical deployment artifact is a relocatable `objectFileV1` payload uploaded over NodeNet and linked by firmware against the current runtime point catalog.
 
 ## Overview
 
@@ -24,9 +26,9 @@ Supported commands:
 
 PLC upload persistence rules:
 
-- `persistToFlash = true` is supported only for slot `0`
-- uploads to other slots use volatile staging and are loaded into runtime only
-- volatile uploads must use `autoLoad = true`
+- uploads are staged in SDRAM and currently require `autoLoad = true`
+- `persistToFlash = true` stores the current slot set in the raw PLC flash package for reboot restore
+- `persistToFlash = false` keeps the uploaded artifact volatile
 
 The point identity model is hierarchical:
 
@@ -608,13 +610,11 @@ Requests a compact inventory of PLC slots with pagination.
 
 Loads the built-in boolean mirror PLC program into a chosen slot.
 
-This is a firmware-side service command intended for runtime validation before the full raw PLC upload flow exists.
-
 Documentation note:
 
-- this helper is not the canonical long-term deployment format
-- the stable PLC deployment contract uses a relocatable PLC object file stored
-  in flash and linked by firmware when the slot is loaded
+- this helper is not the canonical generic deployment format
+- the stable PLC deployment contract uses a relocatable `objectFileV1` artifact
+  linked by firmware when the slot is loaded or restored
 - `plcLoadReq` remains useful as a convenience command for the built-in mirror
   program, but generic host-side deployment should target the object-file flow
 
@@ -641,7 +641,7 @@ Fields:
 - `programType`: currently `mirrorBool`
 - `params.inputChannel`: Waveshare input channel, `1..8`
 - `params.outputChannel`: Waveshare output channel, `1..8`
-- `persistToFlash`: optional, only accepted for `slotId = 0`
+- `persistToFlash`: optional, persists the slot set into the raw PLC flash package for reboot restore
 
 ### Response
 
@@ -686,10 +686,10 @@ Target V1 scope:
 
 - one upload session at a time
 - artifact type must be `objectFileV1`
-- upload staging uses the existing PLC package flash slot
+- upload staging uses SDRAM
 - data packets are binary, not JSON
-- `persistToFlash` is currently required
-- `autoLoad` defaults to `true`
+- `persistToFlash` is optional
+- `autoLoad` defaults to `true` and is currently required
 
 Current implementation note:
 

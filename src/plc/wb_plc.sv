@@ -7,6 +7,7 @@ module wb_plc #(
     parameter [31:0] RUNTIME_DESCRIPTOR_BASE = 32'h2010_0100,
     parameter [31:0] RUNTIME_VALUE_BASE = 32'h2011_0000,
     parameter [31:0] RUNTIME_STATUS_BASE = 32'h2012_0000,
+    parameter [31:0] RUNTIME_WRITE_QUEUE_BASE = 32'h2017_1000,
     parameter integer SLOT_COUNT = 16,
     parameter integer SLOT_MANIFEST_BYTES = 72,
     parameter integer SLOT_DIRECTORY_BYTES = 16,
@@ -60,6 +61,9 @@ module wb_plc #(
     localparam [7:0] RUNTIME_FLAG_WRITABLE = 8'h02;
     localparam [31:0] RUNTIME_WRITER_PLC_VM = 32'd2;
     localparam [31:0] POINT_QUALITY_GOOD = 32'd1;
+    localparam [31:0] RUNTIME_WRITE_QUEUE_TAIL_ADDR = RUNTIME_WRITE_QUEUE_BASE + 32'd4;
+    localparam [31:0] RUNTIME_WRITE_QUEUE_INDEX_BASE = RUNTIME_WRITE_QUEUE_BASE + 32'd12;
+    localparam [31:0] RUNTIME_WRITE_QUEUE_CAPACITY = 32'd384;
 
     localparam [31:0] FAULT_INVALID_OPCODE = 32'h0000_0001;
     localparam [31:0] FAULT_POINT_INDEX_OUT_OF_RANGE = 32'h0000_0004;
@@ -107,6 +111,10 @@ module wb_plc #(
     localparam [5:0] ST_FAULT_WRITE_CODE = 6'd37;
     localparam [5:0] ST_FAULT_WRITE_INFO = 6'd38;
     localparam [5:0] ST_NEXT_SLOT = 6'd39;
+    localparam [5:0] ST_WRITE_RUNTIME_LAST_WRITER = 6'd40;
+    localparam [5:0] ST_QUEUE_READ_TAIL = 6'd41;
+    localparam [5:0] ST_QUEUE_WRITE_INDEX = 6'd42;
+    localparam [5:0] ST_QUEUE_WRITE_TAIL = 6'd43;
 
     reg        engine_enable;
     reg [31:0] scan_interval_cycles;
@@ -143,6 +151,8 @@ module wb_plc #(
     reg [31:0] value_word1;
     reg [31:0] fault_code_pending;
     reg [31:0] fault_info_pending;
+    reg [31:0] runtime_write_queue_tail;
+    reg        runtime_write_enqueue_pending;
     reg        cached_word_valid;
     reg [31:0] cached_word_addr;
     reg [31:0] cached_word_data;
@@ -290,6 +300,8 @@ module wb_plc #(
             value_word1 <= 32'd0;
             fault_code_pending <= 32'd0;
             fault_info_pending <= 32'd0;
+            runtime_write_queue_tail <= 32'd0;
+            runtime_write_enqueue_pending <= 1'b0;
             cached_word_valid <= 1'b0;
             cached_word_addr <= 32'd0;
             cached_word_data <= 32'd0;
@@ -574,7 +586,21 @@ module wb_plc #(
                         if (m_dat_i[0] == accumulator) begin
                             state <= ST_FETCH_OPCODE;
                         end else begin
+                            state <= ST_WRITE_RUNTIME_LAST_WRITER;
+                        end
+                    end
+                end
+
+                ST_WRITE_RUNTIME_LAST_WRITER: begin
+                    if (!m_cyc_o) begin
+                        start_read(runtime_status_addr + 32'd8);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        runtime_write_enqueue_pending <= (m_dat_i != RUNTIME_WRITER_PLC_VM);
+                        if (current_opcode == OPCODE_STORE_BOOL) begin
                             state <= ST_STORE_BOOL_WRITE_VALUE0;
+                        end else begin
+                            state <= ST_INT16_WRITE_VALUE0;
                         end
                     end
                 end
@@ -629,7 +655,11 @@ module wb_plc #(
                         start_write(runtime_status_addr + 32'd12, 32'd0);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
-                        state <= ST_FETCH_OPCODE;
+                        if (runtime_write_enqueue_pending) begin
+                            state <= ST_QUEUE_READ_TAIL;
+                        end else begin
+                            state <= ST_FETCH_OPCODE;
+                        end
                     end
                 end
 
@@ -639,7 +669,7 @@ module wb_plc #(
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         value_word0 <= m_dat_i;
-                        state <= ST_INT16_WRITE_VALUE0;
+                        state <= ST_WRITE_RUNTIME_LAST_WRITER;
                     end
                 end
 
@@ -696,6 +726,43 @@ module wb_plc #(
                         start_write(runtime_status_addr + 32'd12, 32'd0);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
+                        if (runtime_write_enqueue_pending) begin
+                            state <= ST_QUEUE_READ_TAIL;
+                        end else begin
+                            state <= ST_FETCH_OPCODE;
+                        end
+                    end
+                end
+
+                ST_QUEUE_READ_TAIL: begin
+                    if (!m_cyc_o) begin
+                        start_read(RUNTIME_WRITE_QUEUE_TAIL_ADDR);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        runtime_write_queue_tail <= (m_dat_i < RUNTIME_WRITE_QUEUE_CAPACITY) ? m_dat_i : 32'd0;
+                        state <= ST_QUEUE_WRITE_INDEX;
+                    end
+                end
+
+                ST_QUEUE_WRITE_INDEX: begin
+                    if (!m_cyc_o) begin
+                        start_write(RUNTIME_WRITE_QUEUE_INDEX_BASE + (runtime_write_queue_tail << 2),
+                                    {16'd0, current_runtime_index});
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        state <= ST_QUEUE_WRITE_TAIL;
+                    end
+                end
+
+                ST_QUEUE_WRITE_TAIL: begin
+                    if (!m_cyc_o) begin
+                        start_write(RUNTIME_WRITE_QUEUE_TAIL_ADDR,
+                                    (runtime_write_queue_tail + 32'd1 >= RUNTIME_WRITE_QUEUE_CAPACITY)
+                                        ? 32'd0
+                                        : (runtime_write_queue_tail + 32'd1));
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        runtime_write_enqueue_pending <= 1'b0;
                         state <= ST_FETCH_OPCODE;
                     end
                 end

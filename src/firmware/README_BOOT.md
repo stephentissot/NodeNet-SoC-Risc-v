@@ -9,13 +9,14 @@ This document defines the stage0 image format used by `src/bootloader/boot_stage
 3. The image header defines the SDRAM load address and entry address, currently both `0x20000000`.
 4. Stage0 validates the header and payload CRC, copies the payload to SDRAM, and jumps to the application entry point.
 5. The runtime firmware then executes fully from SDRAM.
+6. After runtime startup publishes the PLC runtime map, persisted PLC slots are restored from the raw PLC flash package and relinked against the current point catalog.
 
 ## Flash Layout (current)
 
 - `0x000000-0x1FFFFF`: FPGA configuration area (reserved)
 - `0x200000-0x202FFF`: raw point-catalog slot
 - `0x203000-0x203FFF`: reserved gap
-- `0x204000-0x223FFF`: raw PLC linked-package slot
+- `0x204000-0x223FFF`: raw PLC persistent package (`objectFileV1` entries for reboot restore)
 - `0x224000-0x242FFF`: FlashDB KV area
 - `0x243000-0x243FFF`: flash low-level self-test scratch sector
 - `0x244000-...`: stage0 application image slot (64-byte header + SDRAM payload)
@@ -75,7 +76,7 @@ make flash-fw-run     # flash-fw + FPGA RAM reload (stage0 restart)
 - On validation failure, stage0 enters a LED blink fault loop.
 - Running firmware from SDRAM requires the application to be linked for SDRAM addresses.
 - Runtime SDRAM self-tests must avoid destructive writes at `SDRAM_BASE`; the current firmware uses a dedicated scratch area for that.
-- Large PLC deployment artifacts should use the raw PLC flash slot directly instead of FlashDB.
+- Large PLC deployment artifacts should use the raw PLC package slot directly instead of FlashDB.
 - Current hardware status: stage0 handoff and full `main()` execution from SDRAM are validated.
 
 ## Stage0 Blink Codes

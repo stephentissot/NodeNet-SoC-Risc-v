@@ -269,7 +269,7 @@ class NodeNetCore
 
         // Accepts PLC upload data sent as JSON payloads.
         bool handlePlcUploadDataRequest(const JsonDocument& request, JsonDocument& response);
-        bool handleLocalPlcPointWrite(const PointDefinition& definition, JsonVariantConst value);
+        bool handleLocalPlcPointWrite(size_t point_index, const PointDefinition& definition, JsonVariantConst value);
         bool handlePlcUploadDataMessage(const QueuedMessage& msg);
 
         // Validates and stores one PLC upload chunk in the SDRAM staging window.

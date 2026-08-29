@@ -3,6 +3,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 #include "bigsister.h"
 #include "plc_loader_v1.h"
@@ -20,6 +21,7 @@ inline constexpr uint8_t kSlotIconHeight = 12;
 inline constexpr uint8_t kSlotIconX = 108;
 inline constexpr uint8_t kSlotIconY = 0;
 inline constexpr uint32_t kSlotRefreshMs = 250u;
+inline constexpr uint32_t kRunningBlinkPeriodMs = 1000u;
 
 inline u8g2_t device = {};
 inline bool ready = false;
@@ -29,6 +31,7 @@ inline uint8_t console_count = 0u;
 enum class ScreenId : uint8_t {
     BootConsole = 0,
     SlotStatus = 1,
+    BootProgress = 2,
 };
 
 enum class PlcSlotIconSource : uint8_t {
@@ -151,6 +154,7 @@ inline bool refreshPlcSlotIcon(uint8_t display_index)
     }
 
     PlcSlotIconStatus next = icon;
+    const bool running_blink_on = ((millis() / kRunningBlinkPeriodMs) & 0x1u) == 0u;
     const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
         static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(icon.slot_id)));
 
@@ -164,7 +168,6 @@ inline bool refreshPlcSlotIcon(uint8_t display_index)
         next.fault_code = 0u;
         next.activity_pulse = false;
     } else {
-        const uint32_t old_cycle_counter = icon.cycle_counter;
         next.control_status = control_block->status;
         next.cycle_counter = control_block->cycle_counter;
         next.fault_code = control_block->fault_code;
@@ -173,9 +176,7 @@ inline bool refreshPlcSlotIcon(uint8_t display_index)
             next.activity_pulse = false;
         } else if (control_block->status == 2u) {
             next.state = PlcSlotIconState::Running;
-            if (control_block->cycle_counter != old_cycle_counter) {
-                next.activity_pulse = !icon.activity_pulse;
-            }
+            next.activity_pulse = running_blink_on;
         } else {
             next.state = PlcSlotIconState::Loaded;
             next.activity_pulse = false;
@@ -217,7 +218,7 @@ inline bool plcEngineEnabled()
     return (*status_reg & 0x1u) != 0u;
 }
 
-inline char plcSlotStateGlyph(uint8_t slot_id)
+inline char plcSlotStateGlyphRaw(uint8_t slot_id)
 {
     const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
         static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
@@ -239,15 +240,69 @@ inline char plcSlotStateGlyph(uint8_t slot_id)
     return 'L';
 }
 
+inline char plcSlotStateGlyph(uint8_t slot_id)
+{
+    const char raw = plcSlotStateGlyphRaw(slot_id);
+    if (raw != 'R') {
+        return raw;
+    }
+
+    return ((millis() / kRunningBlinkPeriodMs) & 0x1u) == 0u ? 'R' : ' ';
+}
+
 inline uint8_t loadedSlotCount()
 {
     uint8_t count = 0u;
     for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
-        if (plcSlotStateGlyph(static_cast<uint8_t>(slot_id)) != '-') {
+        if (plcSlotStateGlyphRaw(static_cast<uint8_t>(slot_id)) != '-') {
             ++count;
         }
     }
     return count;
+}
+
+inline void formatBootStepLines(const char* step,
+                                char (&line1)[21],
+                                char (&line2)[21])
+{
+    constexpr size_t kBootStepCols = 20u;
+    const char* text = (step != nullptr && step[0] != '\0') ? step : "Boot";
+    const size_t text_len = std::strlen(text);
+
+    line1[0] = '\0';
+    line2[0] = '\0';
+
+    if (text_len <= kBootStepCols) {
+        std::snprintf(line1, sizeof(line1), "%s", text);
+        return;
+    }
+
+    size_t split = kBootStepCols;
+    while (split > 0u && text[split] != ' ') {
+        --split;
+    }
+    if (split == 0u) {
+        split = kBootStepCols;
+    }
+
+    std::snprintf(line1, sizeof(line1), "%.*s", static_cast<int>(split), text);
+
+    size_t second_start = split;
+    while (text[second_start] == ' ') {
+        ++second_start;
+    }
+
+    const size_t remaining_len = text_len - second_start;
+    if (remaining_len <= kBootStepCols) {
+        std::snprintf(line2, sizeof(line2), "%s", text + second_start);
+        return;
+    }
+
+    std::snprintf(line2,
+                  sizeof(line2),
+                  "%.*s...",
+                  static_cast<int>(kBootStepCols - 3u),
+                  text + second_start);
 }
 
 inline void drawSlotStatusScreen(uint8_t nodenet_addr)
@@ -266,7 +321,11 @@ inline void drawSlotStatusScreen(uint8_t nodenet_addr)
                         plcEngineEnabled() ? "ON" : "OFF",
                         static_cast<unsigned>(nodenet_addr),
                         static_cast<unsigned>(loadedSlotCount()));
+    u8g2_SetDrawColor(&device, 1);
+    u8g2_DrawBox(&device, 0, 0, 128, 12);
+    u8g2_SetDrawColor(&device, 0);
     u8g2_DrawStr(&device, 2, 10, line);
+    u8g2_SetDrawColor(&device, 1);
 
     for (uint8_t row = 0u; row < 4u; ++row) {
         const uint8_t slot0 = static_cast<uint8_t>(row * 4u);
@@ -284,6 +343,50 @@ inline void drawSlotStatusScreen(uint8_t nodenet_addr)
         u8g2_DrawStr(&device, 2, static_cast<int16_t>(23u + row * 13u), line);
     }
 
+    u8g2_SendBuffer(&device);
+}
+
+inline void showBootProgress(const char* step, uint8_t percent)
+{
+    if (!ready) {
+        return;
+    }
+
+    if (percent > 100u) {
+        percent = 100u;
+    }
+
+    screen = ScreenId::BootProgress;
+
+    char line[kConsoleCols + 8] = {};
+    char step_line1[21] = {};
+    char step_line2[21] = {};
+    const uint8_t bar_x = 8u;
+    const uint8_t bar_y = 44u;
+    const uint8_t bar_w = 112u;
+    const uint8_t bar_h = 12u;
+    const uint8_t fill_w = static_cast<uint8_t>((static_cast<uint16_t>(bar_w - 2u) * percent) / 100u);
+    formatBootStepLines(step, step_line1, step_line2);
+
+    u8g2_SetFont(&device, u8g2_font_6x12_tf);
+    u8g2_ClearBuffer(&device);
+    u8g2_DrawStr(&device, 2, 10, "NodeNet SoC RISC-V");
+    u8g2_SetFont(&device, u8g2_font_5x8_tf);
+    u8g2_DrawStr(&device, 2, 21, "Startup");
+    u8g2_DrawStr(&device, 2, 30, step_line1);
+    if (step_line2[0] != '\0') {
+        u8g2_DrawStr(&device, 2, 38, step_line2);
+    }
+    u8g2_DrawFrame(&device, bar_x, bar_y, bar_w, bar_h);
+    if (fill_w > 0u) {
+        u8g2_DrawBox(&device,
+                     static_cast<int16_t>(bar_x + 1u),
+                     static_cast<int16_t>(bar_y + 1u),
+                     fill_w,
+                     static_cast<uint8_t>(bar_h - 2u));
+    }
+    (void)std::snprintf(line, sizeof(line), "%3u%%", static_cast<unsigned>(percent));
+    u8g2_DrawStr(&device, 48, 62, line);
     u8g2_SendBuffer(&device);
 }
 

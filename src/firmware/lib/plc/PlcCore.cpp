@@ -112,55 +112,61 @@ void PlcCore::consumeRuntimeWrites(uint32_t now_ms)
         return;
     }
 
+    uint16_t queued_runtime_index = PlcRuntimePublisherV1::kInvalidPointIndex;
+    while (runtime_publisher_->popRuntimeWriteIndex(queued_runtime_index)) {
+        (void)consumeRuntimeWriteIndex(queued_runtime_index, now_ms);
+    }
+}
+
+bool PlcCore::consumeRuntimeWriteIndex(uint16_t runtime_index, uint32_t now_ms)
+{
+    if (point_catalog_ == nullptr || runtime_publisher_ == nullptr ||
+        runtime_index == PlcRuntimePublisherV1::kInvalidPointIndex) {
+        return false;
+    }
+
+    const size_t catalog_index = runtime_publisher_->catalogIndexForRuntimeIndex(runtime_index);
+    if (catalog_index >= point_catalog_->size()) {
+        return false;
+    }
+
     volatile PlcPointValueV1* runtime_values = reinterpret_cast<volatile PlcPointValueV1*>(
         static_cast<uintptr_t>(kPlcRuntimeValueBase));
     volatile PlcPointStatusV1* runtime_statuses = reinterpret_cast<volatile PlcPointStatusV1*>(
         static_cast<uintptr_t>(kPlcRuntimeStatusBase));
-
-    const PointDefinition* definitions = point_catalog_->entries();
-    for (size_t catalog_index = 0; catalog_index < point_catalog_->size(); ++catalog_index) {
-        const uint16_t runtime_index = runtime_publisher_->runtimeIndexForCatalogIndex(catalog_index);
-        if (runtime_index == PlcRuntimePublisherV1::kInvalidPointIndex) {
-            continue;
-        }
-
-        const PointDefinition& definition = definitions[catalog_index];
-        volatile const PlcPointStatusV1& runtime_status = runtime_statuses[runtime_index];
-        if (runtime_status.last_writer != kPlcRuntimeWriterPlcVm) {
-            continue;
-        }
-
-        bool consumed = false;
-
-        switch (definition.value_type) {
-        case PointValueType::Bool: {
-            const bool value = (runtime_values[runtime_index].raw0 & 1u) != 0u;
-            consumed = commitRuntimeBool(runtime_index,
-                                         value,
-                                         runtime_status.last_update_ms != 0u
-                                             ? runtime_status.last_update_ms
-                                             : now_ms);
-            break;
-        }
-
-        case PointValueType::Int16: {
-            const int16_t value = static_cast<int16_t>(runtime_values[runtime_index].raw0 & 0xFFFFu);
-            consumed = commitRuntimeInt16(runtime_index,
-                                          value,
-                                          runtime_status.last_update_ms != 0u
-                                              ? runtime_status.last_update_ms
-                                              : now_ms);
-            break;
-        }
-
-        default:
-            break;
-        }
-
-        if (consumed) {
-            runtime_statuses[runtime_index].last_writer = kPlcRuntimeWriterCpu;
-        }
+    volatile const PlcPointStatusV1& runtime_status = runtime_statuses[runtime_index];
+    if (runtime_status.last_writer != kPlcRuntimeWriterPlcVm) {
+        return false;
     }
+
+    const PointDefinition& definition = point_catalog_->entries()[catalog_index];
+    const uint32_t effective_now_ms = runtime_status.last_update_ms != 0u
+        ? runtime_status.last_update_ms
+        : now_ms;
+    bool consumed = false;
+
+    switch (definition.value_type) {
+    case PointValueType::Bool: {
+        const bool value = (runtime_values[runtime_index].raw0 & 1u) != 0u;
+        consumed = commitRuntimeBool(runtime_index, value, effective_now_ms);
+        break;
+    }
+
+    case PointValueType::Int16: {
+        const int16_t value = static_cast<int16_t>(runtime_values[runtime_index].raw0 & 0xFFFFu);
+        consumed = commitRuntimeInt16(runtime_index, value, effective_now_ms);
+        break;
+    }
+
+    default:
+        break;
+    }
+
+    if (consumed) {
+        runtime_statuses[runtime_index].last_writer = kPlcRuntimeWriterCpu;
+    }
+
+    return consumed;
 }
 
 uint32_t PlcCore::computeModbusPlanHash() const

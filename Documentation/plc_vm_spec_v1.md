@@ -277,6 +277,45 @@ struct PlcRuntimeHeaderV1 {
 
 The CPU shall populate this header before any slot is started.
 
+Suggested `flags` bits:
+
+- bit `0`: shared runtime write queue available at `kPlcRuntimeWriteQueueBase`
+
+### 2.7 Optional Runtime Write Queue
+
+To avoid rescanning the full runtime point table when the PLC VM writes only a
+small subset of points, the shared SDRAM ABI may expose a fixed-size ring queue
+of runtime point indices.
+
+Suggested C layout:
+
+```c
+struct PlcRuntimeWriteQueueV1 {
+    uint32_t head;
+    uint32_t tail;
+    uint32_t overflow_count;
+  uint32_t indices[384];
+};
+```
+
+Suggested behavior:
+
+- the queue lives in a dedicated SDRAM window owned by the runtime ABI
+- the VM pushes a runtime `point_index` after publishing a point value/status
+- the CPU pops queued indices and applies only those writes
+- `overflow_count` increments when the producer cannot enqueue because the ring
+  is full
+- on overflow, writes may be dropped until the producer/consumer contract is restored
+
+Producer ordering requirement:
+
+- the VM shall write `value`, then `status`, then enqueue the runtime index
+- `status.last_writer` shall be set to `PLC VM` before the enqueue becomes
+  visible to the CPU
+- the VM should enqueue a point only once while `status.last_writer` still
+  equals `PLC VM`; repeated writes shall update the same runtime slot without
+  duplicating queue entries
+
 ## 3. CPU Link Phase
 
 ### 3.1 Rationale

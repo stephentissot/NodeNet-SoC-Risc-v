@@ -14,9 +14,15 @@ static constexpr uint32_t kPlcRuntimeHeaderAddr = SDRAM_BASE + 0x00100000u;
 static constexpr uint32_t kPlcRuntimeDescriptorBase = SDRAM_BASE + 0x00100100u;
 static constexpr uint32_t kPlcRuntimeValueBase = SDRAM_BASE + 0x00110000u;
 static constexpr uint32_t kPlcRuntimeStatusBase = SDRAM_BASE + 0x00120000u;
+static constexpr uint32_t kPlcRuntimeWriteQueueBase = SDRAM_BASE + 0x00171000u;
 static constexpr uint32_t kPlcRuntimeDescriptorWindowSize = 0x00010000u;
 static constexpr uint32_t kPlcRuntimeValueWindowSize = 0x00010000u;
 static constexpr uint32_t kPlcRuntimeStatusWindowSize = 0x00010000u;
+static constexpr uint32_t kPlcRuntimeWriteQueueWindowSize = 0x00001000u;
+
+enum PlcRuntimeHeaderFlagsV1 : uint16_t {
+    kPlcRuntimeHeaderFlagWriteQueue = 1u << 0,
+};
 
 enum PlcRuntimeValueTypeV1 : uint8_t {
     kPlcRuntimeTypeInvalid = 0u,
@@ -92,12 +98,21 @@ struct PlcRuntimeHeaderV1 {
     uint32_t status_base;
     uint32_t store_epoch;
 };
+
+struct PlcRuntimeWriteQueueV1 {
+    uint32_t head;
+    uint32_t tail;
+    uint32_t overflow_count;
+    uint32_t indices[PointCatalog::kMaxPoints];
+};
 #pragma pack(pop)
 
 static_assert(sizeof(PlcPointDescriptorV1) == 20u, "Unexpected descriptor size");
 static_assert(sizeof(PlcPointValueV1) == 8u, "Unexpected value size");
 static_assert(sizeof(PlcPointStatusV1) == 16u, "Unexpected status size");
 static_assert(sizeof(PlcRuntimeHeaderV1) == 28u, "Unexpected header size");
+static_assert(sizeof(PlcRuntimeWriteQueueV1) <= kPlcRuntimeWriteQueueWindowSize,
+              "Runtime write queue exceeds reserved SDRAM window");
 
 class PlcRuntimePublisherV1 {
 public:
@@ -135,6 +150,7 @@ public:
         for (size_t i = 0; i < PointCatalog::kMaxPoints; ++i) {
             catalog_to_runtime_[i] = kInvalidPointIndex;
         }
+        resetWriteQueue();
         return true;
     }
 
@@ -188,6 +204,29 @@ public:
         return runtime_to_catalog_[runtime_index];
     }
 
+    uint32_t runtimeWriteQueueOverflowCount() const
+    {
+        return ready_ ? writeQueuePtr()->overflow_count : 0u;
+    }
+
+    bool popRuntimeWriteIndex(uint16_t& runtime_index_out) const
+    {
+        if (!ready_) {
+            return false;
+        }
+
+        volatile PlcRuntimeWriteQueueV1* queue = writeQueuePtr();
+        const uint32_t head = queue->head;
+        const uint32_t tail = queue->tail;
+        if (head == tail) {
+            return false;
+        }
+
+        runtime_index_out = static_cast<uint16_t>(queue->indices[head % PointCatalog::kMaxPoints] & 0xFFFFu);
+        queue->head = (head + 1u) % PointCatalog::kMaxPoints;
+        return true;
+    }
+
     ResolveResult resolvePoint(const PointCatalog& catalog, const PointIdentity& id) const
     {
         const size_t catalog_index = catalog.findIndex(id);
@@ -235,7 +274,7 @@ public:
         PlcRuntimeHeaderV1 header = {};
         header.magic = kPlcRuntimeAbiV1Magic;
         header.version = kPlcRuntimeAbiV1Version;
-        header.flags = 0u;
+        header.flags = kPlcRuntimeHeaderFlagWriteQueue;
         header.descriptor_count = published_count_;
         header.descriptor_base = kPlcRuntimeDescriptorBase;
         header.value_base = kPlcRuntimeValueBase;
@@ -300,6 +339,11 @@ private:
         return reinterpret_cast<volatile PlcPointStatusV1*>(static_cast<uintptr_t>(kPlcRuntimeStatusBase));
     }
 
+    static volatile PlcRuntimeWriteQueueV1* writeQueuePtr()
+    {
+        return reinterpret_cast<volatile PlcRuntimeWriteQueueV1*>(static_cast<uintptr_t>(kPlcRuntimeWriteQueueBase));
+    }
+
     static bool regionAvailable()
     {
         const uintptr_t sdram_end = reinterpret_cast<uintptr_t>(&_sdram_end);
@@ -308,7 +352,19 @@ private:
         return sdram_end <= static_cast<uintptr_t>(kPlcRuntimeHeaderAddr) &&
                static_cast<uintptr_t>(kPlcRuntimeDescriptorBase + kPlcRuntimeDescriptorWindowSize) <= sdram_limit &&
                static_cast<uintptr_t>(kPlcRuntimeValueBase + kPlcRuntimeValueWindowSize) <= sdram_limit &&
-               status_limit <= sdram_limit;
+               status_limit <= sdram_limit &&
+               static_cast<uintptr_t>(kPlcRuntimeWriteQueueBase + kPlcRuntimeWriteQueueWindowSize) <= sdram_limit;
+    }
+
+    static void resetWriteQueue()
+    {
+        volatile PlcRuntimeWriteQueueV1* queue = writeQueuePtr();
+        queue->head = 0u;
+        queue->tail = 0u;
+        queue->overflow_count = 0u;
+        for (size_t index = 0u; index < PointCatalog::kMaxPoints; ++index) {
+            queue->indices[index] = kInvalidPointIndex;
+        }
     }
 
     static uint32_t fnv1aAppend(uint32_t hash, const void* data, size_t len)
@@ -572,6 +628,7 @@ private:
             catalog_to_runtime_[i] = kInvalidPointIndex;
             runtime_to_catalog_[i] = kInvalidCatalogIndex;
         }
+        resetWriteQueue();
 
         for (size_t i = 0; i < catalog.size(); ++i) {
             const PointDefinition& definition = definitions[i];
@@ -654,7 +711,7 @@ private:
         PlcRuntimeHeaderV1 header = {};
         header.magic = kPlcRuntimeAbiV1Magic;
         header.version = kPlcRuntimeAbiV1Version;
-        header.flags = 0u;
+        header.flags = kPlcRuntimeHeaderFlagWriteQueue;
         header.descriptor_count = published_count_;
         header.descriptor_base = kPlcRuntimeDescriptorBase;
         header.value_base = kPlcRuntimeValueBase;

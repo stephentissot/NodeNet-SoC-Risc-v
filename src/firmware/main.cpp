@@ -24,8 +24,7 @@ int main(void)
     uint32_t next_toggle_ms = *TIMER_MS + kBlinkPeriodMs;
     *LED_D2 = 1u;
     oled::init(0x3C);
-    oled::write("  NodeNet SoC RISC-V");
-    oled::write("v" FIRMWARE_VERSION);
+    oled::showBootProgress("Display init", 0u);
 
     // NodeNet definition and initialization
     static NodeNet myNodeNet(
@@ -38,23 +37,27 @@ int main(void)
 
 
     static NodeNetCore nodeNetCore(&myNodeNet);
+    oled::showBootProgress("Node services", 10u);
     nodeNetCore.begin();
     PlcRuntimePublisherV1 plcRuntimePublisher;
+    oled::showBootProgress("PLC runtime ABI", 35u);
     const bool plcRuntimeAbiReady = plcRuntimePublisher.begin();
     if (plcRuntimeAbiReady) {
         const uint32_t boot_now_ms = millis();
+        oled::showBootProgress("Clear volatile state", 45u);
         PlcSlotLoaderV1::clearVolatileState();
+        oled::showBootProgress("Attach PLC runtime", 55u);
         nodeNetCore.attachPlcRuntimePublisher(&plcRuntimePublisher);
+        oled::showBootProgress("Publish runtime map", 65u);
         (void)plcRuntimePublisher.publish(nodeNetCore.pointCatalog(), boot_now_ms);
+        oled::showBootProgress("Restore PLC slots", 70u);
         const uint16_t restored_slots = nodeNetCore.restorePersistedPlcSlots();
         const PlcRuntimeHeaderV1 plcRuntimeHeader = plcRuntimePublisher.headerSnapshot();
-        oled::print("[PLC] ABI %u/%u e%lu",
-                    static_cast<unsigned>(plcRuntimeHeader.descriptor_count),
-                    static_cast<unsigned>(plcRuntimePublisher.skippedCount()),
-                    static_cast<unsigned long>(plcRuntimeHeader.store_epoch));
-        oled::print("[PLC] cold=%u", static_cast<unsigned>(restored_slots));
+        (void)plcRuntimeHeader;
+        (void)restored_slots;
+        oled::showBootProgress("Startup complete", 100u);
     } else {
-        oled::write("[PLC] ABI region bad");
+        oled::showBootProgress("PLC ABI unavailable", 100u);
     }
 
     if (plcRuntimeAbiReady) {

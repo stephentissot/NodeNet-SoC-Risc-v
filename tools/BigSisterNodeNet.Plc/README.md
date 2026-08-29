@@ -2,6 +2,8 @@
 
 This library provides the PLC object-file tooling used by the desktop-side NodeNet Core.
 
+Current project status: **PLC Ready** with **V0 basic ISA** and relocatable `objectFileV1` deployment.
+
 It covers three things:
 
 - translate a machine-code string into PLC bytecode
@@ -18,9 +20,8 @@ Documentation note:
 
 ## Machine-code syntax
 
-The syntax is intentionally narrow and matches the current firmware VM
-instruction set, but operands are symbolic point names rather than literal
-runtime indices.
+The syntax is intentionally narrow and matches the current firmware V0 basic ISA,
+but operands are symbolic point names rather than literal runtime indices.
 
 Supported declarations:
 
@@ -138,7 +139,7 @@ var frame0 = uploader.BuildDataFrame(uploadId: 1, offset: 0, payloadSource: obje
 - The stable firmware-side upload flow should accept `objectFileV1` artifacts.
 - The canonical durable artifact is relocatable and linked by firmware at slot
     load time.
-- Only slot `0` is reboot-persistent in the current flash layout; other slots are runtime-only.
+- Reboot persistence is handled through the raw PLC flash package restored by firmware at startup.
 - `PARAM POINT_ID` values are full point paths supplied through
     `PlcObjectFileOptions.PointBindings`.
 - The upload uses binary pages of up to `256` bytes.

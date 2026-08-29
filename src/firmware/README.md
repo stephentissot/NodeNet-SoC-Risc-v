@@ -25,17 +25,36 @@ make firmware-app-build   # SDRAM application ELF only
 
 The build fails if HEX payload exceeds configured ROM capacity.
 
-## PLC Mini-VM Package Flow
+## PLC Runtime Status
 
-The firmware mini-VM currently understands a small linked bytecode subset for
-bool mirror programs:
+The current firmware is PLC ready and exposes a relocatable `objectFileV1`
+deployment path.
 
-- `LOAD_POINT_BOOL runtime_index`
-- `STORE_POINT_BOOL runtime_index`
+Current runtime scope:
+
+- V0 basic ISA is implemented end to end
+- firmware publishes the PLC runtime descriptor/value/status map in SDRAM
+- generic host-side deployment uses `objectFileV1` upload + firmware-side link/load
+- linked bytecode and original object file can both be read back over NodeNet
+- persisted PLC packages are restored automatically during boot after the runtime map is published
+
+Current V0 basic ISA instructions:
+
 - `HALT`
+- `LOAD_BOOL <symbol>`
+- `STORE_BOOL <symbol>`
+- `INC_INT <symbol>`
+- `DEC_INT <symbol>`
+- `DB <byte0>, <byte1>, ...`
 
-You can build a flashable linked package for that runtime directly from runtime
-point indexes.
+Current object-file declarations:
+
+- `CONST POINT_ID <symbol>, <deviceId.feature.pointId>`
+- `PARAM POINT_ID <symbol>`
+- `VAR <type> <name>`
+
+The built-in mirror package flow remains available as a convenience tool for
+quick validation and slot bring-up.
 
 From the project root:
 
@@ -50,7 +69,8 @@ make flash-plc-package
 
 `PLC_MIRROR_PAIRS` is a comma-separated list of `input_runtime_index:output_runtime_index`
 pairs. The generated package is written to `src/firmware/build/plc_linked_package.img`
-by default and is compatible with the firmware slot-0 flash boot path.
+by default and is intended as a convenience artifact for the built-in mirror program,
+not as the primary generic PLC deployment contract.
 
 If you want to call the tool directly:
 
@@ -456,7 +476,7 @@ Implementation notes:
 - SPI SCK uses the ECP5 dedicated USRMCLK path (not a normal GPIO pin).
 - Firmware-side protection keeps writes/erases out of the boot region.
 - Raw point catalog uses `0x200000-0x202FFF`.
-- Raw PLC linked-package storage uses `0x204000-0x223FFF`.
+- Persistent PLC package storage uses `0x204000-0x223FFF` and can retain multiple slots in one flash package.
 - FlashDB uses partition `nodenet_kv` at `0x224000-0x242FFF`.
 - `0x243000-0x243FFF` stays reserved for low-level flash self-test scratch.
 - Large PLC artifacts should prefer the raw PLC package slot over FlashDB.

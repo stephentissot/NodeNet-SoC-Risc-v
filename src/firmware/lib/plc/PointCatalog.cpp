@@ -37,6 +37,37 @@ static bool is_ascii_digit(char c) {
     return c >= '0' && c <= '9';
 }
 
+static bool starts_with(const char* text, const char* prefix) {
+    return text != nullptr && prefix != nullptr && std::strncmp(text, prefix, std::strlen(prefix)) == 0;
+}
+
+static bool parse_slot_feature_suffix(const char* feature, uint16_t& slot_id) {
+    if (!starts_with(feature, "plc.slot")) {
+        return false;
+    }
+
+    const char* cursor = feature + 8u;
+    if (!is_ascii_digit(*cursor)) {
+        return false;
+    }
+
+    uint32_t parsed_slot = 0u;
+    while (is_ascii_digit(*cursor)) {
+        parsed_slot = (parsed_slot * 10u) + static_cast<uint32_t>(*cursor - '0');
+        if (parsed_slot > 0xFFFFu) {
+            return false;
+        }
+        ++cursor;
+    }
+
+    if (*cursor != '\0') {
+        return false;
+    }
+
+    slot_id = static_cast<uint16_t>(parsed_slot);
+    return true;
+}
+
 static bool is_transient_slot_variable(const PointIdentity& id) {
     if (std::strncmp(id.feature, "plc.slot", 8u) != 0) {
         return false;
@@ -97,6 +128,33 @@ static void copy_string(char* dst, size_t dst_size, const char* src) {
 
     std::strncpy(dst, src, dst_size - 1u);
     dst[dst_size - 1u] = '\0';
+}
+
+static size_t json_string_value_size_local(const char* value)
+{
+    size_t escaped_len = 0u;
+    if (value != nullptr) {
+        while (*value != '\0') {
+            const unsigned char c = static_cast<unsigned char>(*value++);
+            switch (c) {
+                case '"':
+                case '\\':
+                    escaped_len += 2u;
+                    break;
+                case '\b':
+                case '\f':
+                case '\n':
+                case '\r':
+                case '\t':
+                    escaped_len += 2u;
+                    break;
+                default:
+                    escaped_len += (c < 0x20u) ? 6u : 1u;
+                    break;
+            }
+        }
+    }
+    return 2u + escaped_len;
 }
 
 static void serialize_common(JsonObject obj, const PointDefinition& definition) {
@@ -295,9 +353,14 @@ PointCatalog::PointCatalog() {
 
 void PointCatalog::clear() {
     count_ = 0u;
+    browse_device_count_ = 0u;
+    browse_feature_count_ = 0u;
     std::memset(entries_, 0, sizeof(entries_));
     std::memset(point_state_storage(), 0, sizeof(PointState) * kMaxPoints);
     std::memset(command_states_, 0, sizeof(command_states_));
+    std::memset(plc_point_meta_, 0, sizeof(plc_point_meta_));
+    std::memset(browse_devices_, 0, sizeof(browse_devices_));
+    std::memset(browse_feature_indices_, 0, sizeof(browse_feature_indices_));
     resetIndex();
     requestRuntimeFullSync();
 }
@@ -327,6 +390,45 @@ size_t PointCatalog::findIndex(const PointIdentity& id) const {
     return lookupIndex(id);
 }
 
+const PointCatalog::PlcPointMeta& PointCatalog::plcPointMeta(size_t index) const {
+    static const PlcPointMeta kEmptyMeta = {};
+    return index < count_ ? plc_point_meta_[index] : kEmptyMeta;
+}
+
+size_t PointCatalog::browseDeviceCount() const {
+    return browse_device_count_;
+}
+
+size_t PointCatalog::findBrowseDeviceIndex(const char* device_id) const {
+    if (device_id == nullptr || device_id[0] == '\0') {
+        return browse_device_count_;
+    }
+
+    for (size_t index = 0u; index < browse_device_count_; ++index) {
+        const BrowseDeviceMeta& meta = browse_devices_[index];
+        if (meta.catalog_index < count_ && std::strcmp(entries_[meta.catalog_index].id.device_id, device_id) == 0) {
+            return index;
+        }
+    }
+
+    return browse_device_count_;
+}
+
+const PointCatalog::BrowseDeviceMeta& PointCatalog::browseDeviceMeta(size_t index) const {
+    static const BrowseDeviceMeta kEmptyMeta = {};
+    return index < browse_device_count_ ? browse_devices_[index] : kEmptyMeta;
+}
+
+const char* PointCatalog::browseFeatureName(const BrowseDeviceMeta& meta, size_t feature_offset) const {
+    const size_t feature_index = static_cast<size_t>(meta.feature_start) + feature_offset;
+    if (feature_offset >= meta.feature_count || feature_index >= browse_feature_count_) {
+        return nullptr;
+    }
+
+    const uint16_t catalog_index = browse_feature_indices_[feature_index];
+    return catalog_index < count_ ? entries_[catalog_index].id.feature : nullptr;
+}
+
 PointState* PointCatalog::findState(const PointIdentity& id) {
     const size_t index = lookupIndex(id);
     return index < count_ ? &point_state_storage()[index] : nullptr;
@@ -351,6 +453,8 @@ bool PointCatalog::upsert(const PointDefinition& definition) {
     const size_t existing_index = lookupIndex(definition.id);
     if (existing_index < count_) {
         copyDefinition(entries_[existing_index], definition);
+        plc_point_meta_[existing_index] = classifyPlcPointMeta(definition);
+        rebuildBrowseIndex();
         requestRuntimeFullSync();
         return true;
     }
@@ -362,8 +466,10 @@ bool PointCatalog::upsert(const PointDefinition& definition) {
     copyDefinition(entries_[count_], definition);
     point_state_storage()[count_] = {};
     command_states_[count_] = {};
+    plc_point_meta_[count_] = classifyPlcPointMeta(definition);
     insertIndex(entries_[count_].id, count_);
     count_ += 1u;
+    rebuildBrowseIndex();
     requestRuntimeFullSync();
     return true;
 }
@@ -378,13 +484,16 @@ bool PointCatalog::remove(const PointIdentity& id) {
         entries_[move - 1u] = entries_[move];
         point_state_storage()[move - 1u] = point_state_storage()[move];
         command_states_[move - 1u] = command_states_[move];
+        plc_point_meta_[move - 1u] = plc_point_meta_[move];
     }
 
     entries_[count_ - 1u] = {};
     point_state_storage()[count_ - 1u] = {};
     command_states_[count_ - 1u] = {};
+    plc_point_meta_[count_ - 1u] = {};
     count_ -= 1u;
     rebuildIndex();
+    rebuildBrowseIndex();
     requestRuntimeFullSync();
     return true;
 }
@@ -445,10 +554,12 @@ bool PointCatalog::loadFromJson(const char* json) {
             continue;
         }
         entries_[count_] = definition;
+        plc_point_meta_[count_] = classifyPlcPointMeta(definition);
         count_ += 1u;
     }
 
     rebuildIndex();
+    rebuildBrowseIndex();
 
     return true;
 }
@@ -561,6 +672,46 @@ void PointCatalog::copyDefinition(PointDefinition& dst, const PointDefinition& s
     dst = src;
 }
 
+PointCatalog::PlcPointMeta PointCatalog::classifyPlcPointMeta(const PointDefinition& definition) {
+    PlcPointMeta meta = {};
+    meta.is_local = definition.backend == PointBackend::Local;
+
+    if (!meta.is_local) {
+        return meta;
+    }
+
+    if (std::strcmp(definition.id.feature, "plc") == 0) {
+        if (std::strcmp(definition.id.point_id, "engineEnabled") == 0) {
+            meta.point_kind = PlcPointKind::EngineEnabled;
+        } else if (std::strcmp(definition.id.point_id, "engineClearFault") == 0) {
+            meta.point_kind = PlcPointKind::EngineClearFault;
+        }
+        return meta;
+    }
+
+    uint16_t slot_id = 0u;
+    if (!parse_slot_feature_suffix(definition.id.feature, slot_id)) {
+        return meta;
+    }
+
+    meta.has_slot = true;
+    meta.slot_id = slot_id;
+
+    if (std::strcmp(definition.id.point_id, "start") == 0) {
+        meta.point_kind = PlcPointKind::SlotStart;
+    } else if (std::strcmp(definition.id.point_id, "stop") == 0) {
+        meta.point_kind = PlcPointKind::SlotStop;
+    } else if (std::strcmp(definition.id.point_id, "reset") == 0) {
+        meta.point_kind = PlcPointKind::SlotReset;
+    } else if (std::strcmp(definition.id.point_id, "clearFault") == 0) {
+        meta.point_kind = PlcPointKind::SlotClearFault;
+    } else {
+        meta.point_kind = PlcPointKind::SlotOther;
+    }
+
+    return meta;
+}
+
 uint32_t PointCatalog::hashIdentity(const PointIdentity& id) {
     uint32_t hash = kPointCatalogHashOffset;
     auto append_text = [&hash](const char* text) {
@@ -595,6 +746,52 @@ void PointCatalog::rebuildIndex() {
     resetIndex();
     for (size_t index = 0; index < count_; ++index) {
         insertIndex(entries_[index].id, index);
+    }
+}
+
+void PointCatalog::rebuildBrowseIndex() {
+    browse_device_count_ = 0u;
+    browse_feature_count_ = 0u;
+    std::memset(browse_devices_, 0, sizeof(browse_devices_));
+    std::memset(browse_feature_indices_, 0, sizeof(browse_feature_indices_));
+
+    for (size_t index = 0u; index < count_; ++index) {
+        size_t device_meta_index = browse_device_count_;
+        for (size_t device = 0u; device < browse_device_count_; ++device) {
+            const BrowseDeviceMeta& meta = browse_devices_[device];
+            if (meta.catalog_index < count_ &&
+                std::strcmp(entries_[meta.catalog_index].id.device_id, entries_[index].id.device_id) == 0) {
+                device_meta_index = device;
+                break;
+            }
+        }
+
+        if (device_meta_index == browse_device_count_) {
+            BrowseDeviceMeta& meta = browse_devices_[browse_device_count_++];
+            meta.catalog_index = static_cast<uint16_t>(index);
+            meta.feature_start = static_cast<uint16_t>(browse_feature_count_);
+            meta.feature_count = 0u;
+            meta.encoded_features_size = 0u;
+        }
+
+        BrowseDeviceMeta& device_meta = browse_devices_[device_meta_index];
+        bool feature_exists = false;
+        for (size_t feature = 0u; feature < device_meta.feature_count; ++feature) {
+            const char* feature_name = browseFeatureName(device_meta, feature);
+            if (feature_name != nullptr && std::strcmp(feature_name, entries_[index].id.feature) == 0) {
+                feature_exists = true;
+                break;
+            }
+        }
+
+        if (feature_exists || browse_feature_count_ >= kMaxPoints) {
+            continue;
+        }
+
+        browse_feature_indices_[browse_feature_count_++] = static_cast<uint16_t>(index);
+        device_meta.encoded_features_size = static_cast<uint16_t>(device_meta.encoded_features_size +
+            (device_meta.feature_count == 0u ? 0u : 1u) + json_string_value_size_local(entries_[index].id.feature));
+        device_meta.feature_count = static_cast<uint16_t>(device_meta.feature_count + 1u);
     }
 }
 

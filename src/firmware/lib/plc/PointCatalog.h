@@ -20,6 +20,31 @@ public:
     static constexpr size_t kMaxSerializedSize = 8192u;
     static constexpr size_t kIndexCapacity = 1024u;
 
+    enum class PlcPointKind : uint8_t {
+        None = 0u,
+        EngineEnabled,
+        EngineClearFault,
+        SlotStart,
+        SlotStop,
+        SlotReset,
+        SlotClearFault,
+        SlotOther,
+    };
+
+    struct PlcPointMeta {
+        bool is_local = false;
+        bool has_slot = false;
+        uint16_t slot_id = 0u;
+        PlcPointKind point_kind = PlcPointKind::None;
+    };
+
+    struct BrowseDeviceMeta {
+        uint16_t catalog_index = 0u;
+        uint16_t feature_start = 0u;
+        uint16_t feature_count = 0u;
+        uint16_t encoded_features_size = 0u;
+    };
+
     PointCatalog();
 
     void clear();
@@ -30,6 +55,11 @@ public:
 
     const PointDefinition* find(const PointIdentity& id) const;
     size_t findIndex(const PointIdentity& id) const;
+    const PlcPointMeta& plcPointMeta(size_t index) const;
+    size_t browseDeviceCount() const;
+    size_t findBrowseDeviceIndex(const char* device_id) const;
+    const BrowseDeviceMeta& browseDeviceMeta(size_t index) const;
+    const char* browseFeatureName(const BrowseDeviceMeta& meta, size_t feature_offset) const;
     PointState* findState(const PointIdentity& id);
     const PointState* findState(const PointIdentity& id) const;
     PointCommandState* findCommandState(const PointIdentity& id);
@@ -55,10 +85,12 @@ private:
 
     static bool identitiesEqual(const PointIdentity& lhs, const PointIdentity& rhs);
     static void copyDefinition(PointDefinition& dst, const PointDefinition& src);
+    static PlcPointMeta classifyPlcPointMeta(const PointDefinition& definition);
     static uint32_t hashIdentity(const PointIdentity& id);
 
     void resetIndex();
     void rebuildIndex();
+    void rebuildBrowseIndex();
     size_t lookupIndex(const PointIdentity& id) const;
     void insertIndex(const PointIdentity& id, size_t index);
     void resetDirtyStateTracking();
@@ -69,8 +101,13 @@ private:
 
     PointDefinition entries_[kMaxPoints] = {};
     PointCommandState command_states_[kMaxPoints] = {};
+    PlcPointMeta plc_point_meta_[kMaxPoints] = {};
+    BrowseDeviceMeta browse_devices_[kMaxPoints] = {};
+    uint16_t browse_feature_indices_[kMaxPoints] = {};
     uint16_t index_slots_[kIndexCapacity] = {};
     size_t count_ = 0u;
+    size_t browse_device_count_ = 0u;
+    size_t browse_feature_count_ = 0u;
     uint16_t dirty_state_queue_[kDirtyStateQueueCapacity] = {};
     uint8_t dirty_state_flags_[(kMaxPoints + 7u) / 8u] = {};
     size_t dirty_state_queue_head_ = 0u;

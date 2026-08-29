@@ -3,6 +3,7 @@
 #include <cstring>
 #include "flash.h"
 #include "deviceTemplates/DeviceTemplates.h"
+#include "oled.h"
 #include "plc_loader_v1.h"
 #include "plc_runtime_abi.h"
 #include "sdram.h"
@@ -28,6 +29,26 @@ constexpr uint32_t kPlcUploadVolatileStagingSize = SDRAM_PLC_UPLOAD_STAGING_SIZE
 constexpr uint8_t kPlcUploadDataFrameMagic = 0xA5u;
 constexpr uint16_t kPlcBytecodeChunkMaxBytes = 768u;
 constexpr size_t kPagedResponseSizeReserve = 64u;
+constexpr uint8_t kBootNodeServicesProgressStart = 10u;
+constexpr uint8_t kBootNodeServicesProgressEnd = 34u;
+constexpr uint8_t kBootRestoreProgressStart = 70u;
+constexpr uint8_t kBootRestoreProgressEnd = 95u;
+
+uint8_t boot_node_services_progress(uint16_t slot_index)
+{
+    const uint16_t clamped_slot = slot_index > kPlcSlotCountV1 ? kPlcSlotCountV1 : slot_index;
+    const uint16_t range = static_cast<uint16_t>(kBootNodeServicesProgressEnd - kBootNodeServicesProgressStart);
+    return static_cast<uint8_t>(kBootNodeServicesProgressStart +
+                                ((range * clamped_slot) / kPlcSlotCountV1));
+}
+
+uint8_t boot_restore_progress(uint16_t slot_index)
+{
+    const uint16_t clamped_slot = slot_index > kPlcSlotCountV1 ? kPlcSlotCountV1 : slot_index;
+    const uint16_t range = static_cast<uint16_t>(kBootRestoreProgressEnd - kBootRestoreProgressStart);
+    return static_cast<uint8_t>(kBootRestoreProgressStart +
+                                ((range * clamped_slot) / kPlcSlotCountV1));
+}
 
 #pragma pack(push, 1)
 struct PlcFlashPackageHeader {
@@ -102,6 +123,41 @@ static void make_point_identity(PointIdentity& id,
     copy_text(id.device_id, sizeof(id.device_id), device_id);
     copy_text(id.feature, sizeof(id.feature), feature);
     copy_text(id.point_id, sizeof(id.point_id), point_id);
+}
+
+static bool copy_text_segment(char* dst,
+                              size_t dst_size,
+                              const char* begin,
+                              const char* end) {
+    if (dst == nullptr || dst_size == 0u || begin == nullptr || end == nullptr || end <= begin) {
+        return false;
+    }
+
+    const size_t len = static_cast<size_t>(end - begin);
+    if (len >= dst_size) {
+        return false;
+    }
+
+    std::memcpy(dst, begin, len);
+    dst[len] = '\0';
+    return true;
+}
+
+static bool parse_point_path(PointIdentity& id, const char* path) {
+    if (path == nullptr || path[0] == '\0') {
+        return false;
+    }
+
+    const char* first_dot = std::strchr(path, '.');
+    const char* last_dot = std::strrchr(path, '.');
+    if (first_dot == nullptr || last_dot == nullptr || first_dot == path || first_dot == last_dot || last_dot[1] == '\0') {
+        return false;
+    }
+
+    const char* path_end = path + std::strlen(path);
+    return copy_text_segment(id.device_id, sizeof(id.device_id), path, first_dot) &&
+           copy_text_segment(id.feature, sizeof(id.feature), first_dot + 1, last_dot) &&
+           copy_text_segment(id.point_id, sizeof(id.point_id), last_dot + 1, path_end);
 }
 
 static bool request_identity_from_json(PointIdentity& id, const JsonDocument& request) {
@@ -528,20 +584,6 @@ static bool encode_base64_bytes(const uint8_t* data, size_t data_size, char* out
     return true;
 }
 
-static void build_point_path(const PointDefinition& definition, char* out, size_t out_size) {
-    if (out == nullptr || out_size == 0u) {
-        return;
-    }
-
-    (void)snprintf(out,
-                   out_size,
-                   "%s.%s.%s",
-                   definition.id.device_id,
-                   definition.id.feature,
-                   definition.id.point_id);
-    out[out_size - 1u] = '\0';
-}
-
 static bool response_can_append_item(size_t current_size, uint32_t emitted_count, size_t item_size)
 {
     if (item_size > NODENET_MAX_PAYLOAD_SIZE) {
@@ -653,116 +695,26 @@ static size_t json_float_field_size(const char* key)
     return json_field_prefix_size(key) + 24u;
 }
 
-static size_t collect_unique_device_feature_indices(const PointDefinition* definitions,
-                                                    size_t definition_count,
-                                                    const char* device_id,
-                                                    uint16_t* feature_indices,
-                                                    size_t feature_indices_capacity,
-                                                    size_t* encoded_features_size = nullptr)
-{
-    size_t count = 0u;
-    size_t total_size = 0u;
-
-    for (size_t index = 0u; index < definition_count; ++index) {
-        if (!strings_equal(definitions[index].id.device_id, device_id)) {
-            continue;
-        }
-
-        bool already_seen = false;
-        for (size_t feature = 0u; feature < count; ++feature) {
-            if (strings_equal(definitions[feature_indices[feature]].id.feature,
-                              definitions[index].id.feature)) {
-                already_seen = true;
-                break;
-            }
-        }
-        if (already_seen) {
-            continue;
-        }
-
-        if (count < feature_indices_capacity) {
-            feature_indices[count] = static_cast<uint16_t>(index);
-        }
-        total_size += (count == 0u ? 0u : 1u) + json_string_value_size(definitions[index].id.feature);
-        count += 1u;
-    }
-
-    if (encoded_features_size != nullptr) {
-        *encoded_features_size = total_size;
-    }
-    return count;
-}
-
-static size_t measure_device_browse_entry(const PointDefinition* definitions,
-                                          size_t definition_count,
+static size_t measure_device_browse_entry(const PointCatalog& catalog,
+                                          const PointCatalog::BrowseDeviceMeta& device_meta,
                                           const char* device_id)
 {
-    uint16_t feature_indices[PointCatalog::kMaxPoints] = {};
-    size_t features_size = 0u;
-    collect_unique_device_feature_indices(definitions,
-                                          definition_count,
-                                          device_id,
-                                          feature_indices,
-                                          PointCatalog::kMaxPoints,
-                                          &features_size);
-
     size_t size = 2u;
     size += json_string_field_size("deviceId", device_id);
-    size += 1u + json_field_prefix_size("features") + 2u + features_size;
+    size += 1u + json_field_prefix_size("features") + 2u + device_meta.encoded_features_size;
     return size;
 }
 
 static void append_device_features(JsonArray features,
-                                   const PointDefinition* definitions,
-                                   size_t definition_count,
-                                   const char* device_id)
+                                   const PointCatalog& catalog,
+                                   const PointCatalog::BrowseDeviceMeta& device_meta)
 {
-    uint16_t feature_indices[PointCatalog::kMaxPoints] = {};
-    const size_t feature_count = collect_unique_device_feature_indices(definitions,
-                                                                       definition_count,
-                                                                       device_id,
-                                                                       feature_indices,
-                                                                       PointCatalog::kMaxPoints);
-    for (size_t feature = 0u; feature < feature_count; ++feature) {
-        if (!features.add(definitions[feature_indices[feature]].id.feature)) {
+    for (size_t feature = 0u; feature < device_meta.feature_count; ++feature) {
+        const char* feature_name = catalog.browseFeatureName(device_meta, feature);
+        if (feature_name == nullptr || !features.add(feature_name)) {
             break;
         }
     }
-}
-
-static size_t collect_unique_device_indices(const PointDefinition* definitions,
-                                            size_t definition_count,
-                                            const char* filter_device_id,
-                                            uint16_t* device_indices,
-                                            size_t device_indices_capacity)
-{
-    const bool filtered = filter_device_id != nullptr && filter_device_id[0] != '\0';
-    size_t unique_count = 0u;
-
-    for (size_t index = 0u; index < definition_count; ++index) {
-        if (filtered && !strings_equal(definitions[index].id.device_id, filter_device_id)) {
-            continue;
-        }
-
-        bool already_seen = false;
-        for (size_t device = 0u; device < unique_count; ++device) {
-            if (strings_equal(definitions[device_indices[device]].id.device_id,
-                              definitions[index].id.device_id)) {
-                already_seen = true;
-                break;
-            }
-        }
-        if (already_seen) {
-            continue;
-        }
-
-        if (unique_count < device_indices_capacity) {
-            device_indices[unique_count] = static_cast<uint16_t>(index);
-        }
-        unique_count += 1u;
-    }
-
-    return unique_count;
 }
 
 static size_t measure_point_definition_entry(const PointDefinition& definition)
@@ -968,24 +920,6 @@ static const char* plc_slot_state_name(const PlcProgramControlBlockV1& control_b
         return "running";
     }
     return "loaded";
-}
-
-static bool parse_plc_slot_feature(const char* feature, uint16_t& slot_id)
-{
-    if (!starts_with(feature, "plc.slot")) {
-        return false;
-    }
-
-    unsigned parsed_slot = 0u;
-    if (std::sscanf(feature, "plc.slot%u", &parsed_slot) != 1) {
-        return false;
-    }
-    if (parsed_slot >= static_cast<unsigned>(kPlcSlotCountV1)) {
-        return false;
-    }
-
-    slot_id = static_cast<uint16_t>(parsed_slot);
-    return true;
 }
 
 static const char* plc_program_kind_name(uint16_t program_kind)
@@ -1529,27 +1463,33 @@ void NodeNetCore::begin()
     }
     hardwareType = HardwareType::NODENET_SOC;
     _logger = new NodeLogger(_nodeNet, 0x05);
+    oled::showBootProgress("Node services: prefs", 11u);
     loadPreferences();
 
+    oled::showBootProgress("Node services: catalog", 14u);
     (void)loadPointCatalog();
     _pointCatalogAutosaveEnabled = false;
+    oled::showBootProgress("Node services: builtins", 18u);
     registerBuiltinPointDefinitions();
     _pointCatalogAutosaveEnabled = true;
     if (_pointCatalogDirty) {
+        oled::showBootProgress("Node services: save catalog", 30u);
         (void)savePointCatalog();
         _pointCatalogDirty = false;
     }
 
+    oled::showBootProgress("Node services: modbus", 32u);
     _modbus0 = new ModbusMaster(MODBUS1_BASE);
     _modbus0->begin(modbus0Settings.comSettings.baudrate,
                     modbus0Settings.comSettings.timeout_ms,
                     modbus0Settings.comSettings.retries,
                     modbus0Settings.comSettings.interframe_chars_q1);
     features.hasModbus0 = true;
+    oled::showBootProgress("Node services: plc core", 33u);
     _plcCore.begin(&_pointCatalog, _modbus0, _logger);
     _plcCore.setModbusBatchMaxGap(modbus0Settings.comSettings.max_gap);
-    (void)restorePersistedPlcSlots();
 
+    oled::showBootProgress("Node services: publish", 34u);
     publishBuiltinPointStates();
     publishBuiltinPlcPointStates(true);
     _lastPlcBuiltinPointPublishMs = millis();
@@ -1681,6 +1621,9 @@ bool NodeNetCore::upsertPointDefinition(const PointDefinition& definition)
     bool changed = true;
     if (existing != nullptr) {
         changed = std::memcmp(existing, &definition, sizeof(PointDefinition)) != 0;
+        if (!changed) {
+            return true;
+        }
     }
 
     if (!_pointCatalog.upsert(definition)) {
@@ -2087,80 +2030,84 @@ bool NodeNetCore::updateProperty(const JsonDocument& request)
         return true;
     }
 
-    const PointDefinition* definitions = _pointCatalog.entries();
-    for (size_t index = 0; index < _pointCatalog.size(); ++index) {
-        char point_path[sizeof(PointIdentity::device_id) + sizeof(PointIdentity::feature) + sizeof(PointIdentity::point_id) + 3u] = {};
-        build_point_path(definitions[index], point_path, sizeof(point_path));
-        if (!strings_equal(propertyName, point_path)) {
-            continue;
-        }
-
-        const PointDefinition& definition = definitions[index];
-        if (definition.backend == PointBackend::Local) {
-            return handleLocalPlcPointWrite(definition, value);
-        }
-        if (definition.backend != PointBackend::Modbus || _modbus0 == nullptr) {
-            return false;
-        }
-        if (definition.ref.modbus.port_index != kModbus0PortIndex) {
-            return false;
-        }
-        if (definition.ref.modbus.access != ModbusAccess::Write &&
-            definition.ref.modbus.access != ModbusAccess::ReadWrite) {
-            return false;
-        }
-        if (definition.ref.modbus.table != ModbusTable::Coils || definition.value_type != PointValueType::Bool) {
-            return false;
-        }
-        if (!value.is<bool>()) {
-            return false;
-        }
-
-        const bool next_value = value.as<bool>();
-        const bool ok = _modbus0->writeSingleCoil(definition.ref.modbus.slave_address,
-                                                  definition.ref.modbus.address,
-                                                  next_value);
-
-        PointCommandState command_state = {};
-        command_state.last_commanded_value.b = next_value;
-        command_state.last_command_ts_ms = millis();
-        command_state.pending = false;
-
-        PointState next_state = {};
-        const PointState* current_state = _pointCatalog.findState(definition.id);
-        if (current_state != nullptr) {
-            next_state = *current_state;
-        }
-
-        if (ok) {
-            command_state.command_quality = PointCommandQuality::Acked;
-            command_state.last_ack_ts_ms = command_state.last_command_ts_ms;
-            next_state.value.b = next_value;
-            next_state.quality = PointQuality::Good;
-            next_state.last_update_ms = command_state.last_command_ts_ms;
-            next_state.last_good_update_ms = command_state.last_command_ts_ms;
-            (void)updatePointState(definition.id, next_state);
-        } else {
-            command_state.command_quality = PointCommandQuality::ProtocolError;
-            next_state.quality = PointQuality::BadProtocolError;
-            next_state.last_update_ms = command_state.last_command_ts_ms;
-            (void)updatePointState(definition.id, next_state);
-        }
-
-        (void)updatePointCommandState(definition.id, command_state);
-        return ok;
+    PointIdentity property_id = {};
+    if (!parse_point_path(property_id, propertyName)) {
+        return false;
     }
 
-    return false;
+    const size_t point_index = _pointCatalog.findIndex(property_id);
+    if (point_index >= _pointCatalog.size()) {
+        return false;
+    }
+
+    const PointDefinition& definition = _pointCatalog.entries()[point_index];
+    if (definition.backend == PointBackend::Local) {
+        return handleLocalPlcPointWrite(point_index, definition, value);
+    }
+    if (definition.backend != PointBackend::Modbus || _modbus0 == nullptr) {
+        return false;
+    }
+    if (definition.ref.modbus.port_index != kModbus0PortIndex) {
+        return false;
+    }
+    if (definition.ref.modbus.access != ModbusAccess::Write &&
+        definition.ref.modbus.access != ModbusAccess::ReadWrite) {
+        return false;
+    }
+    if (definition.ref.modbus.table != ModbusTable::Coils || definition.value_type != PointValueType::Bool) {
+        return false;
+    }
+    if (!value.is<bool>()) {
+        return false;
+    }
+
+    const bool next_value = value.as<bool>();
+    const bool ok = _modbus0->writeSingleCoil(definition.ref.modbus.slave_address,
+                                              definition.ref.modbus.address,
+                                              next_value);
+
+    PointCommandState command_state = {};
+    command_state.last_commanded_value.b = next_value;
+    command_state.last_command_ts_ms = millis();
+    command_state.pending = false;
+
+    PointState next_state = {};
+    next_state = _pointCatalog.states()[point_index];
+
+    if (ok) {
+        command_state.command_quality = PointCommandQuality::Acked;
+        command_state.last_ack_ts_ms = command_state.last_command_ts_ms;
+        next_state.value.b = next_value;
+        next_state.quality = PointQuality::Good;
+        next_state.last_update_ms = command_state.last_command_ts_ms;
+        next_state.last_good_update_ms = command_state.last_command_ts_ms;
+        (void)updatePointState(definition.id, next_state);
+    } else {
+        command_state.command_quality = PointCommandQuality::ProtocolError;
+        next_state.quality = PointQuality::BadProtocolError;
+        next_state.last_update_ms = command_state.last_command_ts_ms;
+        (void)updatePointState(definition.id, next_state);
+    }
+
+    (void)updatePointCommandState(definition.id, command_state);
+    return ok;
 }
 
-bool NodeNetCore::handleLocalPlcPointWrite(const PointDefinition& definition, JsonVariantConst value)
+bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
+                                           const PointDefinition& definition,
+                                           JsonVariantConst value)
 {
     if (!strings_equal(definition.id.device_id, deviceId)) {
         return false;
     }
 
-    if (strings_equal(definition.id.feature, "plc")) {
+    const PointCatalog::PlcPointMeta& plc_meta = _pointCatalog.plcPointMeta(point_index);
+    if (!plc_meta.is_local) {
+        return false;
+    }
+
+    if (plc_meta.point_kind == PointCatalog::PlcPointKind::EngineEnabled ||
+        plc_meta.point_kind == PointCatalog::PlcPointKind::EngineClearFault) {
         if (!value.is<bool>()) {
             return false;
         }
@@ -2176,10 +2123,10 @@ bool NodeNetCore::handleLocalPlcPointWrite(const PointDefinition& definition, Js
         command_state.pending = false;
 
         bool ok = !requested;
-        if (std::strcmp(definition.id.point_id, "engineEnabled") == 0) {
+        if (plc_meta.point_kind == PointCatalog::PlcPointKind::EngineEnabled) {
             plc_engine_set_enabled(requested);
             ok = (plc_engine_enabled() == requested);
-        } else if (std::strcmp(definition.id.point_id, "engineClearFault") == 0) {
+        } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::EngineClearFault) {
             if (requested) {
                 plc_engine_clear_fault_latch();
                 ok = plc_engine_last_fault_code() == 0u;
@@ -2197,14 +2144,14 @@ bool NodeNetCore::handleLocalPlcPointWrite(const PointDefinition& definition, Js
         return ok;
     }
 
-    uint16_t slot_id = 0u;
-    if (!parse_plc_slot_feature(definition.id.feature, slot_id)) {
+    if (!plc_meta.has_slot || plc_meta.slot_id >= kPlcSlotCountV1) {
         return false;
     }
     if (!value.is<bool>()) {
         return false;
     }
 
+    const uint16_t slot_id = plc_meta.slot_id;
     const bool requested = value.as<bool>();
     uint32_t now_ms = millis();
     PointCommandState command_state = {};
@@ -2223,7 +2170,7 @@ bool NodeNetCore::handleLocalPlcPointWrite(const PointDefinition& definition, Js
                         control_block->bytecode_base != 0u;
     bool ok = !requested;
 
-    if (std::strcmp(definition.id.point_id, "start") == 0) {
+    if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotStart) {
         if (requested && loaded && (control_block->status & kPlcSlotStatusFaultedV1) == 0u) {
             control_block->control &= ~kPlcSlotControlPausedV1;
             if (control_block->status != kPlcSlotStatusRunningV1) {
@@ -2231,7 +2178,7 @@ bool NodeNetCore::handleLocalPlcPointWrite(const PointDefinition& definition, Js
             }
             ok = true;
         }
-    } else if (std::strcmp(definition.id.point_id, "stop") == 0) {
+    } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotStop) {
         if (requested && loaded) {
             control_block->control |= kPlcSlotControlPausedV1;
             if ((control_block->status & kPlcSlotStatusFaultedV1) == 0u) {
@@ -2239,7 +2186,7 @@ bool NodeNetCore::handleLocalPlcPointWrite(const PointDefinition& definition, Js
             }
             ok = true;
         }
-    } else if (std::strcmp(definition.id.point_id, "reset") == 0) {
+    } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotReset) {
         if (requested && loaded) {
             const auto* linked_header = reinterpret_cast<const PlcLinkedImageHeaderV1*>(
                 static_cast<uintptr_t>(PlcSlotLoaderV1::slotLayout(slot_id).linked_image_header_addr));
@@ -2257,7 +2204,7 @@ bool NodeNetCore::handleLocalPlcPointWrite(const PointDefinition& definition, Js
             }
             ok = true;
         }
-    } else if (std::strcmp(definition.id.point_id, "clearFault") == 0) {
+    } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotClearFault) {
         if (requested && loaded) {
             control_block->fault_code = 0u;
             control_block->fault_info = 0u;
@@ -2301,12 +2248,10 @@ bool NodeNetCore::handlePointDefinitionsRequest(const JsonDocument& request, Jso
         response["kind"] = "devices";
         JsonArray devices = response["devices"].to<JsonArray>();
         size_t response_size = measureJson(response);
-        uint16_t device_indices[PointCatalog::kMaxPoints] = {};
-        const size_t total_devices = collect_unique_device_indices(definitions,
-                                                                   _pointCatalog.size(),
-                                                                   path,
-                                                                   device_indices,
-                                                                   PointCatalog::kMaxPoints);
+        const size_t browse_offset = (path[0] == '\0') ? 0u : _pointCatalog.findBrowseDeviceIndex(path);
+        const size_t total_devices = (path[0] == '\0')
+            ? _pointCatalog.browseDeviceCount()
+            : (browse_offset < _pointCatalog.browseDeviceCount() ? 1u : 0u);
         uint32_t emitted_devices = 0u;
 
         for (size_t device_index = offset; device_index < total_devices; ++device_index) {
@@ -2314,9 +2259,11 @@ bool NodeNetCore::handlePointDefinitionsRequest(const JsonDocument& request, Jso
                 break;
             }
 
-            const PointDefinition& definition = definitions[device_indices[device_index]];
-            const size_t device_size = measure_device_browse_entry(definitions,
-                                                                   _pointCatalog.size(),
+            const size_t browse_index = browse_offset + device_index;
+            const PointCatalog::BrowseDeviceMeta& device_meta = _pointCatalog.browseDeviceMeta(browse_index);
+            const PointDefinition& definition = definitions[device_meta.catalog_index];
+            const size_t device_size = measure_device_browse_entry(_pointCatalog,
+                                                                   device_meta,
                                                                    definition.id.device_id);
             if (!response_can_append_item(response_size, emitted_devices, device_size)) {
                 response["hasMore"] = true;
@@ -2327,10 +2274,7 @@ bool NodeNetCore::handlePointDefinitionsRequest(const JsonDocument& request, Jso
             device["deviceId"] = definition.id.device_id;
             JsonArray features = device["features"].to<JsonArray>();
 
-            append_device_features(features,
-                                   definitions,
-                                   _pointCatalog.size(),
-                                   definition.id.device_id);
+            append_device_features(features, _pointCatalog, device_meta);
 
             response["count"] = emitted_devices + 1u;
             response_commit_item_size(response_size, emitted_devices, device_size);
@@ -2432,12 +2376,10 @@ bool NodeNetCore::handlePointStatesRequest(const JsonDocument& request, JsonDocu
         response["kind"] = "devices";
         JsonArray devices = response["devices"].to<JsonArray>();
         size_t response_size = measureJson(response);
-        uint16_t device_indices[PointCatalog::kMaxPoints] = {};
-        const size_t total_devices = collect_unique_device_indices(definitions,
-                                                                   _pointCatalog.size(),
-                                                                   path,
-                                                                   device_indices,
-                                                                   PointCatalog::kMaxPoints);
+        const size_t browse_offset = (path[0] == '\0') ? 0u : _pointCatalog.findBrowseDeviceIndex(path);
+        const size_t total_devices = (path[0] == '\0')
+            ? _pointCatalog.browseDeviceCount()
+            : (browse_offset < _pointCatalog.browseDeviceCount() ? 1u : 0u);
         uint32_t emitted_devices = 0u;
 
         for (size_t device_index = offset; device_index < total_devices; ++device_index) {
@@ -2445,9 +2387,11 @@ bool NodeNetCore::handlePointStatesRequest(const JsonDocument& request, JsonDocu
                 break;
             }
 
-            const PointDefinition& definition = definitions[device_indices[device_index]];
-            const size_t device_size = measure_device_browse_entry(definitions,
-                                                                   _pointCatalog.size(),
+            const size_t browse_index = browse_offset + device_index;
+            const PointCatalog::BrowseDeviceMeta& device_meta = _pointCatalog.browseDeviceMeta(browse_index);
+            const PointDefinition& definition = definitions[device_meta.catalog_index];
+            const size_t device_size = measure_device_browse_entry(_pointCatalog,
+                                                                   device_meta,
                                                                    definition.id.device_id);
             if (!response_can_append_item(response_size, emitted_devices, device_size)) {
                 response["hasMore"] = true;
@@ -2458,10 +2402,7 @@ bool NodeNetCore::handlePointStatesRequest(const JsonDocument& request, JsonDocu
             device["deviceId"] = definition.id.device_id;
             JsonArray features = device["features"].to<JsonArray>();
 
-            append_device_features(features,
-                                   definitions,
-                                   _pointCatalog.size(),
-                                   definition.id.device_id);
+            append_device_features(features, _pointCatalog, device_meta);
 
             response["count"] = emitted_devices + 1u;
             response_commit_item_size(response_size, emitted_devices, device_size);
@@ -3642,6 +3583,8 @@ uint16_t NodeNetCore::restorePersistedPlcSlots()
         return 0u;
     }
 
+    oled::showBootProgress("Restore PLC slots", kBootRestoreProgressStart);
+
     PlcFlashPackageHeader package_header = {};
     if (!flash_read_bytes(_flash, kPlcFlashPackageBase, &package_header, sizeof(package_header)) ||
         package_header.magic != kPlcFlashPackageMagic ||
@@ -3687,6 +3630,7 @@ uint16_t NodeNetCore::restorePersistedPlcSlots()
     _plcSlotRuntimeDiagnostics.valid = false;
 
     for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
+        oled::showBootProgress("Restore PLC slots", boot_restore_progress(slot_id));
         const PlcFlashPackageEntry& entry = entries[slot_id];
         if ((entry.flags & kPlcFlashPackageEntryPresent) == 0u) {
             continue;
@@ -3719,6 +3663,8 @@ uint16_t NodeNetCore::restorePersistedPlcSlots()
 
         ++restored_count;
     }
+
+    oled::showBootProgress("Restore PLC slots", kBootRestoreProgressEnd);
 
     publishBuiltinPlcPointStates(true);
     return restored_count;
@@ -3999,6 +3945,7 @@ void NodeNetCore::registerBuiltinPointDefinitions()
     (void)upsertPointDefinition(definition);
 
     for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
+        oled::showBootProgress("Node services: builtins", boot_node_services_progress(slot_id));
         char feature[32] = {};
         char display_name[32] = {};
         (void)std::snprintf(feature, sizeof(feature), "plc.slot%u", static_cast<unsigned>(slot_id));
@@ -4044,6 +3991,8 @@ void NodeNetCore::registerBuiltinPointDefinitions()
         register_slot_point("reset", "Reset", PointDirection::InOut, PointValueType::Bool, 0u);
         register_slot_point("clearFault", "Clear Fault", PointDirection::InOut, PointValueType::Bool, 0u);
     }
+
+    oled::showBootProgress("Node services: builtins", kBootNodeServicesProgressEnd);
 }
 
 void NodeNetCore::publishBuiltinPointStates()
