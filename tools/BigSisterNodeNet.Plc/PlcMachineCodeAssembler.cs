@@ -39,6 +39,9 @@ namespace BigSisterNodeNet.Plc
             "clearFault",
         };
 
+        private const string PublicSlotVariableVisibility = "PUBLIC";
+        private const string PrivateSlotVariableVisibility = "PRIVATE";
+
         public const byte NopOpcode = 0x01;
         public const byte HaltOpcode = 0x00;
         public const byte PushTrueOpcode = 0x02;
@@ -54,8 +57,13 @@ namespace BigSisterNodeNet.Plc
         public const byte NeOpcode = 0x0C;
         public const byte LoadPointBoolOpcode = 0x10;
         public const byte StorePointBoolOpcode = 0x11;
+        public const byte LoadPointInt16Opcode = 0x12;
+        public const byte StorePointInt16Opcode = 0x13;
+        public const byte PushInt16Opcode = 0x14;
         public const byte IncrementPointIntOpcode = 0x20;
         public const byte DecrementPointIntOpcode = 0x21;
+        public const byte AddOpcode = 0x22;
+        public const byte SubOpcode = 0x23;
 
         public static PlcAssemblyResult Assemble(string source, PlcObjectFileOptions options)
         {
@@ -170,6 +178,12 @@ namespace BigSisterNodeNet.Plc
                             output.Add(NeOpcode);
                             break;
 
+                        case "PUSH_I16":
+                            RequireOperandCount(tokens, 2, lineNumber);
+                            output.Add(PushInt16Opcode);
+                            WriteUInt16(output, ParseInt16Literal(tokens[1], lineNumber));
+                            break;
+
                         case "LOAD_BOOL":
                         case "LOAD_POINT_BOOL":
                         case "LB":
@@ -196,6 +210,40 @@ namespace BigSisterNodeNet.Plc
                                                  symbolIndexByName,
                                                  PlcValueType.Bool,
                                                  PlcRuntimeLinkAccess.Write);
+                            break;
+
+                        case "LOAD_I16":
+                            RequireOperandCount(tokens, 2, lineNumber);
+                            output.Add(LoadPointInt16Opcode);
+                            WriteRelocatedSymbol(output,
+                                                 tokens[1],
+                                                 lineNumber,
+                                                 result,
+                                                 symbolIndexByName,
+                                                 PlcValueType.Int16,
+                                                 PlcRuntimeLinkAccess.Read);
+                            break;
+
+                        case "STORE_I16":
+                            RequireOperandCount(tokens, 2, lineNumber);
+                            output.Add(StorePointInt16Opcode);
+                            WriteRelocatedSymbol(output,
+                                                 tokens[1],
+                                                 lineNumber,
+                                                 result,
+                                                 symbolIndexByName,
+                                                 PlcValueType.Int16,
+                                                 PlcRuntimeLinkAccess.Write);
+                            break;
+
+                        case "ADD":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(AddOpcode);
+                            break;
+
+                        case "SUB":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(SubOpcode);
                             break;
 
                         case "INC_INT":
@@ -336,27 +384,46 @@ namespace BigSisterNodeNet.Plc
                                                 PlcAssemblyResult result,
                                                 IDictionary<string, ushort> symbolIndexByName)
         {
-            if (tokens.Count != 3)
+            if (tokens.Count != 3 && tokens.Count != 4)
             {
-                throw new PlcMachineCodeCompileException("VAR syntax is 'VAR <type> <name>'", lineNumber);
+                throw new PlcMachineCodeCompileException("VAR syntax is 'VAR <type> <name>' or 'VAR PUBLIC|PRIVATE <type> <name>'", lineNumber);
             }
 
-            var valueType = ParseValueType(tokens[1], lineNumber);
-            if (ReservedSlotVariableNames.Contains(tokens[2]))
+            var visibilityTokenIndex = tokens.Count == 4 ? 1 : -1;
+            var typeTokenIndex = tokens.Count == 4 ? 2 : 1;
+            var nameTokenIndex = tokens.Count == 4 ? 3 : 2;
+            var flags = PlcAssemblySymbolFlags.None;
+
+            if (visibilityTokenIndex >= 0)
+            {
+                var visibility = tokens[visibilityTokenIndex].ToUpperInvariant();
+                if (visibility == PrivateSlotVariableVisibility)
+                {
+                    flags = PlcAssemblySymbolFlags.SlotVarPrivate;
+                }
+                else if (visibility != PublicSlotVariableVisibility)
+                {
+                    throw new PlcMachineCodeCompileException("VAR visibility must be PUBLIC or PRIVATE", lineNumber);
+                }
+            }
+
+            var valueType = ParseValueType(tokens[typeTokenIndex], lineNumber);
+            if (ReservedSlotVariableNames.Contains(tokens[nameTokenIndex]))
             {
                 throw new PlcMachineCodeCompileException(
-                    $"VAR name '{tokens[2]}' is reserved by plc.slot runtime points",
+                    $"VAR name '{tokens[nameTokenIndex]}' is reserved by plc.slot runtime points",
                     lineNumber);
             }
 
             AddSymbol(result,
                       symbolIndexByName,
                       lineNumber,
-                      tokens[2],
+                      tokens[nameTokenIndex],
                       PlcObjectSymbolKind.SlotVar,
                       string.Empty,
                       (byte)valueType,
-                      PlcRuntimeLinkAccess.ReadWrite);
+                      PlcRuntimeLinkAccess.ReadWrite,
+                      flags);
         }
 
         private static void AddSymbol(PlcAssemblyResult result,
@@ -366,7 +433,8 @@ namespace BigSisterNodeNet.Plc
                                       PlcObjectSymbolKind kind,
                                       string pointPath,
                                       byte expectedType = byte.MaxValue,
-                                      PlcRuntimeLinkAccess access = PlcRuntimeLinkAccess.Read)
+                                      PlcRuntimeLinkAccess access = PlcRuntimeLinkAccess.Read,
+                                      PlcAssemblySymbolFlags flags = PlcAssemblySymbolFlags.None)
         {
             if (string.IsNullOrWhiteSpace(symbolName))
             {
@@ -390,6 +458,7 @@ namespace BigSisterNodeNet.Plc
                 PointPath = pointPath,
                 ExpectedType = expectedType,
                 Access = access,
+                Flags = flags,
             });
         }
 
@@ -543,6 +612,39 @@ namespace BigSisterNodeNet.Plc
             catch (OverflowException)
             {
                 throw new PlcMachineCodeCompileException($"Invalid byte literal '{text}'", lineNumber);
+            }
+        }
+
+        private static ushort ParseInt16Literal(string text, int lineNumber)
+        {
+            try
+            {
+                if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                {
+                    var hexValue = Convert.ToUInt32(text.Substring(2), 16);
+                    if (hexValue > ushort.MaxValue)
+                    {
+                        throw new PlcMachineCodeCompileException($"Value '{text}' is outside 16-bit range", lineNumber);
+                    }
+
+                    return (ushort)hexValue;
+                }
+
+                var signedValue = Convert.ToInt32(text);
+                if (signedValue < short.MinValue || signedValue > short.MaxValue)
+                {
+                    throw new PlcMachineCodeCompileException($"Value '{text}' is outside INT16 range", lineNumber);
+                }
+
+                return unchecked((ushort)(short)signedValue);
+            }
+            catch (FormatException)
+            {
+                throw new PlcMachineCodeCompileException($"Invalid INT16 literal '{text}'", lineNumber);
+            }
+            catch (OverflowException)
+            {
+                throw new PlcMachineCodeCompileException($"Invalid INT16 literal '{text}'", lineNumber);
             }
         }
 

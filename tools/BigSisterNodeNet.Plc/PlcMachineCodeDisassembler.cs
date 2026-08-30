@@ -89,6 +89,7 @@ namespace BigSisterNodeNet.Plc
                 {
                     Name = ReadFixedAscii(objectFileBytes, baseOffset, PlcObjectFileBuilder.SymbolNameSize),
                     Kind = (PlcObjectSymbolKind)objectFileBytes[baseOffset + PlcObjectFileBuilder.SymbolNameSize],
+                    Flags = (PlcAssemblySymbolFlags)objectFileBytes[baseOffset + PlcObjectFileBuilder.SymbolNameSize + 1],
                     PointPath = BuildPointPath(
                         ReadFixedAscii(objectFileBytes, baseOffset + 18, PlcObjectFileBuilder.DeviceIdSize),
                         ReadFixedAscii(objectFileBytes, baseOffset + 34, PlcObjectFileBuilder.FeatureSize),
@@ -122,6 +123,7 @@ namespace BigSisterNodeNet.Plc
                 if (symbol.Kind == PlcObjectSymbolKind.SlotVar)
                 {
                     builder.Append("VAR ")
+                           .Append(FormatSlotVariableVisibility(symbol.Flags))
                            .Append(FormatValueType(symbol.ExpectedType))
                            .Append(' ')
                            .Append(symbol.Name)
@@ -241,8 +243,31 @@ namespace BigSisterNodeNet.Plc
                         pc += 1;
                         break;
 
+                    case PlcMachineCodeAssembler.AddOpcode:
+                        builder.AppendLine("ADD");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.SubOpcode:
+                        builder.AppendLine("SUB");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.PushInt16Opcode:
+                        if ((pc + 2) >= codeBytes.Length)
+                        {
+                            throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
+                        }
+
+                        builder.Append("PUSH_I16 ")
+                               .AppendLine(FormatInt16Literal(ReadUInt16(codeBytes, pc + 1)));
+                        pc += 3;
+                        break;
+
                     case PlcMachineCodeAssembler.LoadPointBoolOpcode:
                     case PlcMachineCodeAssembler.StorePointBoolOpcode:
+                    case PlcMachineCodeAssembler.LoadPointInt16Opcode:
+                    case PlcMachineCodeAssembler.StorePointInt16Opcode:
                     case PlcMachineCodeAssembler.IncrementPointIntOpcode:
                     case PlcMachineCodeAssembler.DecrementPointIntOpcode:
                         if ((pc + 2) >= codeBytes.Length)
@@ -302,6 +327,13 @@ namespace BigSisterNodeNet.Plc
             return builder.ToString().TrimEnd();
         }
 
+        private static string FormatSlotVariableVisibility(PlcAssemblySymbolFlags flags)
+        {
+            return (flags & PlcAssemblySymbolFlags.SlotVarPrivate) != 0
+                ? "PRIVATE "
+                : string.Empty;
+        }
+
         private static string ResolveObjectSymbolName(IList<PlcAssemblySymbol> symbols, ushort symbolIndex)
         {
             return symbolIndex < symbols.Count ? symbols[symbolIndex].Name : $"sym{symbolIndex}";
@@ -322,10 +354,15 @@ namespace BigSisterNodeNet.Plc
                                  value == PlcMachineCodeAssembler.NotOpcode ||
                                  value == PlcMachineCodeAssembler.EqOpcode ||
                                  value == PlcMachineCodeAssembler.NeOpcode ||
+                                 value == PlcMachineCodeAssembler.PushInt16Opcode ||
                    value == PlcMachineCodeAssembler.LoadPointBoolOpcode ||
                    value == PlcMachineCodeAssembler.StorePointBoolOpcode ||
+                                     value == PlcMachineCodeAssembler.LoadPointInt16Opcode ||
+                                     value == PlcMachineCodeAssembler.StorePointInt16Opcode ||
                    value == PlcMachineCodeAssembler.IncrementPointIntOpcode ||
-                   value == PlcMachineCodeAssembler.DecrementPointIntOpcode;
+                                     value == PlcMachineCodeAssembler.DecrementPointIntOpcode ||
+                                     value == PlcMachineCodeAssembler.AddOpcode ||
+                                     value == PlcMachineCodeAssembler.SubOpcode;
         }
 
         private static string FormatOpcode(byte opcode)
@@ -358,17 +395,32 @@ namespace BigSisterNodeNet.Plc
                     return "EQ";
                 case PlcMachineCodeAssembler.NeOpcode:
                     return "NE";
+                case PlcMachineCodeAssembler.PushInt16Opcode:
+                    return "PUSH_I16";
                 case PlcMachineCodeAssembler.LoadPointBoolOpcode:
                     return "LOAD_BOOL";
                 case PlcMachineCodeAssembler.StorePointBoolOpcode:
                     return "STORE_BOOL";
+                case PlcMachineCodeAssembler.LoadPointInt16Opcode:
+                    return "LOAD_I16";
+                case PlcMachineCodeAssembler.StorePointInt16Opcode:
+                    return "STORE_I16";
                 case PlcMachineCodeAssembler.IncrementPointIntOpcode:
                     return "INC_INT";
                 case PlcMachineCodeAssembler.DecrementPointIntOpcode:
                     return "DEC_INT";
+                case PlcMachineCodeAssembler.AddOpcode:
+                    return "ADD";
+                case PlcMachineCodeAssembler.SubOpcode:
+                    return "SUB";
                 default:
                     return "DB";
             }
+        }
+
+        private static string FormatInt16Literal(ushort rawValue)
+        {
+            return ((short)rawValue).ToString();
         }
 
         private static string FormatValueType(byte rawType)

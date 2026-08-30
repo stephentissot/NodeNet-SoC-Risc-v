@@ -28,6 +28,8 @@ Implemented today:
 - `CONST POINT_ID <symbol>, <deviceId.feature.pointId>`
 - `PARAM POINT_ID <symbol>`
 - `VAR <type> <name>`
+- `VAR PUBLIC <type> <name>`
+- `VAR PRIVATE <type> <name>`
 - `NOP`
 - `HALT`
 - `PUSH_TRUE`
@@ -43,6 +45,11 @@ Implemented today:
 - `NOT`
 - `EQ`
 - `NE`
+- `PUSH_I16 imm16`
+- `LOAD_I16 <symbol>`
+- `STORE_I16 <symbol>`
+- `ADD`
+- `SUB`
 - `INC_INT <symbol>`
 - `DEC_INT <symbol>`
 - `DB <byte0>, <byte1>, ...`
@@ -282,20 +289,23 @@ Reserved source syntax for slot-local exported variables:
 
 ```text
 VAR <type> <name>
+VAR PUBLIC <type> <name>
+VAR PRIVATE <type> <name>
 ```
 
 Examples:
 
 ```text
 VAR BOOL ready
-VAR INT counter
-VAR FLOAT filteredPv
+VAR PUBLIC INT counter
+VAR PRIVATE FLOAT filteredPv
 ```
 
 Purpose:
 
 - declares a slot-local named variable
 - the variable is materialized by the firmware loader as a dynamic local point
+- visibility defaults to `PUBLIC` when omitted
 - the created point identity is:
 
 ```text
@@ -312,7 +322,9 @@ Loader rules for `VAR`:
 
 - creation happens at slot load time, before relocation resolution
 - variables are local backend points
-- variables are created with direction `InOut`
+- `VAR PUBLIC` variables are created with direction `InOut`
+- `VAR PRIVATE` variables are created with direction `Input` for external browse/write purposes
+- the owning PLC program may still read and write its own `VAR PRIVATE` symbols internally
 - variables are zero-initialized
 - variables are not persisted as user catalog configuration
 - reloading a slot replaces that slot's previous dynamic variable set
@@ -847,6 +859,13 @@ Implementation checklist:
 
 ### Stage 3: Integer State And Counters
 
+Current branch status:
+
+- assembler/disassembler, firmware loader opcode validation, and `wb_plc`
+  execution support are now implemented for `PUSH_I16`, `LOAD_I16`,
+  `STORE_I16`, `ADD`, and `SUB`
+- hardware validation is still pending for the Stage 3 integer stack batch
+
 Recommended implementation set:
 
 - `PUSH_I16 imm16`
@@ -868,7 +887,7 @@ Validation program:
 ```text
 PARAM POINT_ID inputA
 PARAM POINT_ID inputB
-CONST POINT_ID total, demo.plc.slot0.total
+VAR INT total
 
 LOAD_I16 inputA
 LOAD_I16 inputB
@@ -876,6 +895,41 @@ ADD
 STORE_I16 total
 HALT
 ```
+
+Note:
+
+- this example is valid only when the upload/build path supplies concrete point
+  bindings for `inputA` and `inputB`
+- in the current UI/toolchain, `PARAM POINT_ID` declarations are not free
+  placeholders; each one must be bound to a full point path before object-file
+  build
+- for a direct paste-and-compile test without parameter binding, replace the
+  two `PARAM POINT_ID` lines with concrete `CONST POINT_ID` declarations
+
+Self-contained validation program for environments with no external `INT`
+points:
+
+```text
+VAR INT total
+
+PUSH_I16 7
+PUSH_I16 5
+ADD
+STORE_I16 total
+
+LOAD_I16 total
+PUSH_I16 2
+SUB
+STORE_I16 total
+HALT
+```
+
+Expected result:
+
+- the first arithmetic sequence stores `12` into `total`
+- the second sequence reloads `total`, subtracts `2`, and stores `10`
+- this one program exercises `PUSH_I16`, `ADD`, `STORE_I16`, `LOAD_I16`, and
+  `SUB` without requiring any external mapped `INT` point
 
 Implementation checklist:
 

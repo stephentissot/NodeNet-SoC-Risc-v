@@ -2,6 +2,6 @@
   <Project Path="../BigSisterNodeNet.Core/BigSisterNodeNet.Core.csproj" />
   <Project Path="../BigSisterNodeNet.Driver/BigSisterNodeNet.Driver.csproj" />
   <Project Path="../BigSisterNodeNet.Plc/BigSisterNodeNet.Plc.csproj" />
-  <Project Path="../BigSisterNodeNet.Sniffer/BigSisterNodeNet.Sniffer.csproj" />
+  <Project Path="../BigSisterNodeNet.Sniffer/BigSisterNodeNet.Sniffer.csproj" Id="18885bcc-5b90-44b5-a391-2eb474f626de" />
   <Project Path="../BigSisterNodeNet.UI/BigSisterNodeNet.UI.csproj" />
 </Solution>

@@ -18,6 +18,60 @@ static bool modbus_table_is_bitwise(ModbusTable table)
     return table == ModbusTable::Coils || table == ModbusTable::DiscreteInputs;
 }
 
+static bool starts_with(const char* text, const char* prefix)
+{
+    return text != nullptr && prefix != nullptr && std::strncmp(text, prefix, std::strlen(prefix)) == 0;
+}
+
+static bool is_dynamic_slot_variable_point(const PointDefinition& definition)
+{
+    if (!starts_with(definition.id.feature, "plc.slot")) {
+        return false;
+    }
+
+    const char* feature = definition.id.feature + 8u;
+    if (*feature < '0' || *feature > '9') {
+        return false;
+    }
+
+    while (*feature >= '0' && *feature <= '9') {
+        ++feature;
+    }
+
+    if (*feature != '\0') {
+        return false;
+    }
+
+    static constexpr const char* kBuiltinSlotPointIds[] = {
+        "loaded",
+        "state",
+        "runEnabled",
+        "status",
+        "cycleCounter",
+        "faultCode",
+        "faultInfo",
+        "bytecodeSize",
+        "source",
+        "programType",
+        "paramsSummary",
+        "inputChannel",
+        "outputChannel",
+        "runtimeMapOk",
+        "start",
+        "stop",
+        "reset",
+        "clearFault",
+    };
+
+    for (const char* reserved : kBuiltinSlotPointIds) {
+        if (std::strcmp(definition.id.point_id, reserved) == 0) {
+            return false;
+        }
+    }
+
+    return definition.id.point_id[0] != '\0';
+}
+
 static uint16_t modbus_point_span(const PointDefinition& definition)
 {
     if (modbus_table_is_bitwise(definition.ref.modbus.table)) {
@@ -348,8 +402,11 @@ bool PlcCore::commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now
 
     const PointDefinition& definition = point_catalog_->entries()[catalog_index];
     const PointState& current_state = point_catalog_->states()[catalog_index];
+    const bool internal_slot_variable = is_dynamic_slot_variable_point(definition);
     if (definition.value_type != PointValueType::Bool ||
-        (definition.direction != PointDirection::Output && definition.direction != PointDirection::InOut)) {
+        (!internal_slot_variable &&
+         definition.direction != PointDirection::Output &&
+         definition.direction != PointDirection::InOut)) {
         return false;
     }
 
@@ -429,8 +486,11 @@ bool PlcCore::commitRuntimeInt16(uint16_t runtime_index, int16_t value, uint32_t
     }
 
     const PointDefinition& definition = point_catalog_->entries()[catalog_index];
+    const bool internal_slot_variable = is_dynamic_slot_variable_point(definition);
     if (definition.value_type != PointValueType::Int16 ||
-        (definition.direction != PointDirection::Output && definition.direction != PointDirection::InOut)) {
+        (!internal_slot_variable &&
+         definition.direction != PointDirection::Output &&
+         definition.direction != PointDirection::InOut)) {
         return false;
     }
 

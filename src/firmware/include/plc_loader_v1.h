@@ -622,6 +622,9 @@ private:
     {
         return opcode == 0x10u ||
                opcode == 0x11u ||
+               opcode == 0x12u ||
+               opcode == 0x13u ||
+               opcode == 0x14u ||
                opcode == 0x20u ||
                opcode == 0x21u;
     }
@@ -641,6 +644,8 @@ private:
                opcode == 0x0Au ||
                opcode == 0x0Bu ||
                opcode == 0x0Cu ||
+               opcode == 0x22u ||
+               opcode == 0x23u ||
                opcodeHasU16Operand(opcode);
     }
 
@@ -794,7 +799,9 @@ private:
         definition.id = point_id;
         std::strncpy(definition.display_name, symbol.symbol_name, sizeof(definition.display_name) - 1u);
         definition.backend = PointBackend::Local;
-        definition.direction = PointDirection::InOut;
+        definition.direction = (symbol.reserved1 & kPlcSymbolFlagSlotVarPrivate) != 0u
+            ? PointDirection::Input
+            : PointDirection::InOut;
         definition.value_type = static_cast<PointValueType>(symbol.expected_type);
         definition.polling.refresh_ms = 0u;
         definition.polling.timeout_ms = 0u;

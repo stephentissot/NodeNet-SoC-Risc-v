@@ -9,6 +9,7 @@ namespace BigSisterNodeNet.Core.Services
     public class PlcProgramUploadService : IPlcProgramUploadService
     {
         private const int BytecodeReadChunkSize = 768;
+        private static readonly TimeSpan PersistedCommitResponseTimeout = TimeSpan.FromSeconds(20);
 
         private readonly NodeNetCore _nodeNetCore;
         private readonly PlcUploadClient _uploadClient = new PlcUploadClient();
@@ -124,7 +125,7 @@ namespace BigSisterNodeNet.Core.Services
 
             var commitResponse = WaitForAcceptedResponse(
                 "plcUploadCommitRes",
-                options,
+                WithResponseTimeout(options, GetCommitResponseTimeout(options)),
                 message => MatchesUploadId(message, uploadId),
                 () => _nodeNetCore.EnqueueOutgoingMessage(CreateMessage(_uploadClient.CreateCommitRequest(uploadId, options))));
 
@@ -272,6 +273,37 @@ namespace BigSisterNodeNet.Core.Services
                 options.ResponseTimeout,
                 sendAction);
             return _uploadClient.ExpectOk(responseMessage.ToDictionary(), expectedCommand);
+        }
+
+        private static TimeSpan GetCommitResponseTimeout(PlcUploadOptions options)
+        {
+            if (options == null)
+            {
+                throw new ArgumentNullException(nameof(options));
+            }
+
+            return options.PersistToFlash && options.ResponseTimeout < PersistedCommitResponseTimeout
+                ? PersistedCommitResponseTimeout
+                : options.ResponseTimeout;
+        }
+
+        private static PlcUploadOptions WithResponseTimeout(PlcUploadOptions source, TimeSpan responseTimeout)
+        {
+            if (source == null)
+            {
+                throw new ArgumentNullException(nameof(source));
+            }
+
+            return new PlcUploadOptions
+            {
+                LocalAddress = source.LocalAddress,
+                RemoteAddress = source.RemoteAddress,
+                SlotId = source.SlotId,
+                PersistToFlash = source.PersistToFlash,
+                AutoLoad = source.AutoLoad,
+                ResponseTimeout = responseTimeout,
+                ObjectFileOptions = source.ObjectFileOptions,
+            };
         }
 
         private static bool IsExpectedResponse(NodeNetMessage message, string expectedCommand, PlcUploadOptions options)

@@ -834,6 +834,10 @@ static bool json_variant_is_integer(JsonVariantConst value) {
     return value.is<int>() || value.is<unsigned int>() || value.is<long>() || value.is<unsigned long>();
 }
 
+static bool json_variant_is_number(JsonVariantConst value) {
+    return json_variant_is_integer(value) || value.is<float>() || value.is<double>();
+}
+
 static bool plc_control_block_loaded(const PlcProgramControlBlockV1& control_block, uint16_t slot_id) {
     return control_block.magic == kPlcProgramControlBlockMagicV1 &&
            control_block.slot_id == slot_id &&
@@ -1902,7 +1906,7 @@ void NodeNetCore::processInputQueue()
             if (!updateProperty(request)) {
                 _logger->Warning("UpdateProperty rejected src=%u property=%s",
                                  msg.srcAddr,
-                                 request["property"] | "<null>");
+                                 request["propertyName"] | "<null>");
             }
             response["noResponse"] = true;
             break;
@@ -2147,20 +2151,122 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
     if (!plc_meta.has_slot || plc_meta.slot_id >= kPlcSlotCountV1) {
         return false;
     }
+
+    const uint32_t now_ms = millis();
+    PointCommandState command_state = {};
+    if (const PointCommandState* current = _pointCatalog.findCommandState(definition.id)) {
+        command_state = *current;
+    }
+    command_state.last_command_ts_ms = now_ms;
+    command_state.pending = false;
+
+    if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotOther) {
+        if (definition.direction != PointDirection::Output && definition.direction != PointDirection::InOut) {
+            command_state.command_quality = PointCommandQuality::Rejected;
+            (void)updatePointCommandState(definition.id, command_state);
+            return false;
+        }
+
+        PointState next_state = _pointCatalog.states()[point_index];
+        bool accepted = false;
+
+        switch (definition.value_type) {
+        case PointValueType::Bool:
+            if (value.is<bool>()) {
+                const bool parsed = value.as<bool>();
+                command_state.last_commanded_value.b = parsed;
+                next_state.value.b = parsed;
+                accepted = true;
+            }
+            break;
+
+        case PointValueType::Uint16:
+            if (json_variant_is_integer(value)) {
+                const uint16_t parsed = value.as<uint16_t>();
+                command_state.last_commanded_value.u16 = parsed;
+                next_state.value.u16 = parsed;
+                accepted = true;
+            }
+            break;
+
+        case PointValueType::Int16:
+            if (json_variant_is_integer(value)) {
+                const int16_t parsed = value.as<int16_t>();
+                command_state.last_commanded_value.i16 = parsed;
+                next_state.value.i16 = parsed;
+                accepted = true;
+            }
+            break;
+
+        case PointValueType::Uint32:
+            if (json_variant_is_integer(value)) {
+                const uint32_t parsed = value.as<uint32_t>();
+                command_state.last_commanded_value.u32 = parsed;
+                next_state.value.u32 = parsed;
+                accepted = true;
+            }
+            break;
+
+        case PointValueType::Int32:
+            if (json_variant_is_integer(value)) {
+                const int32_t parsed = value.as<int32_t>();
+                command_state.last_commanded_value.i32 = parsed;
+                next_state.value.i32 = parsed;
+                accepted = true;
+            }
+            break;
+
+        case PointValueType::Float:
+            if (json_variant_is_number(value)) {
+                const float parsed = value.as<float>();
+                command_state.last_commanded_value.f32 = parsed;
+                next_state.value.f32 = parsed;
+                accepted = true;
+            }
+            break;
+
+        case PointValueType::Enum:
+            if (json_variant_is_integer(value)) {
+                const int32_t parsed = value.as<int32_t>();
+                command_state.last_commanded_value.enum_value = parsed;
+                next_state.value.enum_value = parsed;
+                accepted = true;
+            }
+            break;
+
+        case PointValueType::String:
+        default:
+            break;
+        }
+
+        if (!accepted) {
+            command_state.command_quality = PointCommandQuality::Rejected;
+            (void)updatePointCommandState(definition.id, command_state);
+            return false;
+        }
+
+        next_state.quality = PointQuality::Good;
+        next_state.last_update_ms = now_ms;
+        next_state.last_good_update_ms = now_ms;
+        (void)updatePointState(definition.id, next_state);
+
+        command_state.command_quality = PointCommandQuality::Acked;
+        command_state.last_ack_ts_ms = now_ms;
+        (void)updatePointCommandState(definition.id, command_state);
+
+        if (_plcRuntimePublisher != nullptr) {
+            (void)const_cast<PlcRuntimePublisherV1*>(_plcRuntimePublisher)->publish(_pointCatalog, now_ms);
+        }
+        return true;
+    }
+
     if (!value.is<bool>()) {
         return false;
     }
 
     const uint16_t slot_id = plc_meta.slot_id;
     const bool requested = value.as<bool>();
-    uint32_t now_ms = millis();
-    PointCommandState command_state = {};
-    if (const PointCommandState* current = _pointCatalog.findCommandState(definition.id)) {
-        command_state = *current;
-    }
     command_state.last_commanded_value.b = requested;
-    command_state.last_command_ts_ms = now_ms;
-    command_state.pending = false;
 
     volatile PlcProgramControlBlockV1* control_block = reinterpret_cast<volatile PlcProgramControlBlockV1*>(
         static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
