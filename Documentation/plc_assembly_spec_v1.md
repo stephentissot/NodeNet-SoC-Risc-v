@@ -50,6 +50,14 @@ Implemented today:
 - `STORE_I16 <symbol>`
 - `ADD`
 - `SUB`
+- `LT`
+- `LE`
+- `GT`
+- `GE`
+- `MIN`
+- `MAX`
+- `CLAMP`
+- `SEL`
 - `INC_INT <symbol>`
 - `DEC_INT <symbol>`
 - `DB <byte0>, <byte1>, ...`
@@ -186,6 +194,14 @@ The recommended frozen core ISA for this branch is:
 - `NE`
 - `ADD`
 - `SUB`
+- `LT`
+- `LE`
+- `GT`
+- `GE`
+- `MIN`
+- `MAX`
+- `CLAMP`
+- `SEL`
 - `INC_INT <symbol>`
 - `DEC_INT <symbol>`
 
@@ -225,6 +241,14 @@ effect, and type behavior should not drift.
 | `NE` | none | `..., a, a -> ..., bool` | both operands must have the same scalar type | stack underflow, type mismatch |
 | `ADD` | none | `..., i16, i16 -> ..., i16` | `INT` only in the frozen core | stack underflow, type mismatch, arithmetic overflow if trapped |
 | `SUB` | none | `..., i16, i16 -> ..., i16` | `INT` only in the frozen core | stack underflow, type mismatch, arithmetic overflow if trapped |
+| `LT` | none | `..., i16, i16 -> ..., bool` | signed `INT` compare | stack underflow, type mismatch |
+| `LE` | none | `..., i16, i16 -> ..., bool` | signed `INT` compare | stack underflow, type mismatch |
+| `GT` | none | `..., i16, i16 -> ..., bool` | signed `INT` compare | stack underflow, type mismatch |
+| `GE` | none | `..., i16, i16 -> ..., bool` | signed `INT` compare | stack underflow, type mismatch |
+| `MIN` | none | `..., i16, i16 -> ..., i16` | signed `INT` compare/select | stack underflow, type mismatch |
+| `MAX` | none | `..., i16, i16 -> ..., i16` | signed `INT` compare/select | stack underflow, type mismatch |
+| `CLAMP` | none | `..., value, min, max -> ..., i16` | signed `INT` only | stack underflow, type mismatch |
+| `SEL` | none | `..., falseValue, trueValue, bool -> ..., a` | selects between same-typed stack values using top boolean | stack underflow, type mismatch |
 | `INC_INT` | `point symbol` | no stack use | point must resolve to writable `INT` | unresolved symbol, type mismatch, write fault |
 | `DEC_INT` | `point symbol` | no stack use | point must resolve to writable `INT` | unresolved symbol, type mismatch, write fault |
 | `DB` | raw bytes | implementation-defined | bring-up escape hatch only | bypasses source-level type guarantees |

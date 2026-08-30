@@ -64,6 +64,14 @@ namespace BigSisterNodeNet.Plc
         public const byte DecrementPointIntOpcode = 0x21;
         public const byte AddOpcode = 0x22;
         public const byte SubOpcode = 0x23;
+        public const byte LessThanOpcode = 0x24;
+        public const byte LessOrEqualOpcode = 0x25;
+        public const byte GreaterThanOpcode = 0x26;
+        public const byte GreaterOrEqualOpcode = 0x27;
+        public const byte MinOpcode = 0x28;
+        public const byte MaxOpcode = 0x29;
+        public const byte ClampOpcode = 0x2A;
+        public const byte SelectOpcode = 0x2B;
 
         public static PlcAssemblyResult Assemble(string source, PlcObjectFileOptions options)
         {
@@ -244,6 +252,46 @@ namespace BigSisterNodeNet.Plc
                         case "SUB":
                             RequireOperandCount(tokens, 1, lineNumber);
                             output.Add(SubOpcode);
+                            break;
+
+                        case "LT":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(LessThanOpcode);
+                            break;
+
+                        case "LE":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(LessOrEqualOpcode);
+                            break;
+
+                        case "GT":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(GreaterThanOpcode);
+                            break;
+
+                        case "GE":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(GreaterOrEqualOpcode);
+                            break;
+
+                        case "MIN":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(MinOpcode);
+                            break;
+
+                        case "MAX":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(MaxOpcode);
+                            break;
+
+                        case "CLAMP":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(ClampOpcode);
+                            break;
+
+                        case "SEL":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(SelectOpcode);
                             break;
 
                         case "INC_INT":

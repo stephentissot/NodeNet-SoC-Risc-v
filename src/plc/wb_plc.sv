@@ -71,6 +71,14 @@ module wb_plc #(
     localparam [7:0] OPCODE_DEC_INT16 = 8'h21;
     localparam [7:0] OPCODE_ADD = 8'h22;
     localparam [7:0] OPCODE_SUB = 8'h23;
+    localparam [7:0] OPCODE_LT = 8'h24;
+    localparam [7:0] OPCODE_LE = 8'h25;
+    localparam [7:0] OPCODE_GT = 8'h26;
+    localparam [7:0] OPCODE_GE = 8'h27;
+    localparam [7:0] OPCODE_MIN = 8'h28;
+    localparam [7:0] OPCODE_MAX = 8'h29;
+    localparam [7:0] OPCODE_CLAMP = 8'h2A;
+    localparam [7:0] OPCODE_SEL = 8'h2B;
     localparam [2:0] STACK_DEPTH_MAX = 3'd4;
 
     localparam [1:0] STACK_TYPE_NONE = 2'd0;
@@ -734,6 +742,142 @@ module wb_plc #(
                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]);
                                 stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_INT16;
                                 stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_LT: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) <
+                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16])) ? 16'd1 : 16'd0;
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_LE: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) <=
+                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16])) ? 16'd1 : 16'd0;
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_GT: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) >
+                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16])) ? 16'd1 : 16'd0;
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_GE: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) >=
+                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16])) ? 16'd1 : 16'd0;
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_MIN: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) <=
+                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]))
+                                        ? stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]
+                                        : stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_INT16;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_MAX: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) >=
+                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]))
+                                        ? stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]
+                                        : stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_INT16;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_CLAMP: begin
+                            if (stack_depth < 3'd3) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd3) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 16] <=
+                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 16]) <
+                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]))
+                                        ? stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]
+                                        : (($signed(stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 16]) >
+                                            $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]))
+                                               ? stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]
+                                               : stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 16]);
+                                stack_type[((stack_depth - 3'd3) << 1) +: 2] <= STACK_TYPE_INT16;
+                                stack_depth <= stack_depth - 3'd2;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_SEL: begin
+                            if (stack_depth < 3'd3) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL ||
+                                         stack_type[((stack_depth - 3'd3) << 1) +: 2] == STACK_TYPE_NONE ||
+                                         stack_type[((stack_depth - 3'd3) << 1) +: 2] != stack_type[((stack_depth - 3'd2) << 1) +: 2]) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 16] <=
+                                    stack_value[stack_value_bit_index(
+                                        stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] != 16'd0
+                                            ? (stack_depth - 3'd2)
+                                            : (stack_depth - 3'd3)) +: 16];
+                                stack_type[((stack_depth - 3'd3) << 1) +: 2] <=
+                                    stack_type[((stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] != 16'd0
+                                        ? (stack_depth - 3'd2)
+                                        : (stack_depth - 3'd3)) << 1) +: 2];
+                                stack_depth <= stack_depth - 3'd2;
                                 state <= ST_FETCH_OPCODE;
                             end
                         end

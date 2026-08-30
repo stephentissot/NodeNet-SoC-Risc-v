@@ -253,6 +253,46 @@ namespace BigSisterNodeNet.Plc
                         pc += 1;
                         break;
 
+                    case PlcMachineCodeAssembler.LessThanOpcode:
+                        builder.AppendLine("LT");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.LessOrEqualOpcode:
+                        builder.AppendLine("LE");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.GreaterThanOpcode:
+                        builder.AppendLine("GT");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.GreaterOrEqualOpcode:
+                        builder.AppendLine("GE");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.MinOpcode:
+                        builder.AppendLine("MIN");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.MaxOpcode:
+                        builder.AppendLine("MAX");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.ClampOpcode:
+                        builder.AppendLine("CLAMP");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.SelectOpcode:
+                        builder.AppendLine("SEL");
+                        pc += 1;
+                        break;
+
                     case PlcMachineCodeAssembler.PushInt16Opcode:
                         if ((pc + 2) >= codeBytes.Length)
                         {
@@ -362,7 +402,15 @@ namespace BigSisterNodeNet.Plc
                    value == PlcMachineCodeAssembler.IncrementPointIntOpcode ||
                                      value == PlcMachineCodeAssembler.DecrementPointIntOpcode ||
                                      value == PlcMachineCodeAssembler.AddOpcode ||
-                                     value == PlcMachineCodeAssembler.SubOpcode;
+                                     value == PlcMachineCodeAssembler.SubOpcode ||
+                                     value == PlcMachineCodeAssembler.LessThanOpcode ||
+                                     value == PlcMachineCodeAssembler.LessOrEqualOpcode ||
+                                     value == PlcMachineCodeAssembler.GreaterThanOpcode ||
+                                     value == PlcMachineCodeAssembler.GreaterOrEqualOpcode ||
+                                     value == PlcMachineCodeAssembler.MinOpcode ||
+                                     value == PlcMachineCodeAssembler.MaxOpcode ||
+                                     value == PlcMachineCodeAssembler.ClampOpcode ||
+                                     value == PlcMachineCodeAssembler.SelectOpcode;
         }
 
         private static string FormatOpcode(byte opcode)
@@ -413,6 +461,22 @@ namespace BigSisterNodeNet.Plc
                     return "ADD";
                 case PlcMachineCodeAssembler.SubOpcode:
                     return "SUB";
+                case PlcMachineCodeAssembler.LessThanOpcode:
+                    return "LT";
+                case PlcMachineCodeAssembler.LessOrEqualOpcode:
+                    return "LE";
+                case PlcMachineCodeAssembler.GreaterThanOpcode:
+                    return "GT";
+                case PlcMachineCodeAssembler.GreaterOrEqualOpcode:
+                    return "GE";
+                case PlcMachineCodeAssembler.MinOpcode:
+                    return "MIN";
+                case PlcMachineCodeAssembler.MaxOpcode:
+                    return "MAX";
+                case PlcMachineCodeAssembler.ClampOpcode:
+                    return "CLAMP";
+                case PlcMachineCodeAssembler.SelectOpcode:
+                    return "SEL";
                 default:
                     return "DB";
             }

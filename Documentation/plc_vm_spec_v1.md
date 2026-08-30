@@ -218,6 +218,12 @@ Implementation priority for the current freeze:
 - `float32` remains part of the versioned V1 contract, but its execution family
   may be deferred beyond the current branch
 
+Current Stage 4 extension on top of the frozen core:
+
+- ordered integer comparisons `LT`, `LE`, `GT`, `GE`
+- integer selection helpers `MIN`, `MAX`, `CLAMP`
+- stack selection helper `SEL` with a boolean condition at top of stack
+
 ### 2.3 Point Descriptor Table
 
 Each runtime point shall have one stable descriptor entry.

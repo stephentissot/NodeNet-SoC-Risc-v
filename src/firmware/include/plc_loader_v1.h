@@ -646,6 +646,14 @@ private:
                opcode == 0x0Cu ||
                opcode == 0x22u ||
                opcode == 0x23u ||
+               opcode == 0x24u ||
+               opcode == 0x25u ||
+               opcode == 0x26u ||
+               opcode == 0x27u ||
+               opcode == 0x28u ||
+               opcode == 0x29u ||
+               opcode == 0x2Au ||
+               opcode == 0x2Bu ||
                opcodeHasU16Operand(opcode);
     }
 
