@@ -176,8 +176,68 @@ namespace BigSisterNodeNet.Plc
                 var opcode = codeBytes[pc];
                 switch (opcode)
                 {
+                    case PlcMachineCodeAssembler.NopOpcode:
+                        builder.AppendLine("NOP");
+                        pc += 1;
+                        break;
+
                     case PlcMachineCodeAssembler.HaltOpcode:
                         builder.AppendLine("HALT");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.PushTrueOpcode:
+                        builder.AppendLine("PUSH_TRUE");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.PushFalseOpcode:
+                        builder.AppendLine("PUSH_FALSE");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.DupOpcode:
+                        builder.AppendLine("DUP");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.DropOpcode:
+                        builder.AppendLine("DROP");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.SwapOpcode:
+                        builder.AppendLine("SWAP");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.AndOpcode:
+                        builder.AppendLine("AND");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.OrOpcode:
+                        builder.AppendLine("OR");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.XorOpcode:
+                        builder.AppendLine("XOR");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.NotOpcode:
+                        builder.AppendLine("NOT");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.EqOpcode:
+                        builder.AppendLine("EQ");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.NeOpcode:
+                        builder.AppendLine("NE");
                         pc += 1;
                         break;
 
@@ -249,7 +309,19 @@ namespace BigSisterNodeNet.Plc
 
         private static bool IsInstructionOpcode(byte value)
         {
-            return value == PlcMachineCodeAssembler.HaltOpcode ||
+             return value == PlcMachineCodeAssembler.NopOpcode ||
+                 value == PlcMachineCodeAssembler.HaltOpcode ||
+                 value == PlcMachineCodeAssembler.PushTrueOpcode ||
+                 value == PlcMachineCodeAssembler.PushFalseOpcode ||
+                 value == PlcMachineCodeAssembler.DupOpcode ||
+                 value == PlcMachineCodeAssembler.DropOpcode ||
+                 value == PlcMachineCodeAssembler.SwapOpcode ||
+                                 value == PlcMachineCodeAssembler.AndOpcode ||
+                                 value == PlcMachineCodeAssembler.OrOpcode ||
+                                 value == PlcMachineCodeAssembler.XorOpcode ||
+                                 value == PlcMachineCodeAssembler.NotOpcode ||
+                                 value == PlcMachineCodeAssembler.EqOpcode ||
+                                 value == PlcMachineCodeAssembler.NeOpcode ||
                    value == PlcMachineCodeAssembler.LoadPointBoolOpcode ||
                    value == PlcMachineCodeAssembler.StorePointBoolOpcode ||
                    value == PlcMachineCodeAssembler.IncrementPointIntOpcode ||
@@ -260,6 +332,32 @@ namespace BigSisterNodeNet.Plc
         {
             switch (opcode)
             {
+                case PlcMachineCodeAssembler.NopOpcode:
+                    return "NOP";
+                case PlcMachineCodeAssembler.HaltOpcode:
+                    return "HALT";
+                case PlcMachineCodeAssembler.PushTrueOpcode:
+                    return "PUSH_TRUE";
+                case PlcMachineCodeAssembler.PushFalseOpcode:
+                    return "PUSH_FALSE";
+                case PlcMachineCodeAssembler.DupOpcode:
+                    return "DUP";
+                case PlcMachineCodeAssembler.DropOpcode:
+                    return "DROP";
+                case PlcMachineCodeAssembler.SwapOpcode:
+                    return "SWAP";
+                case PlcMachineCodeAssembler.AndOpcode:
+                    return "AND";
+                case PlcMachineCodeAssembler.OrOpcode:
+                    return "OR";
+                case PlcMachineCodeAssembler.XorOpcode:
+                    return "XOR";
+                case PlcMachineCodeAssembler.NotOpcode:
+                    return "NOT";
+                case PlcMachineCodeAssembler.EqOpcode:
+                    return "EQ";
+                case PlcMachineCodeAssembler.NeOpcode:
+                    return "NE";
                 case PlcMachineCodeAssembler.LoadPointBoolOpcode:
                     return "LOAD_BOOL";
                 case PlcMachineCodeAssembler.StorePointBoolOpcode:

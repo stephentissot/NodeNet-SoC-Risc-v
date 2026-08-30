@@ -39,7 +39,19 @@ namespace BigSisterNodeNet.Plc
             "clearFault",
         };
 
+        public const byte NopOpcode = 0x01;
         public const byte HaltOpcode = 0x00;
+        public const byte PushTrueOpcode = 0x02;
+        public const byte PushFalseOpcode = 0x03;
+        public const byte DupOpcode = 0x04;
+        public const byte DropOpcode = 0x05;
+        public const byte SwapOpcode = 0x06;
+        public const byte AndOpcode = 0x07;
+        public const byte OrOpcode = 0x08;
+        public const byte XorOpcode = 0x09;
+        public const byte NotOpcode = 0x0A;
+        public const byte EqOpcode = 0x0B;
+        public const byte NeOpcode = 0x0C;
         public const byte LoadPointBoolOpcode = 0x10;
         public const byte StorePointBoolOpcode = 0x11;
         public const byte IncrementPointIntOpcode = 0x20;
@@ -93,9 +105,69 @@ namespace BigSisterNodeNet.Plc
                             ParseVarDeclaration(tokens, lineNumber, result, symbolIndexByName);
                             break;
 
+                        case "NOP":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(NopOpcode);
+                            break;
+
                         case "HALT":
                             RequireOperandCount(tokens, 1, lineNumber);
                             output.Add(HaltOpcode);
+                            break;
+
+                        case "PUSH_TRUE":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(PushTrueOpcode);
+                            break;
+
+                        case "PUSH_FALSE":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(PushFalseOpcode);
+                            break;
+
+                        case "DUP":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(DupOpcode);
+                            break;
+
+                        case "DROP":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(DropOpcode);
+                            break;
+
+                        case "SWAP":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(SwapOpcode);
+                            break;
+
+                        case "AND":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(AndOpcode);
+                            break;
+
+                        case "OR":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(OrOpcode);
+                            break;
+
+                        case "XOR":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(XorOpcode);
+                            break;
+
+                        case "NOT":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(NotOpcode);
+                            break;
+
+                        case "EQ":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(EqOpcode);
+                            break;
+
+                        case "NE":
+                            RequireOperandCount(tokens, 1, lineNumber);
+                            output.Add(NeOpcode);
                             break;
 
                         case "LOAD_BOOL":

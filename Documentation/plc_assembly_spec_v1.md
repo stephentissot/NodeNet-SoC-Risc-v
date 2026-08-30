@@ -9,21 +9,40 @@ It separates three levels clearly:
 
 - syntax already accepted by the current desktop assembler
 - object-file and loader contracts already enforced by firmware
-- planned declaration forms reserved for the next toolchain step
+- the frozen instruction subset targeted by `plc_vm step 2`
+- planned instruction families explicitly reserved for later phases
 
 The goal is to keep source syntax stable while allowing the firmware loader to
 resolve symbols to runtime point indices when a slot is loaded.
 
 ## Current Status
 
+Repository baseline today:
+
+- the merged project state is `PLC Ready with V0 basic ISA`
+- the current assembler and runtime subset is intentionally small and proven on
+  the existing firmware-first path
+
 Implemented today:
 
 - `CONST POINT_ID <symbol>, <deviceId.feature.pointId>`
 - `PARAM POINT_ID <symbol>`
 - `VAR <type> <name>`
+- `NOP`
 - `HALT`
+- `PUSH_TRUE`
+- `PUSH_FALSE`
+- `DUP`
+- `DROP`
+- `SWAP`
 - `LOAD_BOOL <symbol>`
 - `STORE_BOOL <symbol>`
+- `AND`
+- `OR`
+- `XOR`
+- `NOT`
+- `EQ`
+- `NE`
 - `INC_INT <symbol>`
 - `DEC_INT <symbol>`
 - `DB <byte0>, <byte1>, ...`
@@ -35,10 +54,20 @@ Supported by the firmware loader in this step:
 - automatic mapping of slot-local variables to dynamic local points under
   `deviceId.plc.slotN.<varName>` at slot load time
 
-Not yet emitted by the current desktop assembler:
+Step 2 objective for this document:
 
-- typed arithmetic, branch, timer, or float instructions beyond the current
-  boolean subset
+- freeze one useful and HDL-friendly core ISA
+- define one unambiguous stack-based execution model
+- classify remaining instruction families as either `step 2 core` or
+  `reserved for later`
+
+Reserved for later phases unless explicitly promoted by a follow-up branch:
+
+- ordered comparisons beyond equality
+- timer and event primitives
+- general control flow beyond straight-line scans
+- float execution
+- wide integer utilities that add hardware cost without immediate bring-up value
 
 ## Source File Structure
 
@@ -83,6 +112,115 @@ The PLC runtime currently defines these scalar value types:
 
 V1 slot-local variables are intentionally restricted to scalar types. Strings are
 excluded.
+
+## Step 2 Execution Model
+
+The frozen execution model for `plc_vm step 2` is a typed stack machine.
+
+Rules:
+
+- there is one operand stack per slot
+- the top of stack is the only implicit operand source and destination
+- there is no separate accumulator in the frozen model
+- `LOAD_*` instructions push one typed value on the operand stack
+- `STORE_*` instructions consume one typed value from the operand stack and
+  stage the write for commit at scan end
+- unary operators consume one value and push one result
+- binary operators consume the top two values and push one result
+- `INC_INT` and `DEC_INT` remain special single-operand memory update
+  instructions for the current compact profile
+- a stack type mismatch, stack underflow, invalid opcode, or invalid point type
+  shall fault the active slot
+
+Step 2 keeps straight-line scan execution only:
+
+- execution starts at bytecode offset `0`
+- execution stops on `HALT` or on fault
+- there is no branch, call, or loop instruction in the frozen core subset
+
+## Step 2 Frozen Core ISA
+
+The recommended frozen core ISA for this branch is:
+
+### Declarations
+
+- `CONST POINT_ID`
+- `PARAM POINT_ID`
+- `VAR`
+
+### Control
+
+- `NOP`
+- `HALT`
+
+### Stack and literals
+
+- `PUSH_TRUE`
+- `PUSH_FALSE`
+- `PUSH_I16 imm16`
+- `DUP`
+- `DROP`
+- `SWAP`
+
+### Point access
+
+- `LOAD_BOOL <symbol>`
+- `STORE_BOOL <symbol>`
+- `LOAD_I16 <symbol>`
+- `STORE_I16 <symbol>`
+
+### Boolean and integer core
+
+- `AND`
+- `OR`
+- `XOR`
+- `NOT`
+- `EQ`
+- `NE`
+- `ADD`
+- `SUB`
+- `INC_INT <symbol>`
+- `DEC_INT <symbol>`
+
+Instruction families reserved but not part of the frozen step 2 core:
+
+- `LOAD_U16`, `STORE_U16`, `LOAD_U32`, `STORE_U32`, `LOAD_I32`, `STORE_I32`
+- `LT`, `LE`, `GT`, `GE`, `NEG`, `ABS`, `MIN`, `MAX`, `CLAMP`, `SEL`
+- `JMP`, `JZ`, `JNZ`, `CALL`, `RET`
+- timer, counter, and edge primitives
+- float load/store, compare, arithmetic, and conversion families
+
+## Step 2 Core Opcode Contract
+
+This table is the frozen semantic contract for the core subset. Encodings may
+still be assigned or refined during implementation, but operand shape, stack
+effect, and type behavior should not drift.
+
+| Mnemonic | Operands | Stack effect | Type rules | Fault cases |
+| --- | --- | --- | --- | --- |
+| `NOP` | none | no change | none | invalid opcode only |
+| `HALT` | none | stop scan | none | none |
+| `PUSH_TRUE` | none | `... -> ..., bool` | pushes `true` | stack overflow |
+| `PUSH_FALSE` | none | `... -> ..., bool` | pushes `false` | stack overflow |
+| `PUSH_I16` | `imm16` | `... -> ..., i16` | sign-extended literal | stack overflow |
+| `DUP` | none | `..., a -> ..., a, a` | duplicates top value with same type | stack underflow, stack overflow |
+| `DROP` | none | `..., a -> ...` | removes top value | stack underflow |
+| `SWAP` | none | `..., a, b -> ..., b, a` | preserves both operand types | stack underflow |
+| `LOAD_BOOL` | `point symbol` | `... -> ..., bool` | source point must resolve to `BOOL` | unresolved symbol, type mismatch, read fault, stack overflow |
+| `STORE_BOOL` | `point symbol` | `..., bool -> ...` | target point must resolve to writable `BOOL` | unresolved symbol, type mismatch, write fault, stack underflow |
+| `LOAD_I16` | `point symbol` | `... -> ..., i16` | source point must resolve to `INT` | unresolved symbol, type mismatch, read fault, stack overflow |
+| `STORE_I16` | `point symbol` | `..., i16 -> ...` | target point must resolve to writable `INT` | unresolved symbol, type mismatch, write fault, stack underflow |
+| `AND` | none | `..., bool, bool -> ..., bool` | boolean only | stack underflow, type mismatch |
+| `OR` | none | `..., bool, bool -> ..., bool` | boolean only | stack underflow, type mismatch |
+| `XOR` | none | `..., bool, bool -> ..., bool` | boolean only | stack underflow, type mismatch |
+| `NOT` | none | `..., bool -> ..., bool` | boolean only | stack underflow, type mismatch |
+| `EQ` | none | `..., a, a -> ..., bool` | both operands must have the same scalar type | stack underflow, type mismatch |
+| `NE` | none | `..., a, a -> ..., bool` | both operands must have the same scalar type | stack underflow, type mismatch |
+| `ADD` | none | `..., i16, i16 -> ..., i16` | `INT` only in the frozen core | stack underflow, type mismatch, arithmetic overflow if trapped |
+| `SUB` | none | `..., i16, i16 -> ..., i16` | `INT` only in the frozen core | stack underflow, type mismatch, arithmetic overflow if trapped |
+| `INC_INT` | `point symbol` | no stack use | point must resolve to writable `INT` | unresolved symbol, type mismatch, write fault |
+| `DEC_INT` | `point symbol` | no stack use | point must resolve to writable `INT` | unresolved symbol, type mismatch, write fault |
+| `DB` | raw bytes | implementation-defined | bring-up escape hatch only | bypasses source-level type guarantees |
 
 ## Declarations
 
@@ -254,8 +392,7 @@ Encoding:
 Behavior:
 
 - reads one boolean point identified by `<symbol>`
-- pushes or accumulates that boolean according to the current VM execution
-  model
+- pushes that boolean onto the operand stack
 
 Source operand rules:
 
@@ -291,8 +428,8 @@ Encoding:
 
 Behavior:
 
-- writes the current boolean accumulator or top-of-stack value to the target
-  boolean point
+- pops one boolean from the operand stack and stages a write to the target
+  point for commit at scan end
 
 Source operand rules:
 
@@ -387,12 +524,11 @@ Current V1 restriction:
 
 - the target point must resolve to runtime type `Int16`
 
-## HDL-Oriented Instruction Roadmap
+## Frozen Core And Recommended Expansion Order
 
-The long-term goal may be to migrate part of the PLC execution engine from the
-current firmware VM toward HDL-managed execution or acceleration. For that
-reason, the most useful instruction roadmap is not only semantic but also
-ranked by hardware implementation cost.
+The long-term goal remains to migrate PLC execution toward HDL-managed
+execution. For `plc_vm step 2`, the most useful roadmap is the one that balances
+hardware implementation cost and immediate programming value.
 
 The ranking below assumes a modest HDL engine first:
 
@@ -402,122 +538,478 @@ The ranking below assumes a modest HDL engine first:
   or register interface
 - no speculative execution, no deep pipeline, no out-of-order behavior
 
+Current hardware constraint for implementation planning:
+
+- the current FPGA build is already close to BRAM saturation, with DP16KD usage
+  around `87%`
+- this matters not only for fit margin, but also for build iteration time,
+  because `nextpnr-ecp5` routing cost rises sharply near BRAM saturation
+- stage ordering should therefore minimize new dedicated memories until the core
+  execution contract is proven stable
+
+Practical consequences for `plc_vm step 2`:
+
+- prefer register-based or shallow LUTRAM-based operand stacks for the first
+  core profile
+- avoid increasing stack depth, timer tables, trace buffers, or per-slot scratch
+  RAM before the core ISA is validated
+- prefer opcodes that reuse one compact integer/boolean datapath over features
+  that require new state memories
+- defer timer families, float execution, and large diagnostics buffers unless a
+  measured bring-up need justifies the BRAM cost
+- when two designs are functionally equivalent, prefer the one that reduces
+  DP16KD growth even if it costs a little more control logic or cycles
+
 In that model, "simple" means:
 
 - few source operands
 - fixed-width encoding
 - no expensive divider, multiplier, or float unit
 - no wide comparator trees beyond basic integer compares
-- no hidden multi-cycle state beyond straightforward timers
+- no hidden multi-cycle state beyond explicit state machines
 
-### Tier 0: Already Implemented And HDL-Friendly
+### Stage 1: Foundation And First Useful Writes
 
-These instructions already exist and also happen to be the easiest base for a
-future HDL engine:
-
-- `HALT`
-- `LOAD_BOOL <symbol>`
-- `STORE_BOOL <symbol>`
-- `INC_INT <symbol>`
-- `DEC_INT <symbol>`
-- `DB ...` for bring-up only, not as a stable language feature
-
-Why they are simple in HDL:
-
-- one opcode plus at most one relocated point operand
-- no immediate ALU datapath except `+1` and `-1`
-- no branches, stack juggling, or type conversion
-
-### Tier 1: Lowest HDL Cost Expansion
-
-These should be the first future additions if the objective is HDL simplicity.
-
-Recommended instructions:
+Recommended implementation set:
 
 - `NOP`
-- `LOAD_U16 <symbol>`
-- `STORE_U16 <symbol>`
-- `LOAD_I16 <symbol>`
-- `STORE_I16 <symbol>`
-- `LOAD_U32 <symbol>`
-- `STORE_U32 <symbol>`
-- `LOAD_I32 <symbol>`
-- `STORE_I32 <symbol>`
+- `HALT`
 - `PUSH_TRUE`
 - `PUSH_FALSE`
-- `PUSH_U16 imm16`
-- `PUSH_I16 imm16`
-- `PUSH_U32 imm32`
-- `PUSH_I32 imm32`
 - `DUP`
 - `DROP`
 - `SWAP`
+- `LOAD_BOOL <symbol>`
+- `STORE_BOOL <symbol>`
+
+Why this stage goes first:
+
+- it freezes the stack contract early
+- it enables the first real end-to-end validation programs
+- it stays close to the already implemented boolean path
+
+Validation programs:
+
+Nominal program, expected result: one scan completes without fault and the
+commit phase drives `y = true`.
+
+```text
+CONST POINT_ID y, demo.sim.output0
+
+PUSH_TRUE
+STORE_BOOL y
+HALT
+```
+
+Fault program, expected result: the slot faults with stack underflow before any
+write is committed.
+
+```text
+CONST POINT_ID y, demo.sim.output0
+
+STORE_BOOL y
+HALT
+```
+
+Stack manipulation program, expected result: one scan completes without fault,
+`DUP` preserves one copy of the pushed boolean for `STORE_BOOL`, and `DROP`
+empties the stack before `HALT`.
+
+```text
+CONST POINT_ID y, demo.sim.output0
+
+PUSH_TRUE
+DUP
+STORE_BOOL y
+DROP
+HALT
+```
+
+False literal program, expected result: one scan completes without fault and
+the commit phase drives `y = false`.
+
+```text
+CONST POINT_ID y, demo.sim.output0
+
+PUSH_FALSE
+STORE_BOOL y
+HALT
+```
+
+Read then write program, expected result: one scan completes without fault and
+the target output mirrors the current boolean value of the source point.
+
+```text
+CONST POINT_ID x, demo.sim.input0
+CONST POINT_ID y, demo.sim.output0
+
+LOAD_BOOL x
+STORE_BOOL y
+HALT
+```
+
+Swap program, expected result: one scan completes without fault, `SWAP`
+exchanges the top two booleans, and `STORE_BOOL` consumes the swapped top value.
+
+```text
+CONST POINT_ID y, demo.sim.output0
+
+PUSH_TRUE
+PUSH_FALSE
+SWAP
+STORE_BOOL y
+DROP
+HALT
+```
+
+Implementation checklist:
+
+- Desktop assembler (`tools/BigSisterNodeNet.Plc`): accept `NOP`, `PUSH_TRUE`,
+  `PUSH_FALSE`, `DUP`, `DROP`, `SWAP`; add opcode emission; reject wrong
+  operand counts; keep `objectFileV1` relocation rules unchanged for
+  `LOAD_BOOL` and `STORE_BOOL`.
+- Object file contract: freeze opcode numbers and operand widths for the stage 1
+  instructions; ensure raw disassembly can reconstruct the emitted mnemonics.
+- Firmware loader (`PlcSlotLoaderV1`): validate that stage 1 images contain only
+  accepted stage 1 opcodes when the target execution profile is `core-step2`;
+  keep point relocation/type validation for `BOOL` operands.
+- Shared ABI contract ([src/firmware/include/plc_runtime_abi.h](src/firmware/include/plc_runtime_abi.h)): confirm boolean point descriptors and write-queue semantics remain sufficient for staged `STORE_BOOL` commits.
+- Execution engine (`src/plc/wb_plc.sv` or the firmware validation executor): add
+  a typed operand stack, top-of-stack register handling, underflow/overflow
+  faults, `NOP`, literal pushes, and simple stack shuffles.
+- Validation: assemble the nominal program, load it as `objectFileV1`, run one
+  scan, and verify that the target output becomes `true` only after the commit
+  phase.
+- Validation: assemble the fault program, run one scan, verify the slot stops
+  in `FAULT_STACK_UNDERFLOW`, and confirm that the target output is left
+  unchanged because no commit is performed.
+- Validation: assemble the stack manipulation program, run one scan, verify
+  that the target output becomes `true`, and confirm that no fault is raised by
+  the `DUP`/`DROP` sequence.
+- Validation: assemble the false literal program, run one scan, and verify that
+  the target output becomes `false` without raising a fault.
+- Validation: assemble the read then write program, run one scan, and verify
+  that `LOAD_BOOL` plus `STORE_BOOL` reproduces the source input state at the
+  target output.
+- Validation: assemble the swap program, run one scan, and verify that the
+  committed output matches the swapped top-of-stack value without fault.
+
+Batching note for next work after Stage 1 validation:
+
+- Stage 1 can be treated as closed once the nominal, underflow, `DUP/DROP`,
+  `PUSH_FALSE`, `LOAD_BOOL`, and `SWAP` checks all pass on hardware.
+- Because HDL build time dominates board-side testing, the next implementation
+  batch should group the full boolean ALU slice together: `AND`, `OR`, `XOR`,
+  `NOT`, `EQ`, and `NE`.
+- Keep the next batch inside one datapath family before moving on to integer
+  stack work, so one synthesis cycle buys a meaningful amount of user-visible
+  instruction coverage.
+
+### Stage 2: Boolean Logic That Solves Real Wiring Problems
+
+Current branch status:
+
+- assembler/disassembler, firmware loader opcode validation, and `wb_plc`
+  execution support are now implemented for this batch
+- hardware validation passed for `AND`, `OR`, `XOR`, `NOT`, `EQ`, and `NE`
+
+Recommended implementation set:
+
 - `AND`
 - `OR`
 - `XOR`
 - `NOT`
 - `EQ`
 - `NE`
+
+Why this stage is high value:
+
+- it already covers interlocks, masks, and simple relay-like logic
+- the hardware cost stays low because everything is boolean or equality-based
+
+Validation program:
+
+```text
+PARAM POINT_ID start
+PARAM POINT_ID enable
+CONST POINT_ID y, demo.sim.output0
+
+LOAD_BOOL start
+LOAD_BOOL enable
+AND
+STORE_BOOL y
+HALT
+```
+
+Validation programs:
+
+AND / OR program, expected result: one scan completes without fault, `and_out`
+receives `start AND enable`, and `or_out` receives `start OR enable`.
+
+```text
+PARAM POINT_ID start
+PARAM POINT_ID enable
+CONST POINT_ID and_out, demo.sim.output0
+CONST POINT_ID or_out, demo.sim.output1
+
+LOAD_BOOL start
+LOAD_BOOL enable
+AND
+STORE_BOOL and_out
+
+LOAD_BOOL start
+LOAD_BOOL enable
+OR
+STORE_BOOL or_out
+HALT
+```
+
+XOR / NOT program, expected result: one scan completes without fault,
+`xor_out` receives `left XOR right`, and `not_out` receives `NOT left`.
+
+```text
+PARAM POINT_ID left
+PARAM POINT_ID right
+CONST POINT_ID xor_out, demo.sim.output0
+CONST POINT_ID not_out, demo.sim.output1
+
+LOAD_BOOL left
+LOAD_BOOL right
+XOR
+STORE_BOOL xor_out
+
+LOAD_BOOL left
+NOT
+STORE_BOOL not_out
+HALT
+```
+
+EQ / NE program, expected result: one scan completes without fault, `eq_out`
+goes true only when both inputs are equal, and `ne_out` goes true only when
+they differ.
+
+```text
+PARAM POINT_ID a
+PARAM POINT_ID b
+CONST POINT_ID eq_out, demo.sim.output0
+CONST POINT_ID ne_out, demo.sim.output1
+
+LOAD_BOOL a
+LOAD_BOOL b
+EQ
+STORE_BOOL eq_out
+
+LOAD_BOOL a
+LOAD_BOOL b
+NE
+STORE_BOOL ne_out
+HALT
+```
+
+Compact hardware validation matrix:
+
+Use the same four input combinations for the three programs above.
+
+| In0 | In1 | `AND` | `OR` | `XOR` | `NOT In0` | `EQ` | `NE` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `false` | `false` | `false` | `false` | `false` | `true` | `true` | `false` |
+| `false` | `true` | `false` | `true` | `true` | `true` | `false` | `true` |
+| `true` | `false` | `false` | `true` | `true` | `false` | `false` | `true` |
+| `true` | `true` | `true` | `true` | `false` | `false` | `true` | `false` |
+
+Suggested board-side procedure:
+
+- load the AND / OR program and verify both outputs across the four input combinations
+- load the XOR / NOT program and verify both outputs across the same four combinations
+- load the EQ / NE program and verify the two outputs remain complementary for all four combinations
+- if a result is wrong, capture `faultCode`, `faultInfo`, and the committed output states before changing inputs again
+
+Implementation checklist:
+
+- Desktop assembler (`tools/BigSisterNodeNet.Plc`): add mnemonic parsing and
+  opcode emission for `AND`, `OR`, `XOR`, `NOT`, `EQ`, `NE`; enforce zero
+  explicit operands for these operators.
+- Object file contract: document stack-only operand behavior for stage 2
+  operators so no hidden accumulator encoding survives in tooling.
+- Firmware loader (`PlcSlotLoaderV1`): extend opcode acceptance table; keep
+  equality restricted to same-type operands in the frozen core profile.
+- Execution engine (`src/plc/wb_plc.sv` or the firmware validation executor):
+  implement binary boolean operators and unary `NOT`; emit deterministic faults
+  on type mismatch or stack underflow.
+- Runtime status/fault reporting: assign stable slot fault codes for invalid
+  boolean ALU use so loader and runtime failures are distinguishable.
+- Validation: run the AND / OR program and verify the full truth table for both
+  outputs across all four input combinations.
+- Validation: run the XOR / NOT program and verify `XOR` matches the expected
+  two-input truth table while `NOT` inverts the source input.
+- Validation: run the EQ / NE program and verify `EQ` and `NE` produce
+  complementary outputs for both equal and unequal input states.
+
+### Stage 3: Integer State And Counters
+
+Recommended implementation set:
+
+- `PUSH_I16 imm16`
+- `LOAD_I16 <symbol>`
+- `STORE_I16 <symbol>`
 - `ADD`
 - `SUB`
-- `INC`
-- `DEC`
+- `INC_INT <symbol>`
+- `DEC_INT <symbol>`
 
-Why this tier is still cheap:
+Why this stage follows immediately:
 
-- operations are boolean or integer-only
-- arithmetic can reuse one adder/subtractor datapath
-- stack ops are local register or small RAM moves
-- equality logic is straightforward
+- counters and accumulators are among the first useful PLC patterns
+- the datapath still fits a compact integer ALU
+- it validates typed stack behavior beyond booleans
 
-### Tier 2: Still Reasonable In HDL, But Needs Better ALU Control
+Validation program:
 
-These instructions remain practical without dedicated heavy hardware, but they
-need clearer signedness rules and more comparator paths.
+```text
+PARAM POINT_ID inputA
+PARAM POINT_ID inputB
+CONST POINT_ID total, demo.plc.slot0.total
 
-Recommended instructions:
+LOAD_I16 inputA
+LOAD_I16 inputB
+ADD
+STORE_I16 total
+HALT
+```
+
+Implementation checklist:
+
+- Desktop assembler (`tools/BigSisterNodeNet.Plc`): add `PUSH_I16`, `LOAD_I16`,
+  `STORE_I16`, `ADD`, and `SUB`; preserve existing `INC_INT` and `DEC_INT`
+  source syntax as direct point-targeted instructions.
+- Object file contract: freeze `imm16` encoding, signed interpretation, and the
+  exact encoding difference between stack ALU instructions and direct memory
+  update instructions.
+- Firmware loader (`PlcSlotLoaderV1`): validate `INT` point operands for
+  `LOAD_I16`, `STORE_I16`, `INC_INT`, and `DEC_INT`; reject `BOOL`, `ENUM`, or
+  `UINT16` bindings in the frozen core profile.
+- Shared ABI contract ([src/firmware/include/plc_runtime_abi.h](src/firmware/include/plc_runtime_abi.h)): confirm `Int16` load/store paths and queue publication are already sufficient for integer commits.
+- Execution engine (`src/plc/wb_plc.sv` or the firmware validation executor):
+  add typed integer stack entries, signed add/subtract behavior, and clear
+  overflow policy; keep `INC_INT` and `DEC_INT` as specialized read-modify-write
+  helpers if that stays cheaper than lowering them to `LOAD/ADD/STORE`.
+- Firmware-side runtime application ([src/firmware/lib/plc/PlcCore.cpp](src/firmware/lib/plc/PlcCore.cpp)): reuse `readRuntimeInt16()` and `commitRuntimeInt16()` as the behavioral oracle for bring-up validation.
+- Validation: run the sample addition program, then a second program using
+  `INC_INT` on a slot-local `VAR INT counter`, and verify the committed value
+  increments by exactly one per scan.
+
+### Stage 4: Ordered Compare And Selection Family
+
+Recommended implementation set:
 
 - `LT`
 - `LE`
 - `GT`
 - `GE`
-- `NEG`
-- `ABS`
 - `MIN`
 - `MAX`
 - `CLAMP`
 - `SEL`
-- `LOAD_ENUM <symbol>`
-- `STORE_ENUM <symbol>`
-- `SHL`
-- `SHR`
-- `SAR`
-- `TEST_BIT imm8`
-- `SET_BIT imm8`
-- `CLEAR_BIT imm8`
 
-Why this tier is moderate:
+Why this stage is worth doing before control flow:
 
-- signed and unsigned compare behavior must be specified exactly
-- shifts need either a barrel shifter or iterative multi-cycle logic
-- `MIN`/`MAX`/`CLAMP` combine compare plus select datapaths
+- threshold alarms and bounded arithmetic are immediately useful
+- compares unlock many real PLC decisions without yet needing branches
+- hardware cost is still moderate compared with timers or float
 
-### Tier 3: Control Flow, Very Valuable But More Structural In HDL
+Validation program:
 
-These instructions greatly improve language expressiveness, but they force the
-HDL engine to own `pc` updates, relative offsets, and branch conditions.
+```text
+PARAM POINT_ID pv
+CONST POINT_ID alarm, demo.sim.output1
 
-Recommended instructions:
+LOAD_I16 pv
+PUSH_I16 80
+GE
+STORE_BOOL alarm
+HALT
+```
+
+Implementation checklist:
+
+- Desktop assembler (`tools/BigSisterNodeNet.Plc`): add `LT`, `LE`, `GT`, `GE`,
+  `MIN`, `MAX`, `CLAMP`, and `SEL`; define mnemonic signatures now even if a
+  subset lands first.
+- Object file contract: freeze signedness rules for ordered comparisons and the
+  stack signature of `SEL` before HDL work starts.
+- Firmware loader (`PlcSlotLoaderV1`): enforce that ordered compare operands use
+  the same supported scalar type inside the active execution profile.
+- Execution engine (`src/plc/wb_plc.sv` or the firmware validation executor):
+  add comparator results as boolean stack values; implement `MIN/MAX/CLAMP` only
+  after compare behavior is proven stable.
+- Validation sequence: first validate `GE` with the sample threshold program,
+  then add dedicated micro-tests for `LT` boundary cases and `CLAMP` saturation
+  behavior.
+
+### Stage 5: Control Flow
+
+Recommended implementation set:
 
 - `JMP rel16`
 - `JZ rel16`
 - `JNZ rel16`
-- `JG rel16`
-- `JGE rel16`
-- `JL rel16`
-- `JLE rel16`
-- `CALL rel16`
-- `RET`
+- optionally `CALL rel16` and `RET` in a separate follow-up slice
+
+Why this stage is later:
+
+- it changes the VM structure, not just the ALU surface
+- it requires stable branch encoding, offset rules, and fault handling
+- many first validation programs can already run without it
+
+Validation program:
+
+```text
+PARAM POINT_ID enable
+CONST POINT_ID y, demo.sim.output0
+
+LOAD_BOOL enable
+JZ disabled
+PUSH_TRUE
+STORE_BOOL y
+HALT
+
+disabled:
+PUSH_FALSE
+STORE_BOOL y
+HALT
+```
+
+Implementation checklist:
+
+- Desktop assembler (`tools/BigSisterNodeNet.Plc`): add label parsing, relative
+  offset resolution, and relocation-independent branch encoding for `JMP`, `JZ`,
+  and `JNZ`.
+- Object file contract: freeze branch offset origin, signed range, and whether
+  offsets are byte-based or instruction-based.
+- Firmware loader (`PlcSlotLoaderV1`): validate branch targets remain inside the
+  code section after linking and reject malformed offsets before slot start.
+- Execution engine (`src/plc/wb_plc.sv` or the firmware validation executor):
+  update `pc` from relative offsets, pop branch conditions for `JZ/JNZ`, and add
+  deterministic faults for invalid target addresses.
+- Runtime diagnostics: expose branch-fault visibility in slot state so a bad
+  object file is distinguishable from a point-type failure.
+- Validation: run the sample program, verify both taken and non-taken paths, and
+  add one negative program with an out-of-range target that must fault before
+  partial outputs commit.
+
+### Deferred Beyond Step 2 Core
+
+Keep these out of the frozen core unless there is a direct hardware need:
+
+- timer and event primitives such as `TON_*`, `TOF_*`, `TP_*`, `R_TRIG`, `F_TRIG`
+- multiply, divide, modulo, and wide shifts
+- float load/store, compare, arithmetic, and conversion
+
+Why they are deferred:
+
+- timers need explicit per-slot state and time semantics
+- multiply and divide expand the datapath cost for limited early value
+- float support is valuable, but it is the heaviest execution family to verify
 - `LOOP rel16`
 
 Why this tier is more structural:

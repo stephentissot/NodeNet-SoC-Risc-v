@@ -50,10 +50,23 @@ module wb_plc #(
     localparam [31:0] SLOT_STATUS_FAULTED = 32'h8000_0000;
 
     localparam [7:0] OPCODE_HALT = 8'h00;
+    localparam [7:0] OPCODE_NOP = 8'h01;
+    localparam [7:0] OPCODE_PUSH_TRUE = 8'h02;
+    localparam [7:0] OPCODE_PUSH_FALSE = 8'h03;
+    localparam [7:0] OPCODE_DUP = 8'h04;
+    localparam [7:0] OPCODE_DROP = 8'h05;
+    localparam [7:0] OPCODE_SWAP = 8'h06;
+    localparam [7:0] OPCODE_AND = 8'h07;
+    localparam [7:0] OPCODE_OR = 8'h08;
+    localparam [7:0] OPCODE_XOR = 8'h09;
+    localparam [7:0] OPCODE_NOT = 8'h0A;
+    localparam [7:0] OPCODE_EQ = 8'h0B;
+    localparam [7:0] OPCODE_NE = 8'h0C;
     localparam [7:0] OPCODE_LOAD_BOOL = 8'h10;
     localparam [7:0] OPCODE_STORE_BOOL = 8'h11;
     localparam [7:0] OPCODE_INC_INT16 = 8'h20;
     localparam [7:0] OPCODE_DEC_INT16 = 8'h21;
+    localparam [2:0] BOOL_STACK_DEPTH_MAX = 3'd4;
 
     localparam [7:0] RUNTIME_TYPE_BOOL = 8'd1;
     localparam [7:0] RUNTIME_TYPE_INT16 = 8'd3;
@@ -69,6 +82,8 @@ module wb_plc #(
     localparam [31:0] FAULT_POINT_INDEX_OUT_OF_RANGE = 32'h0000_0004;
     localparam [31:0] FAULT_TYPE_MISMATCH = 32'h0000_0005;
     localparam [31:0] FAULT_WRITE_REJECTED = 32'h0000_000D;
+    localparam [31:0] FAULT_STACK_UNDERFLOW = 32'h0000_000E;
+    localparam [31:0] FAULT_STACK_OVERFLOW = 32'h0000_000F;
     localparam [31:0] FAULT_SCAN_BUDGET_EXCEEDED = 32'h0000_000A;
 
     localparam [5:0] ST_IDLE = 6'd0;
@@ -138,7 +153,9 @@ module wb_plc #(
     reg [31:0] slot_entry_pc;
     reg [31:0] current_pc;
     reg [31:0] instruction_count;
-    reg        accumulator;
+    reg [3:0]  bool_stack;
+    reg [2:0]  bool_stack_depth;
+    reg        pending_bool_value;
     reg [7:0]  current_opcode;
     reg [15:0] current_runtime_index;
     reg [7:0]  desc_value_type;
@@ -287,7 +304,9 @@ module wb_plc #(
             slot_entry_pc <= 32'd0;
             current_pc <= 32'd0;
             instruction_count <= 32'd0;
-            accumulator <= 1'b0;
+            bool_stack <= 4'd0;
+            bool_stack_depth <= 3'd0;
+            pending_bool_value <= 1'b0;
             current_opcode <= 8'd0;
             current_runtime_index <= 16'd0;
             desc_value_type <= 8'd0;
@@ -434,7 +453,9 @@ module wb_plc #(
                         slot_entry_pc <= (cb_pc < cb_bytecode_size) ? cb_pc : 32'd0;
                         current_pc <= (cb_pc < cb_bytecode_size) ? cb_pc : 32'd0;
                         instruction_count <= 32'd0;
-                        accumulator <= 1'b0;
+                        bool_stack <= 4'd0;
+                        bool_stack_depth <= 3'd0;
+                        pending_bool_value <= 1'b0;
                         cached_word_valid <= 1'b0;
                         state <= ST_FETCH_OPCODE;
                     end
@@ -506,6 +527,114 @@ module wb_plc #(
 
                 ST_DECODE: begin
                     case (current_opcode)
+                        OPCODE_NOP: state <= ST_FETCH_OPCODE;
+                        OPCODE_PUSH_TRUE: begin
+                            if (bool_stack_depth >= BOOL_STACK_DEPTH_MAX) begin
+                                begin_fault(FAULT_STACK_OVERFLOW, bool_stack_depth);
+                            end else begin
+                                bool_stack[bool_stack_depth] <= 1'b1;
+                                bool_stack_depth <= bool_stack_depth + 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_PUSH_FALSE: begin
+                            if (bool_stack_depth >= BOOL_STACK_DEPTH_MAX) begin
+                                begin_fault(FAULT_STACK_OVERFLOW, bool_stack_depth);
+                            end else begin
+                                bool_stack[bool_stack_depth] <= 1'b0;
+                                bool_stack_depth <= bool_stack_depth + 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_DUP: begin
+                            if (bool_stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (bool_stack_depth >= BOOL_STACK_DEPTH_MAX) begin
+                                begin_fault(FAULT_STACK_OVERFLOW, bool_stack_depth);
+                            end else begin
+                                bool_stack[bool_stack_depth] <= bool_stack[bool_stack_depth - 3'd1];
+                                bool_stack_depth <= bool_stack_depth + 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_DROP: begin
+                            if (bool_stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else begin
+                                bool_stack_depth <= bool_stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_SWAP: begin
+                            if (bool_stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else begin
+                                case (bool_stack_depth)
+                                    3'd2: bool_stack[1:0] <= {bool_stack[0], bool_stack[1]};
+                                    3'd3: bool_stack[2:0] <= {bool_stack[1], bool_stack[2], bool_stack[0]};
+                                    default: bool_stack[3:0] <= {bool_stack[2], bool_stack[3], bool_stack[1], bool_stack[0]};
+                                endcase
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_AND: begin
+                            if (bool_stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else begin
+                                bool_stack[bool_stack_depth - 3'd2] <=
+                                    bool_stack[bool_stack_depth - 3'd2] & bool_stack[bool_stack_depth - 3'd1];
+                                bool_stack_depth <= bool_stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_OR: begin
+                            if (bool_stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else begin
+                                bool_stack[bool_stack_depth - 3'd2] <=
+                                    bool_stack[bool_stack_depth - 3'd2] | bool_stack[bool_stack_depth - 3'd1];
+                                bool_stack_depth <= bool_stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_XOR: begin
+                            if (bool_stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else begin
+                                bool_stack[bool_stack_depth - 3'd2] <=
+                                    bool_stack[bool_stack_depth - 3'd2] ^ bool_stack[bool_stack_depth - 3'd1];
+                                bool_stack_depth <= bool_stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_NOT: begin
+                            if (bool_stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else begin
+                                bool_stack[bool_stack_depth - 3'd1] <= ~bool_stack[bool_stack_depth - 3'd1];
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_EQ: begin
+                            if (bool_stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else begin
+                                bool_stack[bool_stack_depth - 3'd2] <=
+                                    (bool_stack[bool_stack_depth - 3'd2] == bool_stack[bool_stack_depth - 3'd1]);
+                                bool_stack_depth <= bool_stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_NE: begin
+                            if (bool_stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else begin
+                                bool_stack[bool_stack_depth - 3'd2] <=
+                                    (bool_stack[bool_stack_depth - 3'd2] != bool_stack[bool_stack_depth - 3'd1]);
+                                bool_stack_depth <= bool_stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
                         OPCODE_HALT: state <= ST_HALT_WRITE_STATUS;
                         OPCODE_LOAD_BOOL,
                         OPCODE_STORE_BOOL,
@@ -553,7 +682,11 @@ module wb_plc #(
                         end else if (current_opcode == OPCODE_STORE_BOOL) begin
                             if (desc_value_type != RUNTIME_TYPE_BOOL || (desc_flags & RUNTIME_FLAG_WRITABLE) == 8'd0) begin
                                 begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
+                            end else if (bool_stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
                             end else begin
+                                pending_bool_value <= bool_stack[bool_stack_depth - 3'd1];
+                                bool_stack_depth <= bool_stack_depth - 3'd1;
                                 state <= ST_STORE_BOOL_READ_VALUE;
                             end
                         end else begin
@@ -572,8 +705,13 @@ module wb_plc #(
                         start_read(runtime_value_addr);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
-                        accumulator <= m_dat_i[0];
-                        state <= ST_FETCH_OPCODE;
+                        if (bool_stack_depth >= BOOL_STACK_DEPTH_MAX) begin
+                            begin_fault(FAULT_STACK_OVERFLOW, bool_stack_depth);
+                        end else begin
+                            bool_stack[bool_stack_depth] <= m_dat_i[0];
+                            bool_stack_depth <= bool_stack_depth + 3'd1;
+                            state <= ST_FETCH_OPCODE;
+                        end
                     end
                 end
 
@@ -583,7 +721,7 @@ module wb_plc #(
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         value_word0 <= m_dat_i;
-                        if (m_dat_i[0] == accumulator) begin
+                        if (m_dat_i[0] == pending_bool_value) begin
                             state <= ST_FETCH_OPCODE;
                         end else begin
                             state <= ST_WRITE_RUNTIME_LAST_WRITER;
@@ -607,7 +745,7 @@ module wb_plc #(
 
                 ST_STORE_BOOL_WRITE_VALUE0: begin
                     if (!m_cyc_o) begin
-                        start_write(runtime_value_addr, {31'd0, accumulator});
+                        start_write(runtime_value_addr, {31'd0, pending_bool_value});
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         state <= ST_STORE_BOOL_WRITE_VALUE1;

@@ -52,6 +52,7 @@ enum PlcSlotLoadStatusV1 : uint8_t {
     kPlcSlotLoadChecksumMismatch = 8u,
     kPlcSlotLoadFlashReadFailed = 9u,
     kPlcSlotLoadParamsTooLarge = 10u,
+    kPlcSlotLoadUnsupportedOpcode = 11u,
 };
 
 #pragma pack(push, 1)
@@ -301,6 +302,10 @@ public:
             result.status = kPlcSlotLoadBytecodeTooLarge;
             return result;
         }
+        if (!validateSupportedBytecode(object_image)) {
+            result.status = kPlcSlotLoadUnsupportedOpcode;
+            return result;
+        }
 
         uint8_t* linked_bytecode = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(result.layout.linked_code_addr));
         if (!prepareSlotVariablePoints(publisher, catalog, slot_id, object_image)) {
@@ -523,6 +528,13 @@ public:
             result.status = kPlcSlotLoadFlashReadFailed;
             return result;
         }
+        PlcObjectImageV1 object_image = {};
+        object_image.code_bytes = linked_bytecode;
+        object_image.code_size = object_header.code_size;
+        if (!validateSupportedBytecode(object_image)) {
+            result.status = kPlcSlotLoadUnsupportedOpcode;
+            return result;
+        }
 
         if (!prepareSlotVariablePointsFromFlash(publisher, catalog, slot_id, flash, flash_offset, object_header)) {
             result.status = kPlcSlotLoadLinkFailed;
@@ -606,6 +618,56 @@ public:
     }
 
 private:
+    static bool opcodeHasU16Operand(uint8_t opcode)
+    {
+        return opcode == 0x10u ||
+               opcode == 0x11u ||
+               opcode == 0x20u ||
+               opcode == 0x21u;
+    }
+
+    static bool opcodeSupportedInCoreStep2(uint8_t opcode)
+    {
+        return opcode == 0x00u ||
+               opcode == 0x01u ||
+               opcode == 0x02u ||
+               opcode == 0x03u ||
+               opcode == 0x04u ||
+               opcode == 0x05u ||
+               opcode == 0x06u ||
+               opcode == 0x07u ||
+               opcode == 0x08u ||
+               opcode == 0x09u ||
+               opcode == 0x0Au ||
+               opcode == 0x0Bu ||
+               opcode == 0x0Cu ||
+               opcodeHasU16Operand(opcode);
+    }
+
+    static bool validateSupportedBytecode(const PlcObjectImageV1& object_image)
+    {
+        if (object_image.code_bytes == nullptr) {
+            return false;
+        }
+
+        uint32_t pc = 0u;
+        while (pc < object_image.code_size) {
+            const uint8_t opcode = object_image.code_bytes[pc];
+            if (!opcodeSupportedInCoreStep2(opcode)) {
+                return false;
+            }
+
+            const uint32_t instruction_size = opcodeHasU16Operand(opcode) ? 3u : 1u;
+            if ((pc + instruction_size) > object_image.code_size) {
+                return false;
+            }
+
+            pc += instruction_size;
+        }
+
+        return true;
+    }
+
     static bool objectSnapshotHeaderValid(const PlcObjectSnapshotHeaderV1& header, uint16_t slot_id)
     {
         return header.magic == kPlcObjectSnapshotMagicV1 &&
