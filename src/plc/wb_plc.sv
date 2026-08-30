@@ -79,6 +79,9 @@ module wb_plc #(
     localparam [7:0] OPCODE_MAX = 8'h29;
     localparam [7:0] OPCODE_CLAMP = 8'h2A;
     localparam [7:0] OPCODE_SEL = 8'h2B;
+    localparam [7:0] OPCODE_JMP = 8'h2C;
+    localparam [7:0] OPCODE_JZ = 8'h2D;
+    localparam [7:0] OPCODE_JNZ = 8'h2E;
     localparam [2:0] STACK_DEPTH_MAX = 3'd4;
 
     localparam [1:0] STACK_TYPE_NONE = 2'd0;
@@ -148,6 +151,7 @@ module wb_plc #(
     localparam [5:0] ST_QUEUE_WRITE_INDEX = 6'd42;
     localparam [5:0] ST_QUEUE_WRITE_TAIL = 6'd43;
     localparam [5:0] ST_PUSH_I16_VALUE = 6'd44;
+    localparam [5:0] ST_BRANCH_EXECUTE = 6'd45;
 
     reg        engine_enable;
     reg [31:0] scan_interval_cycles;
@@ -220,6 +224,20 @@ module wb_plc #(
         input [2:0] stack_index;
         begin
             stack_value_bit_index = {stack_index, 4'b0000};
+        end
+    endfunction
+
+    function [31:0] branch_target_pc;
+        input [31:0] base_pc;
+        input [15:0] rel16;
+        reg signed [31:0] signed_base;
+        reg signed [31:0] signed_offset;
+        reg signed [31:0] signed_target;
+        begin
+            signed_base = base_pc;
+            signed_offset = {{16{rel16[15]}}, rel16};
+            signed_target = signed_base + signed_offset;
+            branch_target_pc = signed_target[31:0];
         end
     endfunction
 
@@ -539,7 +557,10 @@ module wb_plc #(
                     end else if (cached_word_valid && (cached_word_addr == ((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC))) begin
                         current_runtime_index[15:8] <= pick_byte(cached_word_data, (cb_bytecode_base + current_pc) & 32'd3);
                         current_pc <= current_pc + 32'd1;
-                        state <= (current_opcode == OPCODE_PUSH_I16) ? ST_PUSH_I16_VALUE : ST_READ_DESC0;
+                                state <= (current_opcode == OPCODE_PUSH_I16) ? ST_PUSH_I16_VALUE :
+                                            ((current_opcode == OPCODE_JMP || current_opcode == OPCODE_JZ || current_opcode == OPCODE_JNZ)
+                                                ? ST_BRANCH_EXECUTE
+                                                : ST_READ_DESC0);
                     end else if (!m_cyc_o) begin
                         start_read((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC);
                     end else if (m_ack_i) begin
@@ -549,7 +570,10 @@ module wb_plc #(
                         cached_word_data <= m_dat_i;
                         current_runtime_index[15:8] <= pick_byte(m_dat_i, (cb_bytecode_base + current_pc) & 32'd3);
                         current_pc <= current_pc + 32'd1;
-                        state <= (current_opcode == OPCODE_PUSH_I16) ? ST_PUSH_I16_VALUE : ST_READ_DESC0;
+                                state <= (current_opcode == OPCODE_PUSH_I16) ? ST_PUSH_I16_VALUE :
+                                            ((current_opcode == OPCODE_JMP || current_opcode == OPCODE_JZ || current_opcode == OPCODE_JNZ)
+                                                ? ST_BRANCH_EXECUTE
+                                                : ST_READ_DESC0);
                     end
                 end
 
@@ -888,7 +912,56 @@ module wb_plc #(
                         OPCODE_LOAD_I16,
                         OPCODE_STORE_I16,
                         OPCODE_INC_INT16,
-                        OPCODE_DEC_INT16: state <= ST_FETCH_OPERAND0;
+                        OPCODE_DEC_INT16,
+                        OPCODE_JMP,
+                        OPCODE_JZ,
+                        OPCODE_JNZ: state <= ST_FETCH_OPERAND0;
+                        default: begin_fault(FAULT_INVALID_OPCODE, current_opcode);
+                    endcase
+                end
+
+                ST_BRANCH_EXECUTE: begin
+                    case (current_opcode)
+                        OPCODE_JMP: begin
+                            if (branch_target_pc(current_pc, current_runtime_index) >= cb_bytecode_size) begin
+                                begin_fault(FAULT_INVALID_OPCODE, current_pc - 32'd3);
+                            end else begin
+                                current_pc <= branch_target_pc(current_pc, current_runtime_index);
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_JZ: begin
+                            if (stack_depth < 3'd1) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd3);
+                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd3);
+                            end else if ((stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] == 16'd0) &&
+                                         (branch_target_pc(current_pc, current_runtime_index) >= cb_bytecode_size)) begin
+                                begin_fault(FAULT_INVALID_OPCODE, current_pc - 32'd3);
+                            end else begin
+                                stack_depth <= stack_depth - 3'd1;
+                                if (stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] == 16'd0) begin
+                                    current_pc <= branch_target_pc(current_pc, current_runtime_index);
+                                end
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_JNZ: begin
+                            if (stack_depth < 3'd1) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd3);
+                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd3);
+                            end else if ((stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] != 16'd0) &&
+                                         (branch_target_pc(current_pc, current_runtime_index) >= cb_bytecode_size)) begin
+                                begin_fault(FAULT_INVALID_OPCODE, current_pc - 32'd3);
+                            end else begin
+                                stack_depth <= stack_depth - 3'd1;
+                                if (stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] != 16'd0) begin
+                                    current_pc <= branch_target_pc(current_pc, current_runtime_index);
+                                end
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
                         default: begin_fault(FAULT_INVALID_OPCODE, current_opcode);
                     endcase
                 end

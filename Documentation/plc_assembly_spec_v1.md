@@ -78,9 +78,7 @@ Step 2 objective for this document:
 
 Reserved for later phases unless explicitly promoted by a follow-up branch:
 
-- ordered comparisons beyond equality
 - timer and event primitives
-- general control flow beyond straight-line scans
 - float execution
 - wide integer utilities that add hardware cost without immediate bring-up value
 
@@ -202,14 +200,17 @@ The recommended frozen core ISA for this branch is:
 - `MAX`
 - `CLAMP`
 - `SEL`
+- `JMP rel16|label`
+- `JZ rel16|label`
+- `JNZ rel16|label`
 - `INC_INT <symbol>`
 - `DEC_INT <symbol>`
 
 Instruction families reserved but not part of the frozen step 2 core:
 
 - `LOAD_U16`, `STORE_U16`, `LOAD_U32`, `STORE_U32`, `LOAD_I32`, `STORE_I32`
-- `LT`, `LE`, `GT`, `GE`, `NEG`, `ABS`, `MIN`, `MAX`, `CLAMP`, `SEL`
-- `JMP`, `JZ`, `JNZ`, `CALL`, `RET`
+- `NEG`, `ABS`
+- `CALL`, `RET`
 - timer, counter, and edge primitives
 - float load/store, compare, arithmetic, and conversion families
 
@@ -249,9 +250,35 @@ effect, and type behavior should not drift.
 | `MAX` | none | `..., i16, i16 -> ..., i16` | signed `INT` compare/select | stack underflow, type mismatch |
 | `CLAMP` | none | `..., value, min, max -> ..., i16` | signed `INT` only | stack underflow, type mismatch |
 | `SEL` | none | `..., falseValue, trueValue, bool -> ..., a` | selects between same-typed stack values using top boolean | stack underflow, type mismatch |
+| `JMP` | `rel16` or `label` | no stack use | target is relative to the next instruction | invalid target |
+| `JZ` | `rel16` or `label` | `..., bool -> ...` | pops a boolean and jumps when it is false | stack underflow, type mismatch, invalid target |
+| `JNZ` | `rel16` or `label` | `..., bool -> ...` | pops a boolean and jumps when it is true | stack underflow, type mismatch, invalid target |
 | `INC_INT` | `point symbol` | no stack use | point must resolve to writable `INT` | unresolved symbol, type mismatch, write fault |
 | `DEC_INT` | `point symbol` | no stack use | point must resolve to writable `INT` | unresolved symbol, type mismatch, write fault |
 | `DB` | raw bytes | implementation-defined | bring-up escape hatch only | bypasses source-level type guarantees |
+
+### Labels
+
+Stage 5 introduces local branch labels for control flow:
+
+```text
+enabled:
+LOAD_BOOL enable
+JNZ run
+HALT
+
+run:
+PUSH_TRUE
+STORE_BOOL y
+HALT
+```
+
+Rules:
+
+- label syntax is `<name>:`
+- labels are local to one source file
+- valid label characters are ASCII letters, digits, and `_`
+- `JMP`, `JZ`, and `JNZ` accept either a signed `rel16` literal or a label
 
 ## Declarations
 

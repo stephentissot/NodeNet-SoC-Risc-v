@@ -626,7 +626,15 @@ private:
                opcode == 0x13u ||
                opcode == 0x14u ||
                opcode == 0x20u ||
-               opcode == 0x21u;
+               opcode == 0x21u ||
+               opcode == 0x2Cu ||
+               opcode == 0x2Du ||
+               opcode == 0x2Eu;
+    }
+
+    static bool opcodeIsBranch(uint8_t opcode)
+    {
+        return opcode == 0x2Cu || opcode == 0x2Du || opcode == 0x2Eu;
     }
 
     static bool opcodeSupportedInCoreStep2(uint8_t opcode)
@@ -654,7 +662,26 @@ private:
                opcode == 0x29u ||
                opcode == 0x2Au ||
                opcode == 0x2Bu ||
+               opcode == 0x2Cu ||
+               opcode == 0x2Du ||
+               opcode == 0x2Eu ||
                opcodeHasU16Operand(opcode);
+    }
+
+    static bool isInstructionStartOffset(const PlcObjectImageV1& object_image, uint32_t target_offset)
+    {
+        uint32_t pc = 0u;
+        while (pc < object_image.code_size) {
+            if (pc == target_offset) {
+                return true;
+            }
+
+            const uint8_t opcode = object_image.code_bytes[pc];
+            const uint32_t instruction_size = opcodeHasU16Operand(opcode) ? 3u : 1u;
+            pc += instruction_size;
+        }
+
+        return false;
     }
 
     static bool validateSupportedBytecode(const PlcObjectImageV1& object_image)
@@ -673,6 +700,27 @@ private:
             const uint32_t instruction_size = opcodeHasU16Operand(opcode) ? 3u : 1u;
             if ((pc + instruction_size) > object_image.code_size) {
                 return false;
+            }
+
+            pc += instruction_size;
+        }
+
+        pc = 0u;
+        while (pc < object_image.code_size) {
+            const uint8_t opcode = object_image.code_bytes[pc];
+            const uint32_t instruction_size = opcodeHasU16Operand(opcode) ? 3u : 1u;
+            if (opcodeIsBranch(opcode)) {
+                const int16_t rel = static_cast<int16_t>(
+                    static_cast<uint16_t>(object_image.code_bytes[pc + 1u]) |
+                    (static_cast<uint16_t>(object_image.code_bytes[pc + 2u]) << 8));
+                const int32_t target = static_cast<int32_t>(pc + instruction_size) + rel;
+                if (target < 0 || static_cast<uint32_t>(target) >= object_image.code_size) {
+                    return false;
+                }
+
+                if (!isInstructionStartOffset(object_image, static_cast<uint32_t>(target))) {
+                    return false;
+                }
             }
 
             pc += instruction_size;

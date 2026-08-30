@@ -72,6 +72,9 @@ namespace BigSisterNodeNet.Plc
         public const byte MaxOpcode = 0x29;
         public const byte ClampOpcode = 0x2A;
         public const byte SelectOpcode = 0x2B;
+        public const byte JumpOpcode = 0x2C;
+        public const byte JumpIfZeroOpcode = 0x2D;
+        public const byte JumpIfNotZeroOpcode = 0x2E;
 
         public static PlcAssemblyResult Assemble(string source, PlcObjectFileOptions options)
         {
@@ -87,21 +90,50 @@ namespace BigSisterNodeNet.Plc
             var output = new List<byte>();
             var result = new PlcAssemblyResult();
             var symbolIndexByName = new Dictionary<string, ushort>(StringComparer.Ordinal);
+            var labels = new Dictionary<string, ushort>(StringComparer.Ordinal);
             using (var reader = new StringReader(source))
             {
+                var parsedLines = new List<ParsedSourceLine>();
                 string line;
                 var lineNumber = 0;
                 while ((line = reader.ReadLine()) != null)
                 {
                     lineNumber += 1;
                     var sanitized = StripComment(line).Trim();
-                    if (sanitized.Length == 0)
+                    var parsedLine = ParseSourceLine(sanitized, lineNumber);
+                    if (parsedLine == null)
                     {
                         continue;
                     }
 
-                    var tokens = Tokenize(sanitized);
-                    if (tokens.Count == 0)
+                    parsedLines.Add(parsedLine);
+                }
+
+                var codeOffset = 0;
+                foreach (var parsedLine in parsedLines)
+                {
+                    if (!string.IsNullOrEmpty(parsedLine.Label))
+                    {
+                        if (labels.ContainsKey(parsedLine.Label))
+                        {
+                            throw new PlcMachineCodeCompileException($"Label '{parsedLine.Label}' is already declared", parsedLine.LineNumber);
+                        }
+
+                        labels[parsedLine.Label] = checked((ushort)codeOffset);
+                    }
+
+                    if (parsedLine.Tokens == null || parsedLine.Tokens.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    codeOffset += GetEncodedInstructionSize(parsedLine.Tokens, parsedLine.LineNumber);
+                }
+
+                foreach (var parsedLine in parsedLines)
+                {
+                    var tokens = parsedLine.Tokens;
+                    if (tokens == null || tokens.Count == 0)
                     {
                         continue;
                     }
@@ -110,96 +142,96 @@ namespace BigSisterNodeNet.Plc
                     switch (mnemonic)
                     {
                         case "CONST":
-                            ParseConstPointDeclaration(tokens, lineNumber, result, symbolIndexByName);
+                            ParseConstPointDeclaration(tokens, parsedLine.LineNumber, result, symbolIndexByName);
                             break;
 
                         case "PARAM":
-                            ParseParamPointDeclaration(tokens, lineNumber, result, symbolIndexByName, options);
+                            ParseParamPointDeclaration(tokens, parsedLine.LineNumber, result, symbolIndexByName, options);
                             break;
 
                         case "VAR":
-                            ParseVarDeclaration(tokens, lineNumber, result, symbolIndexByName);
+                            ParseVarDeclaration(tokens, parsedLine.LineNumber, result, symbolIndexByName);
                             break;
 
                         case "NOP":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(NopOpcode);
                             break;
 
                         case "HALT":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(HaltOpcode);
                             break;
 
                         case "PUSH_TRUE":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(PushTrueOpcode);
                             break;
 
                         case "PUSH_FALSE":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(PushFalseOpcode);
                             break;
 
                         case "DUP":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(DupOpcode);
                             break;
 
                         case "DROP":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(DropOpcode);
                             break;
 
                         case "SWAP":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(SwapOpcode);
                             break;
 
                         case "AND":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(AndOpcode);
                             break;
 
                         case "OR":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(OrOpcode);
                             break;
 
                         case "XOR":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(XorOpcode);
                             break;
 
                         case "NOT":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(NotOpcode);
                             break;
 
                         case "EQ":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(EqOpcode);
                             break;
 
                         case "NE":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(NeOpcode);
                             break;
 
                         case "PUSH_I16":
-                            RequireOperandCount(tokens, 2, lineNumber);
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
                             output.Add(PushInt16Opcode);
-                            WriteUInt16(output, ParseInt16Literal(tokens[1], lineNumber));
+                            WriteUInt16(output, ParseInt16Literal(tokens[1], parsedLine.LineNumber));
                             break;
 
                         case "LOAD_BOOL":
                         case "LOAD_POINT_BOOL":
                         case "LB":
-                            RequireOperandCount(tokens, 2, lineNumber);
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
                             output.Add(LoadPointBoolOpcode);
                             WriteRelocatedSymbol(output,
                                                  tokens[1],
-                                                 lineNumber,
+                                                 parsedLine.LineNumber,
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Bool,
@@ -209,11 +241,11 @@ namespace BigSisterNodeNet.Plc
                         case "STORE_BOOL":
                         case "STORE_POINT_BOOL":
                         case "SB":
-                            RequireOperandCount(tokens, 2, lineNumber);
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
                             output.Add(StorePointBoolOpcode);
                             WriteRelocatedSymbol(output,
                                                  tokens[1],
-                                                 lineNumber,
+                                                 parsedLine.LineNumber,
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Bool,
@@ -221,11 +253,11 @@ namespace BigSisterNodeNet.Plc
                             break;
 
                         case "LOAD_I16":
-                            RequireOperandCount(tokens, 2, lineNumber);
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
                             output.Add(LoadPointInt16Opcode);
                             WriteRelocatedSymbol(output,
                                                  tokens[1],
-                                                 lineNumber,
+                                                 parsedLine.LineNumber,
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Int16,
@@ -233,11 +265,11 @@ namespace BigSisterNodeNet.Plc
                             break;
 
                         case "STORE_I16":
-                            RequireOperandCount(tokens, 2, lineNumber);
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
                             output.Add(StorePointInt16Opcode);
                             WriteRelocatedSymbol(output,
                                                  tokens[1],
-                                                 lineNumber,
+                                                 parsedLine.LineNumber,
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Int16,
@@ -245,62 +277,80 @@ namespace BigSisterNodeNet.Plc
                             break;
 
                         case "ADD":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(AddOpcode);
                             break;
 
                         case "SUB":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(SubOpcode);
                             break;
 
                         case "LT":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(LessThanOpcode);
                             break;
 
                         case "LE":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(LessOrEqualOpcode);
                             break;
 
                         case "GT":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(GreaterThanOpcode);
                             break;
 
                         case "GE":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(GreaterOrEqualOpcode);
                             break;
 
                         case "MIN":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(MinOpcode);
                             break;
 
                         case "MAX":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(MaxOpcode);
                             break;
 
                         case "CLAMP":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(ClampOpcode);
                             break;
 
                         case "SEL":
-                            RequireOperandCount(tokens, 1, lineNumber);
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(SelectOpcode);
+                            break;
+
+                        case "JMP":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(JumpOpcode);
+                            WriteUInt16(output, ResolveBranchOffset(tokens[1], parsedLine.LineNumber, output.Count, labels));
+                            break;
+
+                        case "JZ":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(JumpIfZeroOpcode);
+                            WriteUInt16(output, ResolveBranchOffset(tokens[1], parsedLine.LineNumber, output.Count, labels));
+                            break;
+
+                        case "JNZ":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(JumpIfNotZeroOpcode);
+                            WriteUInt16(output, ResolveBranchOffset(tokens[1], parsedLine.LineNumber, output.Count, labels));
                             break;
 
                         case "INC_INT":
                         case "INC":
-                            RequireOperandCount(tokens, 2, lineNumber);
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
                             output.Add(IncrementPointIntOpcode);
                             WriteRelocatedSymbol(output,
                                                  tokens[1],
-                                                 lineNumber,
+                                                 parsedLine.LineNumber,
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Int16,
@@ -309,11 +359,11 @@ namespace BigSisterNodeNet.Plc
 
                         case "DEC_INT":
                         case "DEC":
-                            RequireOperandCount(tokens, 2, lineNumber);
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
                             output.Add(DecrementPointIntOpcode);
                             WriteRelocatedSymbol(output,
                                                  tokens[1],
-                                                 lineNumber,
+                                                 parsedLine.LineNumber,
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Int16,
@@ -323,23 +373,161 @@ namespace BigSisterNodeNet.Plc
                         case "DB":
                             if (tokens.Count < 2)
                             {
-                                throw new PlcMachineCodeCompileException("DB requires at least one byte operand", lineNumber);
+                                throw new PlcMachineCodeCompileException("DB requires at least one byte operand", parsedLine.LineNumber);
                             }
 
                             for (var index = 1; index < tokens.Count; index += 1)
                             {
-                                output.Add(ParseByte(tokens[index], lineNumber));
+                                output.Add(ParseByte(tokens[index], parsedLine.LineNumber));
                             }
                             break;
 
                         default:
-                            throw new PlcMachineCodeCompileException($"Unsupported instruction '{tokens[0]}'", lineNumber);
+                            throw new PlcMachineCodeCompileException($"Unsupported instruction '{tokens[0]}'", parsedLine.LineNumber);
                     }
                 }
             }
 
             result.CodeBytes = output.ToArray();
             return result;
+        }
+
+        private sealed class ParsedSourceLine
+        {
+            public int LineNumber { get; set; }
+
+            public string Label { get; set; } = string.Empty;
+
+            public List<string> Tokens { get; set; } = new List<string>();
+        }
+
+        private static ParsedSourceLine ParseSourceLine(string line, int lineNumber)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                return null;
+            }
+
+            var workingLine = line;
+            var label = string.Empty;
+            var colonIndex = workingLine.IndexOf(':');
+            if (colonIndex >= 0)
+            {
+                label = workingLine.Substring(0, colonIndex).Trim();
+                if (label.Length == 0)
+                {
+                    throw new PlcMachineCodeCompileException("Label name is required before ':'", lineNumber);
+                }
+
+                ValidateLabelName(label, lineNumber);
+                workingLine = workingLine.Substring(colonIndex + 1).Trim();
+            }
+
+            var tokens = Tokenize(workingLine);
+            if (label.Length == 0 && tokens.Count == 0)
+            {
+                return null;
+            }
+
+            return new ParsedSourceLine
+            {
+                LineNumber = lineNumber,
+                Label = label,
+                Tokens = tokens,
+            };
+        }
+
+        private static void ValidateLabelName(string label, int lineNumber)
+        {
+            foreach (var character in label)
+            {
+                if (!(char.IsLetterOrDigit(character) || character == '_'))
+                {
+                    throw new PlcMachineCodeCompileException($"Invalid label '{label}'", lineNumber);
+                }
+            }
+        }
+
+        private static int GetEncodedInstructionSize(List<string> tokens, int lineNumber)
+        {
+            if (tokens == null || tokens.Count == 0)
+            {
+                return 0;
+            }
+
+            var mnemonic = tokens[0].ToUpperInvariant();
+            switch (mnemonic)
+            {
+                case "CONST":
+                case "PARAM":
+                case "VAR":
+                    return 0;
+                case "PUSH_I16":
+                case "LOAD_BOOL":
+                case "LOAD_POINT_BOOL":
+                case "LB":
+                case "STORE_BOOL":
+                case "STORE_POINT_BOOL":
+                case "SB":
+                case "LOAD_I16":
+                case "STORE_I16":
+                case "JMP":
+                case "JZ":
+                case "JNZ":
+                case "INC_INT":
+                case "INC":
+                case "DEC_INT":
+                case "DEC":
+                    return 3;
+                case "DB":
+                    return tokens.Count - 1;
+                default:
+                    if (tokens.Count == 1)
+                    {
+                        return 1;
+                    }
+
+                    throw new PlcMachineCodeCompileException($"Unsupported instruction '{tokens[0]}'", lineNumber);
+            }
+        }
+
+        private static ushort ResolveBranchOffset(string operand,
+                                                  int lineNumber,
+                                                  int currentOutputOffset,
+                                                  IDictionary<string, ushort> labels)
+        {
+            var branchBase = currentOutputOffset + 2;
+            if (TryParseSignedBranchOffset(operand, out var signedOffset))
+            {
+                return unchecked((ushort)(short)signedOffset);
+            }
+
+            if (!labels.TryGetValue(operand, out var targetOffset))
+            {
+                throw new PlcMachineCodeCompileException($"Unknown branch label '{operand}'", lineNumber);
+            }
+
+            signedOffset = targetOffset - branchBase;
+            if (signedOffset < short.MinValue || signedOffset > short.MaxValue)
+            {
+                throw new PlcMachineCodeCompileException($"Branch target '{operand}' is out of rel16 range", lineNumber);
+            }
+
+            return unchecked((ushort)(short)signedOffset);
+        }
+
+        private static bool TryParseSignedBranchOffset(string token, out int value)
+        {
+            value = 0;
+            try
+            {
+                value = (short)ParseInt16Literal(token, 0);
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
         }
 
         private static string StripComment(string line)

@@ -293,6 +293,27 @@ namespace BigSisterNodeNet.Plc
                         pc += 1;
                         break;
 
+                    case PlcMachineCodeAssembler.JumpOpcode:
+                        builder.Append("JMP ")
+                               .Append(FormatBranchOperand(codeBytes, pc + 1))
+                               .AppendLine();
+                        pc += 3;
+                        break;
+
+                    case PlcMachineCodeAssembler.JumpIfZeroOpcode:
+                        builder.Append("JZ ")
+                               .Append(FormatBranchOperand(codeBytes, pc + 1))
+                               .AppendLine();
+                        pc += 3;
+                        break;
+
+                    case PlcMachineCodeAssembler.JumpIfNotZeroOpcode:
+                        builder.Append("JNZ ")
+                               .Append(FormatBranchOperand(codeBytes, pc + 1))
+                               .AppendLine();
+                        pc += 3;
+                        break;
+
                     case PlcMachineCodeAssembler.PushInt16Opcode:
                         if ((pc + 2) >= codeBytes.Length)
                         {
@@ -410,7 +431,10 @@ namespace BigSisterNodeNet.Plc
                                      value == PlcMachineCodeAssembler.MinOpcode ||
                                      value == PlcMachineCodeAssembler.MaxOpcode ||
                                      value == PlcMachineCodeAssembler.ClampOpcode ||
-                                     value == PlcMachineCodeAssembler.SelectOpcode;
+                                     value == PlcMachineCodeAssembler.SelectOpcode ||
+                                     value == PlcMachineCodeAssembler.JumpOpcode ||
+                                     value == PlcMachineCodeAssembler.JumpIfZeroOpcode ||
+                                     value == PlcMachineCodeAssembler.JumpIfNotZeroOpcode;
         }
 
         private static string FormatOpcode(byte opcode)
@@ -477,9 +501,26 @@ namespace BigSisterNodeNet.Plc
                     return "CLAMP";
                 case PlcMachineCodeAssembler.SelectOpcode:
                     return "SEL";
+                case PlcMachineCodeAssembler.JumpOpcode:
+                    return "JMP";
+                case PlcMachineCodeAssembler.JumpIfZeroOpcode:
+                    return "JZ";
+                case PlcMachineCodeAssembler.JumpIfNotZeroOpcode:
+                    return "JNZ";
                 default:
                     return "DB";
             }
+        }
+
+        private static string FormatBranchOperand(byte[] codeBytes, int operandOffset)
+        {
+            if ((operandOffset + 1) >= codeBytes.Length)
+            {
+                return "0";
+            }
+
+            var offset = unchecked((short)ReadUInt16(codeBytes, operandOffset));
+            return offset.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
         private static string FormatInt16Literal(ushort rawValue)
