@@ -629,7 +629,9 @@ private:
                opcode == 0x21u ||
                opcode == 0x2Cu ||
                opcode == 0x2Du ||
-               opcode == 0x2Eu;
+               opcode == 0x2Eu ||
+               opcode == 0x2Fu ||
+               opcode == 0x30u;
     }
 
     static bool opcodeIsBranch(uint8_t opcode)
@@ -665,6 +667,8 @@ private:
                opcode == 0x2Cu ||
                opcode == 0x2Du ||
                opcode == 0x2Eu ||
+               opcode == 0x2Fu ||
+               opcode == 0x30u ||
                opcodeHasU16Operand(opcode);
     }
 
@@ -1321,6 +1325,8 @@ private:
 
         uint8_t* params_dst = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(layout.params_base));
         std::memset(params_dst, 0, layout.params_capacity);
+        uint8_t* scratch_dst = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(layout.scratch_base));
+        std::memset(scratch_dst, 0, layout.scratch_size);
     }
 
     static uint32_t slotManifestTableBase()

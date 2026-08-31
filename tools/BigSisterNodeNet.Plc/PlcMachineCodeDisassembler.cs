@@ -314,6 +314,35 @@ namespace BigSisterNodeNet.Plc
                         pc += 3;
                         break;
 
+                    case PlcMachineCodeAssembler.RisingEdgeTriggerOpcode:
+                    case PlcMachineCodeAssembler.FallingEdgeTriggerOpcode:
+                        if ((pc + 2) >= codeBytes.Length)
+                        {
+                            throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
+                        }
+
+                        var edgeOperandOffset = (uint)(pc + 1);
+                        var edgeOperandValue = ReadUInt16(codeBytes, pc + 1);
+                        string edgeOperandText;
+                        if (relocationByOffset.TryGetValue(edgeOperandOffset, out var edgeRelocation))
+                        {
+                            edgeOperandText = operandFormatter != null
+                                ? operandFormatter(edgeRelocation.SymbolIndex)
+                                : $"sym{edgeRelocation.SymbolIndex}";
+                        }
+                        else
+                        {
+                            edgeOperandText = operandFormatter != null
+                                ? operandFormatter(edgeOperandValue)
+                                : edgeOperandValue.ToString();
+                        }
+
+                        builder.Append(FormatOpcode(opcode))
+                               .Append(' ')
+                               .AppendLine(edgeOperandText);
+                        pc += 3;
+                        break;
+
                     case PlcMachineCodeAssembler.PushInt16Opcode:
                         if ((pc + 2) >= codeBytes.Length)
                         {
@@ -434,7 +463,9 @@ namespace BigSisterNodeNet.Plc
                                      value == PlcMachineCodeAssembler.SelectOpcode ||
                                      value == PlcMachineCodeAssembler.JumpOpcode ||
                                      value == PlcMachineCodeAssembler.JumpIfZeroOpcode ||
-                                     value == PlcMachineCodeAssembler.JumpIfNotZeroOpcode;
+                                     value == PlcMachineCodeAssembler.JumpIfNotZeroOpcode ||
+                                     value == PlcMachineCodeAssembler.RisingEdgeTriggerOpcode ||
+                                     value == PlcMachineCodeAssembler.FallingEdgeTriggerOpcode;
         }
 
         private static string FormatOpcode(byte opcode)
@@ -507,6 +538,10 @@ namespace BigSisterNodeNet.Plc
                     return "JZ";
                 case PlcMachineCodeAssembler.JumpIfNotZeroOpcode:
                     return "JNZ";
+                case PlcMachineCodeAssembler.RisingEdgeTriggerOpcode:
+                    return "R_TRIG";
+                case PlcMachineCodeAssembler.FallingEdgeTriggerOpcode:
+                    return "F_TRIG";
                 default:
                     return "DB";
             }

@@ -82,6 +82,11 @@ module wb_plc #(
     localparam [7:0] OPCODE_JMP = 8'h2C;
     localparam [7:0] OPCODE_JZ = 8'h2D;
     localparam [7:0] OPCODE_JNZ = 8'h2E;
+    localparam [7:0] OPCODE_R_TRIG = 8'h2F;
+    localparam [7:0] OPCODE_F_TRIG = 8'h30;
+    localparam integer EDGE_STATE_BITS = 384;
+    localparam integer EDGE_STATE_WORD_COUNT = EDGE_STATE_BITS / 32;
+    localparam integer EDGE_STATE_SECTION_BYTES = EDGE_STATE_WORD_COUNT * 4;
     localparam [2:0] STACK_DEPTH_MAX = 3'd4;
 
     localparam [1:0] STACK_TYPE_NONE = 2'd0;
@@ -152,6 +157,12 @@ module wb_plc #(
     localparam [5:0] ST_QUEUE_WRITE_TAIL = 6'd43;
     localparam [5:0] ST_PUSH_I16_VALUE = 6'd44;
     localparam [5:0] ST_BRANCH_EXECUTE = 6'd45;
+    localparam [5:0] ST_READ_SLOT_SCRATCH_BASE = 6'd46;
+    localparam [5:0] ST_EDGE_READ_VALUE = 6'd47;
+    localparam [5:0] ST_EDGE_READ_PREV_WORD = 6'd48;
+    localparam [5:0] ST_EDGE_READ_VALID_WORD = 6'd49;
+    localparam [5:0] ST_EDGE_WRITE_PREV_WORD = 6'd50;
+    localparam [5:0] ST_EDGE_WRITE_VALID_WORD = 6'd51;
 
     reg        engine_enable;
     reg [31:0] scan_interval_cycles;
@@ -187,6 +198,7 @@ module wb_plc #(
     reg [31:0] desc_status_offset;
     reg [31:0] runtime_value_addr;
     reg [31:0] runtime_status_addr;
+    reg [31:0] slot_scratch_base;
     reg [31:0] value_word0;
     reg [31:0] value_word1;
     reg [31:0] fault_code_pending;
@@ -204,6 +216,13 @@ module wb_plc #(
         input [4:0] slot_id;
         begin
             slot_control_block_addr = CONTROL_BLOCK_BASE + (slot_id * CONTROL_BLOCK_BYTES);
+        end
+    endfunction
+
+    function [31:0] slot_manifest_addr;
+        input [4:0] slot_id;
+        begin
+            slot_manifest_addr = CONTROL_REGION_BASE + SLOT_DIRECTORY_BYTES + (slot_id * SLOT_MANIFEST_BYTES);
         end
     endfunction
 
@@ -238,6 +257,20 @@ module wb_plc #(
             signed_offset = {{16{rel16[15]}}, rel16};
             signed_target = signed_base + signed_offset;
             branch_target_pc = signed_target[31:0];
+        end
+    endfunction
+
+    function [31:0] edge_state_word_byte_offset;
+        input [15:0] runtime_index;
+        begin
+            edge_state_word_byte_offset = {25'd0, runtime_index[8:5], 2'b00};
+        end
+    endfunction
+
+    function [31:0] edge_state_bit_mask;
+        input [15:0] runtime_index;
+        begin
+            edge_state_bit_mask = 32'h0000_0001 << runtime_index[4:0];
         end
     endfunction
 
@@ -360,6 +393,7 @@ module wb_plc #(
             desc_status_offset <= 32'd0;
             runtime_value_addr <= 32'd0;
             runtime_status_addr <= 32'd0;
+            slot_scratch_base <= 32'd0;
             value_word0 <= 32'd0;
             value_word1 <= 32'd0;
             fault_code_pending <= 32'd0;
@@ -483,6 +517,16 @@ module wb_plc #(
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         cb_max_instructions <= m_dat_i;
+                        state <= ST_READ_SLOT_SCRATCH_BASE;
+                    end
+                end
+
+                ST_READ_SLOT_SCRATCH_BASE: begin
+                    if (!m_cyc_o) begin
+                        start_read(slot_manifest_addr(active_slot) + 32'd56);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        slot_scratch_base <= m_dat_i;
                         state <= ST_SLOT_CHECK;
                     end
                 end
@@ -913,6 +957,8 @@ module wb_plc #(
                         OPCODE_STORE_I16,
                         OPCODE_INC_INT16,
                         OPCODE_DEC_INT16,
+                        OPCODE_R_TRIG,
+                        OPCODE_F_TRIG,
                         OPCODE_JMP,
                         OPCODE_JZ,
                         OPCODE_JNZ: state <= ST_FETCH_OPERAND0;
@@ -1001,6 +1047,12 @@ module wb_plc #(
                             end else begin
                                 state <= ST_LOAD_BOOL_VALUE;
                             end
+                        end else if (current_opcode == OPCODE_R_TRIG || current_opcode == OPCODE_F_TRIG) begin
+                            if (desc_value_type != RUNTIME_TYPE_BOOL || (desc_flags & RUNTIME_FLAG_READABLE) == 8'd0) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
+                            end else begin
+                                state <= ST_EDGE_READ_VALUE;
+                            end
                         end else if (current_opcode == OPCODE_STORE_BOOL) begin
                             if (desc_value_type != RUNTIME_TYPE_BOOL || (desc_flags & RUNTIME_FLAG_WRITABLE) == 8'd0) begin
                                 begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
@@ -1055,6 +1107,76 @@ module wb_plc #(
                             stack_depth <= stack_depth + 3'd1;
                             state <= ST_FETCH_OPCODE;
                         end
+                    end
+                end
+
+                ST_EDGE_READ_VALUE: begin
+                    if (!m_cyc_o) begin
+                        start_read(runtime_value_addr);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        if (slot_scratch_base == 32'd0) begin
+                            begin_fault(FAULT_INVALID_OPCODE, current_opcode);
+                        end else if (current_runtime_index >= EDGE_STATE_BITS) begin
+                            begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                        end else if (stack_depth >= STACK_DEPTH_MAX) begin
+                            begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
+                        end else begin
+                            pending_stack_value <= {15'd0, m_dat_i[0]};
+                            state <= ST_EDGE_READ_PREV_WORD;
+                        end
+                    end
+                end
+
+                ST_EDGE_READ_PREV_WORD: begin
+                    if (!m_cyc_o) begin
+                        start_read(slot_scratch_base + edge_state_word_byte_offset(current_runtime_index));
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        value_word0 <= m_dat_i;
+                        state <= ST_EDGE_READ_VALID_WORD;
+                    end
+                end
+
+                ST_EDGE_READ_VALID_WORD: begin
+                    if (!m_cyc_o) begin
+                        start_read(slot_scratch_base + EDGE_STATE_SECTION_BYTES + edge_state_word_byte_offset(current_runtime_index));
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        value_word1 <= m_dat_i;
+                        stack_value[stack_value_bit_index(stack_depth) +: 16] <= {15'd0,
+                            (current_opcode == OPCODE_R_TRIG)
+                                ? (((m_dat_i & edge_state_bit_mask(current_runtime_index)) != 32'd0) &&
+                                   ((value_word0 & edge_state_bit_mask(current_runtime_index)) == 32'd0) &&
+                                   pending_stack_value[0])
+                                : (((m_dat_i & edge_state_bit_mask(current_runtime_index)) != 32'd0) &&
+                                   ((value_word0 & edge_state_bit_mask(current_runtime_index)) != 32'd0) &&
+                                   !pending_stack_value[0])};
+                        stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_BOOL;
+                        stack_depth <= stack_depth + 3'd1;
+                        state <= ST_EDGE_WRITE_PREV_WORD;
+                    end
+                end
+
+                ST_EDGE_WRITE_PREV_WORD: begin
+                    if (!m_cyc_o) begin
+                        start_write(slot_scratch_base + edge_state_word_byte_offset(current_runtime_index),
+                                    pending_stack_value[0]
+                                        ? (value_word0 | edge_state_bit_mask(current_runtime_index))
+                                        : (value_word0 & ~edge_state_bit_mask(current_runtime_index)));
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        state <= ST_EDGE_WRITE_VALID_WORD;
+                    end
+                end
+
+                ST_EDGE_WRITE_VALID_WORD: begin
+                    if (!m_cyc_o) begin
+                        start_write(slot_scratch_base + EDGE_STATE_SECTION_BYTES + edge_state_word_byte_offset(current_runtime_index),
+                                    value_word1 | edge_state_bit_mask(current_runtime_index));
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        state <= ST_FETCH_OPCODE;
                     end
                 end
 

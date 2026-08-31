@@ -203,6 +203,8 @@ The recommended frozen core ISA for this branch is:
 - `JMP rel16|label`
 - `JZ rel16|label`
 - `JNZ rel16|label`
+- `R_TRIG <symbol>`
+- `F_TRIG <symbol>`
 - `INC_INT <symbol>`
 - `DEC_INT <symbol>`
 
@@ -253,6 +255,8 @@ effect, and type behavior should not drift.
 | `JMP` | `rel16` or `label` | no stack use | target is relative to the next instruction | invalid target |
 | `JZ` | `rel16` or `label` | `..., bool -> ...` | pops a boolean and jumps when it is false | stack underflow, type mismatch, invalid target |
 | `JNZ` | `rel16` or `label` | `..., bool -> ...` | pops a boolean and jumps when it is true | stack underflow, type mismatch, invalid target |
+| `R_TRIG` | `point symbol` | `... -> ..., bool` | pushes true for one scan on a false-to-true transition of the source `BOOL` point | unresolved symbol, type mismatch, read fault, stack overflow |
+| `F_TRIG` | `point symbol` | `... -> ..., bool` | pushes true for one scan on a true-to-false transition of the source `BOOL` point | unresolved symbol, type mismatch, read fault, stack overflow |
 | `INC_INT` | `point symbol` | no stack use | point must resolve to writable `INT` | unresolved symbol, type mismatch, write fault |
 | `DEC_INT` | `point symbol` | no stack use | point must resolve to writable `INT` | unresolved symbol, type mismatch, write fault |
 | `DB` | raw bytes | implementation-defined | bring-up escape hatch only | bypasses source-level type guarantees |
@@ -279,6 +283,36 @@ Rules:
 - labels are local to one source file
 - valid label characters are ASCII letters, digits, and `_`
 - `JMP`, `JZ`, and `JNZ` accept either a signed `rel16` literal or a label
+
+### R_TRIG
+
+Syntax:
+
+```text
+R_TRIG <symbol>
+```
+
+Behavior:
+
+- reads one `BOOL` point identified by `<symbol>`
+- keeps one previous sampled state per slot and per runtime point index
+- pushes `true` for exactly one scan when the source transitions from `false` to `true`
+- on the first scan after a slot load, it initializes the remembered state and pushes `false`
+
+### F_TRIG
+
+Syntax:
+
+```text
+F_TRIG <symbol>
+```
+
+Behavior:
+
+- reads one `BOOL` point identified by `<symbol>`
+- keeps one previous sampled state per slot and per runtime point index
+- pushes `true` for exactly one scan when the source transitions from `true` to `false`
+- on the first scan after a slot load, it initializes the remembered state and pushes `false`
 
 ## Declarations
 
@@ -1102,11 +1136,98 @@ Implementation checklist:
   add one negative program with an out-of-range target that must fault before
   partial outputs commit.
 
+### Stage 6: Edge Triggers
+
+Recommended implementation set:
+
+- `R_TRIG <symbol>`
+- `F_TRIG <symbol>`
+- keep timers for the next stage
+
+Execution contract:
+
+- the operand must resolve to a readable `BOOL` point
+- the instruction reads the point directly and pushes one `BOOL` result on the stack
+- `R_TRIG` emits `true` for one scan on a `false -> true` transition
+- `F_TRIG` emits `true` for one scan on a `true -> false` transition
+- the first scan after a slot load only initializes the remembered state and must not emit an edge pulse
+
+Validation program: rising edge pulse
+
+```text
+PARAM POINT_ID enable
+CONST POINT_ID pulse, demo.sim.output0
+
+R_TRIG enable
+STORE_BOOL pulse
+HALT
+```
+
+Validation sequence:
+
+- load the program while `enable=false`: output must stay `false`
+- switch `enable` to `true`: exactly one scan must write `pulse=true`
+- keep `enable=true`: next scans must return `pulse=false`
+- toggle back to `false` then to `true`: one new pulse must be emitted
+
+Validation program: falling edge pulse
+
+```text
+PARAM POINT_ID enable
+CONST POINT_ID pulse, demo.sim.output1
+
+F_TRIG enable
+STORE_BOOL pulse
+HALT
+```
+
+Validation sequence:
+
+- load the program while `enable=true`: output must stay `false` on the first scan
+- switch `enable` to `false`: exactly one scan must write `pulse=true`
+- keep `enable=false`: next scans must return `pulse=false`
+
+Validation program: count rising edges
+
+```text
+PARAM POINT_ID enable
+VAR PUBLIC INT edgeCount
+
+R_TRIG enable
+JZ done
+INC_INT edgeCount
+
+done:
+HALT
+```
+
+Expected behavior:
+
+- `edgeCount` increments once per low-to-high transition of `enable`
+- repeated scans with stable `enable=true` must not increment again
+- this program is useful to catch accidental level-sensitive behavior
+
+Fault program: wrong operand type
+
+```text
+PARAM POINT_ID threshold
+CONST POINT_ID pulse, demo.sim.output0
+
+R_TRIG threshold
+STORE_BOOL pulse
+HALT
+```
+
+Validation notes:
+
+- bind `threshold` to an `INT` point
+- the loader may accept the relocation, but execution must fault with a type mismatch before any output write commits
+
 ### Deferred Beyond Step 2 Core
 
 Keep these out of the frozen core unless there is a direct hardware need:
 
-- timer and event primitives such as `TON_*`, `TOF_*`, `TP_*`, `R_TRIG`, `F_TRIG`
+- timer primitives such as `TON_*`, `TOF_*`, `TP_*`
 - multiply, divide, modulo, and wide shifts
 - float load/store, compare, arithmetic, and conversion
 

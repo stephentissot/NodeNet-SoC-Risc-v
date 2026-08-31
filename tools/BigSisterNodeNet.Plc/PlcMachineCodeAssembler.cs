@@ -75,6 +75,8 @@ namespace BigSisterNodeNet.Plc
         public const byte JumpOpcode = 0x2C;
         public const byte JumpIfZeroOpcode = 0x2D;
         public const byte JumpIfNotZeroOpcode = 0x2E;
+        public const byte RisingEdgeTriggerOpcode = 0x2F;
+        public const byte FallingEdgeTriggerOpcode = 0x30;
 
         public static PlcAssemblyResult Assemble(string source, PlcObjectFileOptions options)
         {
@@ -344,6 +346,30 @@ namespace BigSisterNodeNet.Plc
                             WriteUInt16(output, ResolveBranchOffset(tokens[1], parsedLine.LineNumber, output.Count, labels));
                             break;
 
+                        case "R_TRIG":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(RisingEdgeTriggerOpcode);
+                            WriteRelocatedSymbol(output,
+                                                 tokens[1],
+                                                 parsedLine.LineNumber,
+                                                 result,
+                                                 symbolIndexByName,
+                                                 PlcValueType.Bool,
+                                                 PlcRuntimeLinkAccess.Read);
+                            break;
+
+                        case "F_TRIG":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(FallingEdgeTriggerOpcode);
+                            WriteRelocatedSymbol(output,
+                                                 tokens[1],
+                                                 parsedLine.LineNumber,
+                                                 result,
+                                                 symbolIndexByName,
+                                                 PlcValueType.Bool,
+                                                 PlcRuntimeLinkAccess.Read);
+                            break;
+
                         case "INC_INT":
                         case "INC":
                             RequireOperandCount(tokens, 2, parsedLine.LineNumber);
@@ -474,6 +500,8 @@ namespace BigSisterNodeNet.Plc
                 case "JMP":
                 case "JZ":
                 case "JNZ":
+                case "R_TRIG":
+                case "F_TRIG":
                 case "INC_INT":
                 case "INC":
                 case "DEC_INT":
