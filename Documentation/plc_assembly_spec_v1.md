@@ -1223,11 +1223,221 @@ Validation notes:
 - bind `threshold` to an `INT` point
 - the loader may accept the relocation, but execution must fault with a type mismatch before any output write commits
 
+### Stage 7: Timers, Starting With TON
+
+Recommended implementation set:
+
+- `TON_START timer_idx16, preset_ms32`
+- `TON_DONE timer_idx16`
+- `TON_RESET timer_idx16`
+- defer `TOF`, `TP`, and elapsed/remaining introspection until this minimal TON contract is stable
+
+Why TON first:
+
+- it is the smallest useful timer block for real I/O behavior
+- it reuses the per-slot timer area that already exists in the slot layout
+- it avoids reopening the ISA shape too broadly while still forcing timer state semantics to become explicit
+
+Execution contract:
+
+- `TON_START` pops one `BOOL` enable value from the stack
+- if enable is `false`, the addressed timer instance is cleared and `done=false`
+- if enable is `true`, the timer starts or continues running toward `preset_ms32`
+- once elapsed time reaches the preset, `done` stays `true` while enable remains `true`
+- `TON_DONE` pushes the current `BOOL` done state for the addressed timer
+- `TON_RESET` clears the addressed timer unconditionally
+- timer state is owned by the slot and must be reset on slot load so a freshly loaded program never inherits old timing state
+- `timer_idx16` must remain below the slot timer count or execution must fault deterministically
+
+Minimal timer state per instance:
+
+- running flag
+- done flag
+- start timestamp in milliseconds
+- preset in milliseconds
+
+Validation program: delayed output
+
+```text
+PARAM POINT_ID enable
+CONST POINT_ID y, demo.sim.output0
+
+LOAD_BOOL enable
+TON_START 0, 1000
+TON_DONE 0
+STORE_BOOL y
+HALT
+```
+
+Expected behavior:
+
+- with `enable=false`, `y` stays `false`
+- when `enable` becomes `true`, `y` stays `false` for about 1000 ms
+- after the delay expires, `y` becomes `true`
+- when `enable` returns to `false`, `y` returns to `false` and the timer resets
+
+Validation program: delayed latch with public observation
+
+```text
+PARAM POINT_ID enable
+VAR PUBLIC BOOL tonDone
+
+LOAD_BOOL enable
+TON_START 0, 750
+TON_DONE 0
+STORE_BOOL tonDone
+HALT
+```
+
+Expected behavior:
+
+- `tonDone` is easy to observe in the UI without relying on a short external pulse
+- repeated scans before 750 ms must keep `tonDone=false`
+- once the delay expires with `enable=true`, `tonDone=true`
+- dropping `enable=false` clears `tonDone` again
+
+Validation program: reset path
+
+```text
+PARAM POINT_ID enable
+PARAM POINT_ID reset
+VAR PUBLIC BOOL tonDone
+
+LOAD_BOOL enable
+TON_START 0, 1500
+
+LOAD_BOOL reset
+JZ publish
+TON_RESET 0
+
+publish:
+TON_DONE 0
+STORE_BOOL tonDone
+HALT
+```
+
+Expected behavior:
+
+- `enable=true` starts the timer
+- `reset=true` clears it immediately, even if the preset was almost reached
+- after reset, `TON_DONE 0` must read `false` until a new full timing interval completes
+
+Fault program: timer index out of range
+
+```text
+PUSH_TRUE
+TON_START 99, 1000
+HALT
+```
+
+Validation notes:
+
+- if the slot exposes fewer than 100 timers, execution must fault deterministically
+- the program must not corrupt neighboring timer state or commit partial outputs before faulting
+
+### ISA Status After Stage 7
+
+The currently implemented PLC VM subset is now large enough to build and test
+real slot programs directly on hardware.
+
+Implemented instruction families:
+
+- foundation and stack: `NOP`, `HALT`, `PUSH_TRUE`, `PUSH_FALSE`, `DUP`, `DROP`, `SWAP`
+- boolean logic: `AND`, `OR`, `XOR`, `NOT`, `EQ`, `NE`
+- boolean point access: `LOAD_BOOL`, `STORE_BOOL`
+- integer point and literal access: `PUSH_I16`, `LOAD_I16`, `STORE_I16`
+- integer arithmetic and selection: `ADD`, `SUB`, `LT`, `LE`, `GT`, `GE`, `MIN`, `MAX`, `CLAMP`, `SEL`
+- integer point mutation: `INC_INT`, `DEC_INT`
+- control flow: `JMP`, `JZ`, `JNZ`
+- event/stateful primitives: `R_TRIG`, `F_TRIG`, `TON_START`, `TON_DONE`, `TON_RESET`
+
+Implementation status summary:
+
+- stages 1 through 7 are now implemented across HDL, loader validation, assembler, and disassembler
+- edge state is stored in per-slot scratch SDRAM instead of FPGA fabric state arrays
+- timer state is stored in the existing per-slot timer region
+- PLC upload/commit flow has already needed runtime hardening, including non-blocking NodeNet TX handling and deferred auto-load after `plcUploadCommitRes`
+
+Current practical scope:
+
+- this subset is already sufficient for direct I/O mirroring, latching, edge-triggered behavior, conditional branching, delayed actions, and simple blink/state machines
+- the VM is no longer blocked on ISA breadth for first industrial tests; the next work should favor the highest-value missing stateful primitives and continued robustness work
+
+Known work that still remains around the current subset:
+
+- keep reinforcing upload, load, and runtime fault paths whenever field tests expose a weak spot
+- keep timer behavior under observation on hardware, especially around long-running enable/reset cycles and scan-to-scan stability
+- keep validating that stateful features stay in SDRAM-owned slot memory rather than drifting back into LUT/FF-heavy implementations
+
+### Recommended Next Stages
+
+The next stages should add user value without reopening large architectural surfaces too early.
+
+### Stage 8: Complete The Timer Family
+
+Recommended implementation set:
+
+- `TON_ELAPSED timer_idx16`
+- `TON_REMAINING timer_idx16`
+- `TOF_START`, `TOF_DONE`, `TOF_RESET`
+- `TP_START`, `TP_DONE`, `TP_RESET`
+
+Why this stage is next:
+
+- timers are already the active user workflow, so the next return on effort is immediate
+- the slot timer memory model already exists, so this extends a known-good architectural path
+- elapsed/remaining visibility will make hardware debugging much easier than trying to infer behavior only from outputs
+
+Validation focus:
+
+- `TON`, `TOF`, and `TP` must stay deterministic across repeated scans and input chatter
+- timer introspection values must remain monotonic and bounded
+- reset/restart behavior must be explicit and easy to observe with `VAR PUBLIC`
+
+### Stage 9: IEC-Style Counters
+
+Recommended implementation set:
+
+- `CTU_COUNT`, `CTU_DONE`, `CTU_RESET`
+- `CTD_COUNT`, `CTD_DONE`, `CTD_RESET`
+- optional early introspection: current count readback if it stays cheap in the ISA and runtime layout
+
+Why this stage follows timers:
+
+- counters are the next most useful stateful IEC primitive after timers and edge detection
+- they can reuse the same architectural pattern: explicit slot-owned state with narrow HDL primitives
+- they unlock many practical machine use cases without requiring floats or deep control flow
+
+Validation focus:
+
+- count only once per intended event, usually paired with `R_TRIG`
+- enforce reset semantics before optimizing convenience features
+- avoid hidden coupling between timer state and counter state layouts
+
+### Stage 10: Targeted Runtime And ISA Hardening
+
+Recommended scope:
+
+- finish any missing fault-path determinism found during Stage 8 and 9 field tests
+- add more hardware-facing validation programs to this spec for upload, reset, restart, and fault recovery
+- only then consider widening arithmetic or diagnostics
+
+Why this stage matters:
+
+- the current system has already shown that practical robustness work appears exactly when real hardware programs become non-trivial
+- hardening after each feature wave is cheaper than trying to debug several new stateful families at once
+
+Candidate follow-on after Stage 10:
+
+- wider diagnostics such as `TRACE` or `ASSERT`
+- heavier arithmetic such as `MUL`, `DIV`, and modulo
+- float support if a concrete process-control need justifies the cost
+
 ### Deferred Beyond Step 2 Core
 
 Keep these out of the frozen core unless there is a direct hardware need:
 
-- timer primitives such as `TON_*`, `TOF_*`, `TP_*`
+- timer primitives beyond the first minimal `TON` slice, such as `TOF_*`, `TP_*`, `TON_ELAPSED`, and `TON_REMAINING`
 - multiply, divide, modulo, and wide shifts
 - float load/store, compare, arithmetic, and conversion
 

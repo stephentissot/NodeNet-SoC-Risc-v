@@ -1524,6 +1524,7 @@ void NodeNetCore::loop()
     }
 
     processOutputQueue();
+    processPendingPlcAutoLoad();
 }
 
 void NodeNetCore::savePreferences()
@@ -1938,10 +1939,17 @@ void NodeNetCore::processOutputQueue()
         _logger->Warning("NodeNetCore output queue overflow");
     }
 
-    QueuedMessage msg;
-    if (dequeueOutputMessage(msg)) {
-        _nodeNet->Send(msg.destAddr, msg.data, msg.len);
+    if (_outputQueue.tail == _outputQueue.head) {
+        return;
     }
+
+    const QueuedMessage& msg = _outputQueue.entries[_outputQueue.tail];
+    if (!_nodeNet->TxHasSpace(msg.len)) {
+        return;
+    }
+
+    _nodeNet->Send(msg.destAddr, msg.data, msg.len);
+    _outputQueue.tail = static_cast<uint8_t>((_outputQueue.tail + 1u) % kOutputQueueCapacity);
 }
 
 bool NodeNetCore::updateProperty(const JsonDocument& request)
@@ -3311,19 +3319,20 @@ bool NodeNetCore::handlePlcUploadCommitRequest(const JsonDocument& request, Json
     }
 
     const uint8_t* upload_object_bytes = plc_upload_volatile_staging_ptr();
-    if (_plcUploadSession.persist_to_flash) {
+    uint8_t* deferred_object_bytes = nullptr;
+    if (_plcUploadSession.persist_to_flash || _plcUploadSession.auto_load) {
         if (_plcUploadSession.slot_id >= kPlcSlotCountV1 ||
             _plcUploadSession.total_size > PlcSlotLoaderV1::slotObjectSnapshotCapacity()) {
             response["ok"] = false;
-            response["error"] = "flashPersistFailed";
+            response["error"] = _plcUploadSession.persist_to_flash ? "flashPersistFailed" : "loadStagingFailed";
             fillPlcUploadStatus(response, false);
             return true;
         }
 
-        uint8_t* scratch_object_bytes = reinterpret_cast<uint8_t*>(
+        deferred_object_bytes = reinterpret_cast<uint8_t*>(
             static_cast<uintptr_t>(PlcSlotLoaderV1::slotObjectSnapshotDataAddress(_plcUploadSession.slot_id)));
-        std::memcpy(scratch_object_bytes, upload_object_bytes, _plcUploadSession.total_size);
-        upload_object_bytes = scratch_object_bytes;
+        std::memcpy(deferred_object_bytes, upload_object_bytes, _plcUploadSession.total_size);
+        upload_object_bytes = deferred_object_bytes;
     }
 
     if (_plcUploadSession.persist_to_flash &&
@@ -3339,31 +3348,53 @@ bool NodeNetCore::handlePlcUploadCommitRequest(const JsonDocument& request, Json
         return true;
     }
 
-    PlcSlotLoadResultV1 load_result = {};
     if (_plcUploadSession.auto_load) {
-        load_result = PlcSlotLoaderV1::loadObjectFileIntoSlot(*_plcRuntimePublisher,
-                                                              _pointCatalog,
-                                                              _plcUploadSession.slot_id,
-                                                              upload_object_bytes,
-                                                              _plcUploadSession.total_size);
-        if (load_result.status != kPlcSlotLoadOk) {
-            response["ok"] = false;
-            response["error"] = "loadFailed";
-            response["loadStatus"] = static_cast<uint8_t>(load_result.status);
-            fillPlcUploadStatus(response, false);
-            return true;
-        }
-        publishBuiltinPlcPointStates(true);
+        _pendingPlcAutoLoad = {};
+        _pendingPlcAutoLoad.active = true;
+        _pendingPlcAutoLoad.slot_id = _plcUploadSession.slot_id;
+        _pendingPlcAutoLoad.object_base = static_cast<uint32_t>(
+            PlcSlotLoaderV1::slotObjectSnapshotDataAddress(_plcUploadSession.slot_id));
+        _pendingPlcAutoLoad.object_size = _plcUploadSession.total_size;
     }
 
     response["ok"] = true;
     response["slotId"] = _plcUploadSession.slot_id;
-    response["loadStatus"] = static_cast<uint8_t>(load_result.status);
+    response["loadStatus"] = static_cast<uint8_t>(kPlcSlotLoadOk);
     response["persistToFlash"] = _plcUploadSession.persist_to_flash;
     response["rebootPersistent"] = _plcUploadSession.persist_to_flash;
+    response["autoLoadPending"] = _plcUploadSession.auto_load;
     fillPlcUploadStatus(response, false);
     resetPlcUploadSession();
     return true;
+}
+
+void NodeNetCore::processPendingPlcAutoLoad()
+{
+    if (!_pendingPlcAutoLoad.active || _plcRuntimePublisher == nullptr) {
+        return;
+    }
+
+    const uint16_t slot_id = _pendingPlcAutoLoad.slot_id;
+    const uint32_t object_base = _pendingPlcAutoLoad.object_base;
+    const uint32_t object_size = _pendingPlcAutoLoad.object_size;
+    _pendingPlcAutoLoad = {};
+
+    const uint8_t* object_bytes = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(object_base));
+    const PlcSlotLoadResultV1 load_result = PlcSlotLoaderV1::loadObjectFileIntoSlot(*_plcRuntimePublisher,
+                                                                                     _pointCatalog,
+                                                                                     slot_id,
+                                                                                     object_bytes,
+                                                                                     object_size);
+    if (load_result.status != kPlcSlotLoadOk) {
+        if (_logger != nullptr) {
+            _logger->Warning("Deferred PLC auto-load failed slot=%u status=%u",
+                             static_cast<unsigned>(slot_id),
+                             static_cast<unsigned>(load_result.status));
+        }
+        return;
+    }
+
+    publishBuiltinPlcPointStates(true);
 }
 
 bool NodeNetCore::handlePlcUploadDataMessage(const QueuedMessage& msg)

@@ -343,6 +343,34 @@ namespace BigSisterNodeNet.Plc
                         pc += 3;
                         break;
 
+                    case PlcMachineCodeAssembler.TimerOnStartOpcode:
+                        if ((pc + 6) >= codeBytes.Length)
+                        {
+                            throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
+                        }
+
+                        builder.Append("TON_START ")
+                               .Append(ReadUInt16(codeBytes, pc + 1))
+                               .Append(", ")
+                               .Append(ReadUInt32(codeBytes, pc + 3).ToString(System.Globalization.CultureInfo.InvariantCulture))
+                               .AppendLine();
+                        pc += 7;
+                        break;
+
+                    case PlcMachineCodeAssembler.TimerOnDoneOpcode:
+                    case PlcMachineCodeAssembler.TimerOnResetOpcode:
+                        if ((pc + 2) >= codeBytes.Length)
+                        {
+                            throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
+                        }
+
+                        builder.Append(FormatOpcode(opcode))
+                               .Append(' ')
+                               .Append(ReadUInt16(codeBytes, pc + 1).ToString(System.Globalization.CultureInfo.InvariantCulture))
+                               .AppendLine();
+                        pc += 3;
+                        break;
+
                     case PlcMachineCodeAssembler.PushInt16Opcode:
                         if ((pc + 2) >= codeBytes.Length)
                         {
@@ -465,7 +493,10 @@ namespace BigSisterNodeNet.Plc
                                      value == PlcMachineCodeAssembler.JumpIfZeroOpcode ||
                                      value == PlcMachineCodeAssembler.JumpIfNotZeroOpcode ||
                                      value == PlcMachineCodeAssembler.RisingEdgeTriggerOpcode ||
-                                     value == PlcMachineCodeAssembler.FallingEdgeTriggerOpcode;
+                                     value == PlcMachineCodeAssembler.FallingEdgeTriggerOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOnStartOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOnDoneOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOnResetOpcode;
         }
 
         private static string FormatOpcode(byte opcode)
@@ -542,6 +573,12 @@ namespace BigSisterNodeNet.Plc
                     return "R_TRIG";
                 case PlcMachineCodeAssembler.FallingEdgeTriggerOpcode:
                     return "F_TRIG";
+                case PlcMachineCodeAssembler.TimerOnStartOpcode:
+                    return "TON_START";
+                case PlcMachineCodeAssembler.TimerOnDoneOpcode:
+                    return "TON_DONE";
+                case PlcMachineCodeAssembler.TimerOnResetOpcode:
+                    return "TON_RESET";
                 default:
                     return "DB";
             }

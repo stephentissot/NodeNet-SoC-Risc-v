@@ -180,6 +180,14 @@ class NodeNetCore
             uint8_t last_error_status = 0u;
             char artifact_type[20] = {};
         } _plcUploadSession;
+
+        struct PendingPlcAutoLoad {
+            bool active = false;
+            uint16_t slot_id = 0u;
+            uint32_t object_base = 0u;
+            uint32_t object_size = 0u;
+        } _pendingPlcAutoLoad;
+
         uint32_t _nextPlcUploadId = 1u;
 
         // Private methods
@@ -285,6 +293,9 @@ class NodeNetCore
 
         // Serializes the current PLC upload status into a response document.
         void fillPlcUploadStatus(JsonDocument& response, bool include_header) const;
+
+        // Completes a deferred auto-load after the upload commit response has been emitted.
+        void processPendingPlcAutoLoad();
 
         bool ensureFlashDbReady();
         bool savePointCatalog();

@@ -77,6 +77,9 @@ namespace BigSisterNodeNet.Plc
         public const byte JumpIfNotZeroOpcode = 0x2E;
         public const byte RisingEdgeTriggerOpcode = 0x2F;
         public const byte FallingEdgeTriggerOpcode = 0x30;
+        public const byte TimerOnStartOpcode = 0x31;
+        public const byte TimerOnDoneOpcode = 0x32;
+        public const byte TimerOnResetOpcode = 0x33;
 
         public static PlcAssemblyResult Assemble(string source, PlcObjectFileOptions options)
         {
@@ -370,6 +373,25 @@ namespace BigSisterNodeNet.Plc
                                                  PlcRuntimeLinkAccess.Read);
                             break;
 
+                        case "TON_START":
+                            RequireOperandCount(tokens, 3, parsedLine.LineNumber);
+                            output.Add(TimerOnStartOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "timer index"));
+                            WriteUInt32(output, ParseUInt32Literal(tokens[2], parsedLine.LineNumber, "preset_ms32"));
+                            break;
+
+                        case "TON_DONE":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(TimerOnDoneOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "timer index"));
+                            break;
+
+                        case "TON_RESET":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(TimerOnResetOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "timer index"));
+                            break;
+
                         case "INC_INT":
                         case "INC":
                             RequireOperandCount(tokens, 2, parsedLine.LineNumber);
@@ -502,11 +524,15 @@ namespace BigSisterNodeNet.Plc
                 case "JNZ":
                 case "R_TRIG":
                 case "F_TRIG":
+                case "TON_DONE":
+                case "TON_RESET":
                 case "INC_INT":
                 case "INC":
                 case "DEC_INT":
                 case "DEC":
                     return 3;
+                case "TON_START":
+                    return 7;
                 case "DB":
                     return tokens.Count - 1;
                 default:
@@ -912,10 +938,70 @@ namespace BigSisterNodeNet.Plc
             }
         }
 
+        private static ushort ParseUInt16Literal(string text, int lineNumber, string description)
+        {
+            try
+            {
+                uint value;
+                if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                {
+                    value = Convert.ToUInt32(text.Substring(2), 16);
+                }
+                else
+                {
+                    value = Convert.ToUInt32(text);
+                }
+
+                if (value > ushort.MaxValue)
+                {
+                    throw new PlcMachineCodeCompileException($"Value '{text}' is outside {description} UINT16 range", lineNumber);
+                }
+
+                return (ushort)value;
+            }
+            catch (FormatException)
+            {
+                throw new PlcMachineCodeCompileException($"Invalid {description} literal '{text}'", lineNumber);
+            }
+            catch (OverflowException)
+            {
+                throw new PlcMachineCodeCompileException($"Invalid {description} literal '{text}'", lineNumber);
+            }
+        }
+
+        private static uint ParseUInt32Literal(string text, int lineNumber, string description)
+        {
+            try
+            {
+                if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Convert.ToUInt32(text.Substring(2), 16);
+                }
+
+                return Convert.ToUInt32(text);
+            }
+            catch (FormatException)
+            {
+                throw new PlcMachineCodeCompileException($"Invalid {description} literal '{text}'", lineNumber);
+            }
+            catch (OverflowException)
+            {
+                throw new PlcMachineCodeCompileException($"Invalid {description} literal '{text}'", lineNumber);
+            }
+        }
+
         private static void WriteUInt16(List<byte> output, ushort value)
         {
             output.Add((byte)(value & 0xFFu));
             output.Add((byte)((value >> 8) & 0xFFu));
+        }
+
+        private static void WriteUInt32(List<byte> output, uint value)
+        {
+            output.Add((byte)(value & 0xFFu));
+            output.Add((byte)((value >> 8) & 0xFFu));
+            output.Add((byte)((value >> 16) & 0xFFu));
+            output.Add((byte)((value >> 24) & 0xFFu));
         }
     }
 }

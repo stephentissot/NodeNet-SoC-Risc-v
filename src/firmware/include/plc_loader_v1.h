@@ -631,7 +631,14 @@ private:
                opcode == 0x2Du ||
                opcode == 0x2Eu ||
                opcode == 0x2Fu ||
-               opcode == 0x30u;
+               opcode == 0x30u ||
+               opcode == 0x32u ||
+               opcode == 0x33u;
+    }
+
+    static bool opcodeHasTimerStartOperand(uint8_t opcode)
+    {
+        return opcode == 0x31u;
     }
 
     static bool opcodeIsBranch(uint8_t opcode)
@@ -669,7 +676,19 @@ private:
                opcode == 0x2Eu ||
                opcode == 0x2Fu ||
                opcode == 0x30u ||
+               opcode == 0x31u ||
+               opcode == 0x32u ||
+               opcode == 0x33u ||
                opcodeHasU16Operand(opcode);
+    }
+
+    static uint32_t instructionSizeForOpcode(uint8_t opcode)
+    {
+        if (opcodeHasTimerStartOperand(opcode)) {
+            return 7u;
+        }
+
+        return opcodeHasU16Operand(opcode) ? 3u : 1u;
     }
 
     static bool isInstructionStartOffset(const PlcObjectImageV1& object_image, uint32_t target_offset)
@@ -681,7 +700,7 @@ private:
             }
 
             const uint8_t opcode = object_image.code_bytes[pc];
-            const uint32_t instruction_size = opcodeHasU16Operand(opcode) ? 3u : 1u;
+            const uint32_t instruction_size = instructionSizeForOpcode(opcode);
             pc += instruction_size;
         }
 
@@ -701,7 +720,7 @@ private:
                 return false;
             }
 
-            const uint32_t instruction_size = opcodeHasU16Operand(opcode) ? 3u : 1u;
+            const uint32_t instruction_size = instructionSizeForOpcode(opcode);
             if ((pc + instruction_size) > object_image.code_size) {
                 return false;
             }
@@ -712,7 +731,7 @@ private:
         pc = 0u;
         while (pc < object_image.code_size) {
             const uint8_t opcode = object_image.code_bytes[pc];
-            const uint32_t instruction_size = opcodeHasU16Operand(opcode) ? 3u : 1u;
+            const uint32_t instruction_size = instructionSizeForOpcode(opcode);
             if (opcodeIsBranch(opcode)) {
                 const int16_t rel = static_cast<int16_t>(
                     static_cast<uint16_t>(object_image.code_bytes[pc + 1u]) |
