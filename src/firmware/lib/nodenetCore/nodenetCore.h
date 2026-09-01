@@ -201,6 +201,17 @@ class NodeNetCore
             bool restore_slot_running = false;
         } _pendingPlcAutoLoad;
 
+        struct PlcAutoLoadDiagnostics {
+            bool valid = false;
+            uint16_t slot_id = 0u;
+            uint8_t load_status = 0u;
+            uint8_t parse_status = 0u;
+            uint8_t link_status = 0u;
+            uint8_t resolve_status = 0u;
+            uint16_t failing_symbol_index = 0xFFFFu;
+            uint16_t failing_relocation_index = 0xFFFFu;
+        } _lastPlcAutoLoadDiagnostics;
+
         uint32_t _nextPlcUploadId = 1u;
 
         // Private methods

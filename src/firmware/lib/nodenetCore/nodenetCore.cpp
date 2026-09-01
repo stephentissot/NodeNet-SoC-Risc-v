@@ -3240,6 +3240,16 @@ void NodeNetCore::fillPlcUploadStatus(JsonDocument& response, bool include_heade
     response["bytesReceived"] = _plcUploadSession.bytes_received;
     response["expectedOffset"] = _plcUploadSession.expected_offset;
     response["lastErrorStatus"] = _plcUploadSession.last_error_status;
+    response["lastAutoLoadValid"] = _lastPlcAutoLoadDiagnostics.valid;
+    if (_lastPlcAutoLoadDiagnostics.valid) {
+        response["lastAutoLoadSlotId"] = _lastPlcAutoLoadDiagnostics.slot_id;
+        response["lastAutoLoadStatus"] = _lastPlcAutoLoadDiagnostics.load_status;
+        response["lastAutoLoadParseStatus"] = _lastPlcAutoLoadDiagnostics.parse_status;
+        response["lastAutoLoadLinkStatus"] = _lastPlcAutoLoadDiagnostics.link_status;
+        response["lastAutoLoadResolveStatus"] = _lastPlcAutoLoadDiagnostics.resolve_status;
+        response["lastAutoLoadFailingSymbolIndex"] = _lastPlcAutoLoadDiagnostics.failing_symbol_index;
+        response["lastAutoLoadFailingRelocationIndex"] = _lastPlcAutoLoadDiagnostics.failing_relocation_index;
+    }
 }
 
 bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonDocument& response)
@@ -3305,6 +3315,7 @@ bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonD
     std::memset(plc_upload_volatile_staging_ptr(), 0xFF, static_cast<size_t>(staging_capacity));
 
     resetPlcUploadSession();
+    _lastPlcAutoLoadDiagnostics = {};
     _plcUploadSession.active = true;
     _plcUploadSession.restore_slot_running = slot_running;
     _plcUploadSession.slot_id = slot_id;
@@ -3468,11 +3479,24 @@ void NodeNetCore::processPendingPlcAutoLoad()
                                                                                      slot_id,
                                                                                      object_bytes,
                                                                                      object_size);
+    _lastPlcAutoLoadDiagnostics.valid = true;
+    _lastPlcAutoLoadDiagnostics.slot_id = slot_id;
+    _lastPlcAutoLoadDiagnostics.load_status = static_cast<uint8_t>(load_result.status);
+    _lastPlcAutoLoadDiagnostics.parse_status = static_cast<uint8_t>(load_result.parse_status);
+    _lastPlcAutoLoadDiagnostics.link_status = static_cast<uint8_t>(load_result.link_result.status);
+    _lastPlcAutoLoadDiagnostics.resolve_status = static_cast<uint8_t>(load_result.link_result.resolve_status);
+    _lastPlcAutoLoadDiagnostics.failing_symbol_index = load_result.link_result.failing_symbol_index;
+    _lastPlcAutoLoadDiagnostics.failing_relocation_index = load_result.link_result.failing_relocation_index;
     if (load_result.status != kPlcSlotLoadOk) {
         if (_logger != nullptr) {
-            _logger->Warning("Deferred PLC auto-load failed slot=%u status=%u",
+            _logger->Warning("Deferred PLC auto-load failed slot=%u status=%u parse=%u link=%u resolve=%u symbol=%u relocation=%u",
                              static_cast<unsigned>(slot_id),
-                             static_cast<unsigned>(load_result.status));
+                             static_cast<unsigned>(load_result.status),
+                             static_cast<unsigned>(load_result.parse_status),
+                             static_cast<unsigned>(load_result.link_result.status),
+                             static_cast<unsigned>(load_result.link_result.resolve_status),
+                             static_cast<unsigned>(load_result.link_result.failing_symbol_index),
+                             static_cast<unsigned>(load_result.link_result.failing_relocation_index));
         }
         if (restore_engine_enabled) {
             plc_engine_set_enabled(true);

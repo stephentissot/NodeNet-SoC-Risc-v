@@ -122,11 +122,14 @@ static bool is_transient_slot_variable(const PointIdentity& id) {
     return id.point_id[0] != '\0';
 }
 
-static bool is_slot_variable_point(const PointCatalog::PlcPointMeta& meta, uint16_t slot_id) {
+static bool is_slot_variable_point(const PointDefinition& definition,
+                                  const PointCatalog::PlcPointMeta& meta,
+                                  uint16_t slot_id) {
     return meta.is_local &&
            meta.has_slot &&
            meta.slot_id == slot_id &&
-           meta.point_kind == PointCatalog::PlcPointKind::SlotOther;
+           meta.point_kind == PointCatalog::PlcPointKind::SlotOther &&
+           is_transient_slot_variable(definition.id);
 }
 
 static bool point_definitions_equal(const PointDefinition& lhs, const PointDefinition& rhs) {
@@ -549,7 +552,7 @@ bool PointCatalog::replaceSlotVariableDefinitions(uint16_t slot_id,
     size_t preserved_count = 0u;
     size_t existing_slot_var_count = 0u;
     for (size_t index = 0u; index < count_; ++index) {
-        if (is_slot_variable_point(plc_point_meta_[index], slot_id)) {
+        if (is_slot_variable_point(entries_[index], plc_point_meta_[index], slot_id)) {
             ++existing_slot_var_count;
             continue;
         }

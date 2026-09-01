@@ -270,11 +270,9 @@ namespace BigSisterNodeNet.UI.Models.Instruments
                 PlcStatusMessage = $"Upload en cours vers le slot {SelectedPlcSlot}...";
 
                 var result = await Task.Run(() => _nodeNetSoc.UploadProgram(PlcProgramSource ?? string.Empty, (ushort)SelectedPlcSlot));
-                var loadStatus = ReadResponseValue(result?.CommitResponse, "loadStatus");
-                var rebootPersistent = string.Equals(ReadResponseValue(result?.CommitResponse, "rebootPersistent"), bool.TrueString, StringComparison.OrdinalIgnoreCase);
-                PlcStatusMessage = string.IsNullOrWhiteSpace(loadStatus)
-                    ? $"Upload terminé sur le slot {SelectedPlcSlot}. {(rebootPersistent ? "Persisté pour reboot." : "Chargé en runtime uniquement.")}"
-                    : $"Upload terminé sur le slot {SelectedPlcSlot}. loadStatus={loadStatus}. {(rebootPersistent ? "Persisté pour reboot." : "Chargé en runtime uniquement.")}";
+                PlcStatusMessage = PlcUploadClient.BuildUiStatusMessage((ushort)SelectedPlcSlot,
+                                                                        result?.CommitResponse,
+                                                                        result?.UploadStatusResponse);
             }
             catch (Exception ex)
             {

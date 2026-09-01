@@ -10,6 +10,8 @@ namespace BigSisterNodeNet.Core.Services
     {
         private const int BytecodeReadChunkSize = 768;
         private static readonly TimeSpan PersistedCommitResponseTimeout = TimeSpan.FromSeconds(20);
+        private static readonly TimeSpan DeferredStatusResponseTimeout = TimeSpan.FromSeconds(3);
+        private static readonly TimeSpan DeferredStatusObservationWindow = TimeSpan.FromSeconds(6);
 
         private readonly NodeNetCore _nodeNetCore;
         private readonly PlcUploadClient _uploadClient = new PlcUploadClient();
@@ -129,11 +131,14 @@ namespace BigSisterNodeNet.Core.Services
                 message => MatchesUploadId(message, uploadId),
                 () => _nodeNetCore.EnqueueOutgoingMessage(CreateMessage(_uploadClient.CreateCommitRequest(uploadId, options))));
 
+            var uploadStatusResponse = ReadDeferredUploadStatus(options, commitResponse);
+
             return new PlcUploadResult
             {
                 UploadId = uploadId,
                 BeginResponse = beginResponse,
                 CommitResponse = commitResponse,
+                UploadStatusResponse = uploadStatusResponse,
             };
         }
 
@@ -275,6 +280,42 @@ namespace BigSisterNodeNet.Core.Services
             return _uploadClient.ExpectOk(responseMessage.ToDictionary(), expectedCommand);
         }
 
+        private IDictionary<string, object> ReadDeferredUploadStatus(PlcUploadOptions options,
+                                                                     IDictionary<string, object> commitResponse)
+        {
+            if (!_uploadClient.ReadBoolean(commitResponse, "autoLoadPending"))
+            {
+                return null;
+            }
+
+            var statusOptions = WithResponseTimeout(options, DeferredStatusResponseTimeout);
+            var deadline = DateTime.UtcNow + DeferredStatusObservationWindow;
+            IDictionary<string, object> lastResponse = null;
+
+            while (DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    lastResponse = WaitForAcceptedResponse(
+                        "plcUploadStatusRes",
+                        statusOptions,
+                        message => true,
+                        () => _nodeNetCore.EnqueueOutgoingMessage(CreateMessage(_uploadClient.CreateStatusRequest(statusOptions))));
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (HasDeferredUploadResult(lastResponse, options.SlotId))
+                {
+                    break;
+                }
+            }
+
+            return lastResponse;
+        }
+
         private static TimeSpan GetCommitResponseTimeout(PlcUploadOptions options)
         {
             if (options == null)
@@ -327,6 +368,33 @@ namespace BigSisterNodeNet.Core.Services
         private static bool MatchesSlotId(NodeNetMessage message, ushort slotId)
         {
             return TryReadUInt32(message, "slotId", out var messageSlotId) && messageSlotId == slotId;
+        }
+
+        private static bool HasDeferredUploadResult(IDictionary<string, object> response, ushort slotId)
+        {
+            if (response == null)
+            {
+                return false;
+            }
+
+            if (!response.TryGetValue("lastAutoLoadValid", out var validValue) || validValue == null || !Convert.ToBoolean(validValue))
+            {
+                return false;
+            }
+
+            if (!response.TryGetValue("lastAutoLoadSlotId", out var slotValue) || slotValue == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                return Convert.ToUInt16(slotValue) == slotId;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool TryReadUInt32(NodeNetMessage message, string key, out uint value)
