@@ -272,16 +272,6 @@ namespace BigSisterNodeNet.UI.Models.Instruments
                 var result = await Task.Run(() => _nodeNetSoc.UploadProgram(PlcProgramSource ?? string.Empty, (ushort)SelectedPlcSlot));
                 var loadStatus = ReadResponseValue(result?.CommitResponse, "loadStatus");
                 var rebootPersistent = string.Equals(ReadResponseValue(result?.CommitResponse, "rebootPersistent"), bool.TrueString, StringComparison.OrdinalIgnoreCase);
-                if (_nodeNetSoc != null)
-                {
-                    var slotFeaturePath = string.IsNullOrWhiteSpace(_nodeNetSoc.DeviceId)
-                        ? string.Empty
-                        : _nodeNetSoc.DeviceId + ".plc.slot" + SelectedPlcSlot;
-                    if (!string.IsNullOrWhiteSpace(slotFeaturePath))
-                    {
-                        _nodeNetSoc.BrowsePointDefinitions(slotFeaturePath);
-                    }
-                }
                 PlcStatusMessage = string.IsNullOrWhiteSpace(loadStatus)
                     ? $"Upload terminé sur le slot {SelectedPlcSlot}. {(rebootPersistent ? "Persisté pour reboot." : "Chargé en runtime uniquement.")}"
                     : $"Upload terminé sur le slot {SelectedPlcSlot}. loadStatus={loadStatus}. {(rebootPersistent ? "Persisté pour reboot." : "Chargé en runtime uniquement.")}";

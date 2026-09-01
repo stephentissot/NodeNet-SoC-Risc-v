@@ -80,6 +80,14 @@ namespace BigSisterNodeNet.Plc
         public const byte TimerOnStartOpcode = 0x31;
         public const byte TimerOnDoneOpcode = 0x32;
         public const byte TimerOnResetOpcode = 0x33;
+        public const byte TimerOnElapsedOpcode = 0x34;
+        public const byte TimerOnRemainingOpcode = 0x35;
+        public const byte TimerOffStartOpcode = 0x36;
+        public const byte TimerOffDoneOpcode = 0x37;
+        public const byte TimerOffResetOpcode = 0x38;
+        public const byte TimerPulseStartOpcode = 0x39;
+        public const byte TimerPulseDoneOpcode = 0x3A;
+        public const byte TimerPulseResetOpcode = 0x3B;
 
         public static PlcAssemblyResult Assemble(string source, PlcObjectFileOptions options)
         {
@@ -392,6 +400,56 @@ namespace BigSisterNodeNet.Plc
                             WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "timer index"));
                             break;
 
+                        case "TON_ELAPSED":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(TimerOnElapsedOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "timer index"));
+                            break;
+
+                        case "TON_REMAINING":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(TimerOnRemainingOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "timer index"));
+                            break;
+
+                        case "TOF_START":
+                            RequireOperandCount(tokens, 3, parsedLine.LineNumber);
+                            output.Add(TimerOffStartOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "timer index"));
+                            WriteUInt32(output, ParseUInt32Literal(tokens[2], parsedLine.LineNumber, "preset_ms32"));
+                            break;
+
+                        case "TOF_DONE":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(TimerOffDoneOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "timer index"));
+                            break;
+
+                        case "TOF_RESET":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(TimerOffResetOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "timer index"));
+                            break;
+
+                        case "TP_START":
+                            RequireOperandCount(tokens, 3, parsedLine.LineNumber);
+                            output.Add(TimerPulseStartOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "timer index"));
+                            WriteUInt32(output, ParseUInt32Literal(tokens[2], parsedLine.LineNumber, "preset_ms32"));
+                            break;
+
+                        case "TP_DONE":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(TimerPulseDoneOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "timer index"));
+                            break;
+
+                        case "TP_RESET":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(TimerPulseResetOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "timer index"));
+                            break;
+
                         case "INC_INT":
                         case "INC":
                             RequireOperandCount(tokens, 2, parsedLine.LineNumber);
@@ -526,12 +584,20 @@ namespace BigSisterNodeNet.Plc
                 case "F_TRIG":
                 case "TON_DONE":
                 case "TON_RESET":
+                case "TON_ELAPSED":
+                case "TON_REMAINING":
+                case "TOF_DONE":
+                case "TOF_RESET":
+                case "TP_DONE":
+                case "TP_RESET":
                 case "INC_INT":
                 case "INC":
                 case "DEC_INT":
                 case "DEC":
                     return 3;
                 case "TON_START":
+                case "TOF_START":
+                case "TP_START":
                     return 7;
                 case "DB":
                     return tokens.Count - 1;

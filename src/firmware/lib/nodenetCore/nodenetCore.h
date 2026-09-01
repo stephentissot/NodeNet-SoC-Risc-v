@@ -177,6 +177,7 @@ class NodeNetCore
             uint32_t last_activity_ms = 0u;
             bool persist_to_flash = false;
             bool auto_load = true;
+            bool restore_slot_running = false;
             uint8_t last_error_status = 0u;
             char artifact_type[20] = {};
         } _plcUploadSession;
@@ -186,6 +187,8 @@ class NodeNetCore
             uint16_t slot_id = 0u;
             uint32_t object_base = 0u;
             uint32_t object_size = 0u;
+            bool restore_engine_enabled = false;
+            bool restore_slot_running = false;
         } _pendingPlcAutoLoad;
 
         uint32_t _nextPlcUploadId = 1u;

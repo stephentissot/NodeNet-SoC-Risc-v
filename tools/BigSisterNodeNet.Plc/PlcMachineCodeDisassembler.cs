@@ -359,6 +359,12 @@ namespace BigSisterNodeNet.Plc
 
                     case PlcMachineCodeAssembler.TimerOnDoneOpcode:
                     case PlcMachineCodeAssembler.TimerOnResetOpcode:
+                    case PlcMachineCodeAssembler.TimerOnElapsedOpcode:
+                    case PlcMachineCodeAssembler.TimerOnRemainingOpcode:
+                    case PlcMachineCodeAssembler.TimerOffDoneOpcode:
+                    case PlcMachineCodeAssembler.TimerOffResetOpcode:
+                    case PlcMachineCodeAssembler.TimerPulseDoneOpcode:
+                    case PlcMachineCodeAssembler.TimerPulseResetOpcode:
                         if ((pc + 2) >= codeBytes.Length)
                         {
                             throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
@@ -370,6 +376,22 @@ namespace BigSisterNodeNet.Plc
                                .AppendLine();
                         pc += 3;
                         break;
+
+                          case PlcMachineCodeAssembler.TimerOffStartOpcode:
+                          case PlcMachineCodeAssembler.TimerPulseStartOpcode:
+                           if ((pc + 6) >= codeBytes.Length)
+                           {
+                            throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
+                           }
+
+                           builder.Append(FormatOpcode(opcode))
+                               .Append(' ')
+                               .Append(ReadUInt16(codeBytes, pc + 1))
+                               .Append(", ")
+                               .Append(ReadUInt32(codeBytes, pc + 3).ToString(System.Globalization.CultureInfo.InvariantCulture))
+                               .AppendLine();
+                           pc += 7;
+                           break;
 
                     case PlcMachineCodeAssembler.PushInt16Opcode:
                         if ((pc + 2) >= codeBytes.Length)
@@ -496,7 +518,15 @@ namespace BigSisterNodeNet.Plc
                                      value == PlcMachineCodeAssembler.FallingEdgeTriggerOpcode ||
                                      value == PlcMachineCodeAssembler.TimerOnStartOpcode ||
                                      value == PlcMachineCodeAssembler.TimerOnDoneOpcode ||
-                                     value == PlcMachineCodeAssembler.TimerOnResetOpcode;
+                                     value == PlcMachineCodeAssembler.TimerOnResetOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOnElapsedOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOnRemainingOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOffStartOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOffDoneOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOffResetOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerPulseStartOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerPulseDoneOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerPulseResetOpcode;
         }
 
         private static string FormatOpcode(byte opcode)
@@ -579,6 +609,22 @@ namespace BigSisterNodeNet.Plc
                     return "TON_DONE";
                 case PlcMachineCodeAssembler.TimerOnResetOpcode:
                     return "TON_RESET";
+                case PlcMachineCodeAssembler.TimerOnElapsedOpcode:
+                    return "TON_ELAPSED";
+                case PlcMachineCodeAssembler.TimerOnRemainingOpcode:
+                    return "TON_REMAINING";
+                case PlcMachineCodeAssembler.TimerOffStartOpcode:
+                    return "TOF_START";
+                case PlcMachineCodeAssembler.TimerOffDoneOpcode:
+                    return "TOF_DONE";
+                case PlcMachineCodeAssembler.TimerOffResetOpcode:
+                    return "TOF_RESET";
+                case PlcMachineCodeAssembler.TimerPulseStartOpcode:
+                    return "TP_START";
+                case PlcMachineCodeAssembler.TimerPulseDoneOpcode:
+                    return "TP_DONE";
+                case PlcMachineCodeAssembler.TimerPulseResetOpcode:
+                    return "TP_RESET";
                 default:
                     return "DB";
             }

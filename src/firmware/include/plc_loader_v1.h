@@ -27,7 +27,7 @@ static constexpr uint32_t kPlcSlotTimerSizeBytesV1 = 512u;
 static constexpr uint32_t kPlcSlotParamsSizeBytesV1 = 256u;
 static constexpr uint32_t kPlcSlotScratchSizeBytesV1 = 512u;
 static constexpr uint32_t kPlcSlotStackEntryBytesV1 = 8u;
-static constexpr uint32_t kPlcSlotTimerEntryBytesV1 = 8u;
+static constexpr uint32_t kPlcSlotTimerEntryBytesV1 = 16u;
 static constexpr uint32_t kPlcSlotManifestStatusLoadedV1 = 1u;
 static constexpr uint32_t kPlcSlotParamsMagicV1 = 0x31524150u;
 static constexpr uint32_t kPlcSlotControlPausedV1 = 1u << 0;
@@ -633,12 +633,20 @@ private:
                opcode == 0x2Fu ||
                opcode == 0x30u ||
                opcode == 0x32u ||
-               opcode == 0x33u;
+               opcode == 0x33u ||
+               opcode == 0x34u ||
+               opcode == 0x35u ||
+               opcode == 0x37u ||
+               opcode == 0x38u ||
+               opcode == 0x3Au ||
+               opcode == 0x3Bu;
     }
 
     static bool opcodeHasTimerStartOperand(uint8_t opcode)
     {
-        return opcode == 0x31u;
+        return opcode == 0x31u ||
+               opcode == 0x36u ||
+               opcode == 0x39u;
     }
 
     static bool opcodeIsBranch(uint8_t opcode)
@@ -679,6 +687,14 @@ private:
                opcode == 0x31u ||
                opcode == 0x32u ||
                opcode == 0x33u ||
+               opcode == 0x34u ||
+               opcode == 0x35u ||
+               opcode == 0x36u ||
+               opcode == 0x37u ||
+               opcode == 0x38u ||
+               opcode == 0x39u ||
+               opcode == 0x3Au ||
+               opcode == 0x3Bu ||
                opcodeHasU16Operand(opcode);
     }
 
@@ -771,7 +787,9 @@ private:
         auto* header = reinterpret_cast<PlcObjectSnapshotHeaderV1*>(
             static_cast<uintptr_t>(slotObjectSnapshotHeaderAddress(slot_id)));
         uint8_t* data = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(slotObjectSnapshotDataAddress(slot_id)));
-        std::memcpy(data, object_file_bytes, object_size);
+        if (data != object_file_bytes) {
+            std::memmove(data, object_file_bytes, object_size);
+        }
 
         PlcObjectSnapshotHeaderV1 next = {};
         next.magic = kPlcObjectSnapshotMagicV1;
@@ -814,23 +832,218 @@ private:
         return true;
     }
 
+    static bool slotVariableDefinitionMatches(const PointDefinition& actual,
+                                             const PointDefinition& expected)
+    {
+        return std::strcmp(actual.id.device_id, expected.id.device_id) == 0 &&
+               std::strcmp(actual.id.feature, expected.id.feature) == 0 &&
+               std::strcmp(actual.id.point_id, expected.id.point_id) == 0 &&
+               std::strcmp(actual.display_name, expected.display_name) == 0 &&
+               actual.backend == expected.backend &&
+               actual.direction == expected.direction &&
+               actual.value_type == expected.value_type &&
+               actual.polling.refresh_ms == expected.polling.refresh_ms &&
+               actual.polling.timeout_ms == expected.polling.timeout_ms &&
+               actual.string_capacity == expected.string_capacity &&
+               actual.scale == expected.scale &&
+               std::strcmp(actual.unit, expected.unit) == 0 &&
+               actual.enum_def == expected.enum_def &&
+               std::memcmp(&actual.ref, &expected.ref, sizeof(actual.ref)) == 0;
+    }
+
+    static void buildExpectedSlotVariableDefinition(PointDefinition& definition,
+                                                    const PointCatalog& catalog,
+                                                    uint16_t slot_id,
+                                                    const PlcObjectSymbolRecordV1& symbol)
+    {
+        definition = {};
+        if (!buildSlotVariableIdentity(catalog, slot_id, symbol.symbol_name, definition.id) ||
+            !isSupportedSlotVariableType(symbol.expected_type)) {
+            return;
+        }
+
+        std::strncpy(definition.display_name, symbol.symbol_name, sizeof(definition.display_name) - 1u);
+        definition.backend = PointBackend::Local;
+        definition.direction = (symbol.reserved1 & kPlcSymbolFlagSlotVarPrivate) != 0u
+            ? PointDirection::Input
+            : PointDirection::InOut;
+        definition.value_type = static_cast<PointValueType>(symbol.expected_type);
+        definition.polling.refresh_ms = 0u;
+        definition.polling.timeout_ms = 0u;
+        definition.string_capacity = 0u;
+        definition.scale = 1.0f;
+        definition.unit[0] = '\0';
+        std::memset(&definition.ref, 0, sizeof(definition.ref));
+    }
+
+    static bool slotVariableCatalogMatchesObjectImage(const PlcRuntimePublisherV1& publisher,
+                                                      const PointCatalog& catalog,
+                                                      uint16_t slot_id,
+                                                      const PlcObjectImageV1& object_image)
+    {
+        size_t existing_count = 0u;
+        for (size_t index = 0u; index < catalog.size(); ++index) {
+            if (isSlotVariablePoint(catalog.entries()[index], slot_id)) {
+                ++existing_count;
+            }
+        }
+
+        size_t expected_count = 0u;
+        for (uint16_t symbol_index = 0u; symbol_index < object_image.symbol_count; ++symbol_index) {
+            const PlcObjectSymbolRecordV1& symbol = object_image.symbols[symbol_index];
+            if (symbol.symbol_kind != kPlcSymbolSlotVar) {
+                continue;
+            }
+
+            ++expected_count;
+            PointDefinition expected = {};
+            buildExpectedSlotVariableDefinition(expected, catalog, slot_id, symbol);
+            if (expected.id.point_id[0] == '\0') {
+                return false;
+            }
+
+            const size_t catalog_index = catalog.findIndex(expected.id);
+            if (catalog_index >= catalog.size()) {
+                return false;
+            }
+
+            const PointDefinition& actual = catalog.entries()[catalog_index];
+            if (!slotVariableDefinitionMatches(actual, expected)) {
+                return false;
+            }
+
+            if (publisher.runtimeIndexForCatalogIndex(catalog_index) == PlcRuntimePublisherV1::kInvalidPointIndex) {
+                return false;
+            }
+        }
+
+        return existing_count == expected_count;
+    }
+
+    template <typename SymbolReader>
+    static bool slotVariableIdentityPresentInSymbolSet(const PointCatalog& catalog,
+                                                       uint16_t slot_id,
+                                                       uint16_t symbol_count,
+                                                       SymbolReader read_symbol,
+                                                       const PointIdentity& point_id)
+    {
+        for (uint16_t symbol_index = 0u; symbol_index < symbol_count; ++symbol_index) {
+            PlcObjectSymbolRecordV1 symbol = {};
+            if (!read_symbol(symbol_index, symbol)) {
+                return false;
+            }
+            if (symbol.symbol_kind != kPlcSymbolSlotVar) {
+                continue;
+            }
+
+            PointDefinition expected = {};
+            buildExpectedSlotVariableDefinition(expected, catalog, slot_id, symbol);
+            if (expected.id.point_id[0] == '\0') {
+                return false;
+            }
+
+            if (std::strcmp(expected.id.device_id, point_id.device_id) == 0 &&
+                std::strcmp(expected.id.feature, point_id.feature) == 0 &&
+                std::strcmp(expected.id.point_id, point_id.point_id) == 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    template <typename SymbolReader>
+    static bool reconcileSlotVariablePoints(const PlcRuntimePublisherV1& publisher,
+                                            const PointCatalog& catalog,
+                                            uint16_t slot_id,
+                                            uint16_t symbol_count,
+                                            SymbolReader read_symbol)
+    {
+        PointCatalog& mutable_catalog = const_cast<PointCatalog&>(catalog);
+        PointDefinition* expected_definitions = PointCatalog::slotVariableDefinitionScratch();
+        if (expected_definitions == nullptr) {
+            return false;
+        }
+        size_t expected_count = 0u;
+        bool needs_publish = false;
+
+        for (uint16_t symbol_index = 0u; symbol_index < symbol_count; ++symbol_index) {
+            PlcObjectSymbolRecordV1 symbol = {};
+            if (!read_symbol(symbol_index, symbol)) {
+                return false;
+            }
+            if (symbol.symbol_kind != kPlcSymbolSlotVar) {
+                continue;
+            }
+
+            if (expected_count >= PointCatalog::kMaxPoints) {
+                return false;
+            }
+
+            PointDefinition expected = {};
+            buildExpectedSlotVariableDefinition(expected, catalog, slot_id, symbol);
+            if (expected.id.point_id[0] == '\0') {
+                return false;
+            }
+
+            expected_definitions[expected_count++] = expected;
+
+            const size_t catalog_index = catalog.findIndex(expected.id);
+            if (catalog_index < catalog.size()) {
+                const PointDefinition& actual = catalog.entries()[catalog_index];
+                if (!slotVariableDefinitionMatches(actual, expected)) {
+                    needs_publish = true;
+                }
+            } else {
+                needs_publish = true;
+            }
+
+            const size_t runtime_catalog_index = catalog.findIndex(expected.id);
+            if (runtime_catalog_index >= catalog.size() ||
+                publisher.runtimeIndexForCatalogIndex(runtime_catalog_index) == PlcRuntimePublisherV1::kInvalidPointIndex) {
+                needs_publish = true;
+            }
+        }
+
+        size_t existing_count = 0u;
+        for (size_t index = 0u; index < catalog.size(); ++index) {
+            if (isSlotVariablePoint(catalog.entries()[index], slot_id)) {
+                ++existing_count;
+            }
+        }
+
+        if (existing_count != expected_count) {
+            needs_publish = true;
+        }
+
+        bool changed = false;
+        if (!mutable_catalog.replaceSlotVariableDefinitions(slot_id,
+                                                            expected_definitions,
+                                                            expected_count,
+                                                            changed)) {
+            return false;
+        }
+
+        if (changed || needs_publish) {
+            return const_cast<PlcRuntimePublisherV1&>(publisher).publish(catalog, 0u);
+        }
+
+        return true;
+    }
+
     static bool prepareSlotVariablePoints(const PlcRuntimePublisherV1& publisher,
                                           const PointCatalog& catalog,
                                           uint16_t slot_id,
                                           const PlcObjectImageV1& object_image)
     {
-        PointCatalog& mutable_catalog = const_cast<PointCatalog&>(catalog);
-        if (!clearSlotVariablePoints(mutable_catalog, slot_id)) {
-            return false;
-        }
-
-        for (uint16_t symbol_index = 0u; symbol_index < object_image.symbol_count; ++symbol_index) {
-            if (!ensureSlotVariablePoint(mutable_catalog, slot_id, object_image.symbols[symbol_index])) {
-                return false;
-            }
-        }
-
-        return const_cast<PlcRuntimePublisherV1&>(publisher).publish(catalog, 0u);
+        return reconcileSlotVariablePoints(publisher,
+                                           catalog,
+                                           slot_id,
+                                           object_image.symbol_count,
+                                           [&](uint16_t symbol_index, PlcObjectSymbolRecordV1& symbol) -> bool {
+                                               symbol = object_image.symbols[symbol_index];
+                                               return true;
+                                           });
     }
 
     static bool prepareSlotVariablePointsFromFlash(const PlcRuntimePublisherV1& publisher,
@@ -840,24 +1053,15 @@ private:
                                                    uint32_t flash_offset,
                                                    const PlcObjectFileHeaderV1& header)
     {
-        PointCatalog& mutable_catalog = const_cast<PointCatalog&>(catalog);
-        if (!clearSlotVariablePoints(mutable_catalog, slot_id)) {
-            return false;
-        }
-
-        for (uint16_t symbol_index = 0u; symbol_index < header.symbol_count; ++symbol_index) {
-            PlcObjectSymbolRecordV1 symbol = {};
-            const uint32_t symbol_offset = flash_offset + header.symbol_table_offset +
-                                           static_cast<uint32_t>(symbol_index) * sizeof(PlcObjectSymbolRecordV1);
-            if (!flashReadBytes(flash, symbol_offset, &symbol, sizeof(symbol))) {
-                return false;
-            }
-            if (!ensureSlotVariablePoint(mutable_catalog, slot_id, symbol)) {
-                return false;
-            }
-        }
-
-        return const_cast<PlcRuntimePublisherV1&>(publisher).publish(catalog, 0u);
+        return reconcileSlotVariablePoints(publisher,
+                                           catalog,
+                                           slot_id,
+                                           header.symbol_count,
+                                           [&](uint16_t symbol_index, PlcObjectSymbolRecordV1& symbol) -> bool {
+                                               const uint32_t symbol_offset = flash_offset + header.symbol_table_offset +
+                                                                              static_cast<uint32_t>(symbol_index) * sizeof(PlcObjectSymbolRecordV1);
+                                               return flashReadBytes(flash, symbol_offset, &symbol, sizeof(symbol));
+                                           });
     }
 
     static bool ensureSlotVariablePoint(PointCatalog& catalog,
@@ -1342,6 +1546,10 @@ private:
         next.params_size = 0u;
         std::memcpy(control_block, &next, sizeof(next));
 
+        uint8_t* stack_dst = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(layout.stack_base));
+        std::memset(stack_dst, 0, layout.stack_size);
+        uint8_t* timer_dst = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(layout.timer_base));
+        std::memset(timer_dst, 0, layout.timer_size);
         uint8_t* params_dst = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(layout.params_base));
         std::memset(params_dst, 0, layout.params_capacity);
         uint8_t* scratch_dst = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(layout.scratch_base));

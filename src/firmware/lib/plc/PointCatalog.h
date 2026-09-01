@@ -52,6 +52,7 @@ public:
     const PointDefinition* entries() const;
     const PointState* states() const;
     const PointCommandState* commandStates() const;
+    static PointDefinition* slotVariableDefinitionScratch();
 
     const PointDefinition* find(const PointIdentity& id) const;
     size_t findIndex(const PointIdentity& id) const;
@@ -66,6 +67,10 @@ public:
     const PointCommandState* findCommandState(const PointIdentity& id) const;
     bool upsert(const PointDefinition& definition);
     bool remove(const PointIdentity& id);
+    bool replaceSlotVariableDefinitions(uint16_t slot_id,
+                                        const PointDefinition* definitions,
+                                        size_t definition_count,
+                                        bool& changed_out);
     bool updateState(const PointIdentity& id, const PointState& state);
     bool updateCommandState(const PointIdentity& id, const PointCommandState& state);
     bool popDirtyStateIndex(size_t& index_out);

@@ -1335,7 +1335,102 @@ Validation notes:
 - if the slot exposes fewer than 100 timers, execution must fault deterministically
 - the program must not corrupt neighboring timer state or commit partial outputs before faulting
 
-### ISA Status After Stage 7
+### Stage 8: Timer Introspection, TOF, And TP
+
+Recommended implementation set:
+
+- `TON_ELAPSED timer_idx16`
+- `TON_REMAINING timer_idx16`
+- `TOF_START`, `TOF_DONE`, `TOF_RESET`
+- `TP_START`, `TP_DONE`, `TP_RESET`
+
+Execution contract:
+
+- `TON_ELAPSED` pushes the current elapsed time in milliseconds for the addressed `TON` instance
+- `TON_REMAINING` pushes the current remaining time in milliseconds for the addressed `TON` instance
+- both introspection values use the current `INT16` stack type, so values are saturated to `32767 ms` until a wider integer stack type exists
+- `TOF_START` pops one `BOOL` enable value; while enable is `true`, `TOF_DONE` is immediately `true`; when enable falls to `false`, the timer keeps `done=true` until the preset expires
+- `TP_START` pops one `BOOL` enable value and emits a pulse on a low-to-high transition; the pulse remains active for the preset duration and does not retrigger until the input returns low
+- `TOF_DONE`, `TP_DONE`, and all `*_RESET` mnemonics use the same timer index width and fault behavior as the Stage 7 `TON` instructions
+
+Minimal per-timer state:
+
+- anchor timestamp in milliseconds
+- preset in milliseconds
+- running/done/input-latched flags
+- timer mode (`TON`, `TOF`, or `TP`)
+
+Validation program: observe TON elapsed and remaining
+
+```text
+PARAM POINT_ID enable
+VAR PUBLIC INT tonElapsed
+VAR PUBLIC INT tonRemaining
+VAR PUBLIC BOOL tonDone
+
+LOAD_BOOL enable
+TON_START 0, 5000
+
+TON_ELAPSED 0
+STORE_I16 tonElapsed
+
+TON_REMAINING 0
+STORE_I16 tonRemaining
+
+TON_DONE 0
+STORE_BOOL tonDone
+HALT
+```
+
+Expected behavior:
+
+- `tonElapsed` rises from `0` toward `5000`
+- `tonRemaining` falls from `5000` toward `0`
+- once done, `tonElapsed` stays clamped at the preset and `tonRemaining` stays `0`
+
+Validation program: visible TOF output hold
+
+```text
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare0.input1
+CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare0.output4
+
+LOAD_BOOL in1
+TOF_START 0, 3000
+TOF_DONE 0
+STORE_BOOL out4
+HALT
+```
+
+Expected behavior:
+
+- `out4` turns on immediately when `input1=true`
+- when `input1` returns to `false`, `out4` stays on for about `3000 ms` before turning off
+
+Validation program: visible TP pulse
+
+```text
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare0.input1
+CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare0.output4
+VAR PUBLIC BOOL tpDone
+
+LOAD_BOOL in1
+TP_START 0, 1500
+
+TP_DONE 0
+STORE_BOOL tpDone
+
+LOAD_BOOL tpDone
+STORE_BOOL out4
+HALT
+```
+
+Expected behavior:
+
+- each rising edge of `input1` produces one pulse of about `1500 ms`
+- keeping `input1=true` must not retrigger the pulse continuously
+- returning `input1=false` re-arms the pulse for the next rising edge
+
+### ISA Status After Stage 8
 
 The currently implemented PLC VM subset is now large enough to build and test
 real slot programs directly on hardware.
@@ -1349,11 +1444,11 @@ Implemented instruction families:
 - integer arithmetic and selection: `ADD`, `SUB`, `LT`, `LE`, `GT`, `GE`, `MIN`, `MAX`, `CLAMP`, `SEL`
 - integer point mutation: `INC_INT`, `DEC_INT`
 - control flow: `JMP`, `JZ`, `JNZ`
-- event/stateful primitives: `R_TRIG`, `F_TRIG`, `TON_START`, `TON_DONE`, `TON_RESET`
+- event/stateful primitives: `R_TRIG`, `F_TRIG`, `TON_START`, `TON_DONE`, `TON_RESET`, `TON_ELAPSED`, `TON_REMAINING`, `TOF_START`, `TOF_DONE`, `TOF_RESET`, `TP_START`, `TP_DONE`, `TP_RESET`
 
 Implementation status summary:
 
-- stages 1 through 7 are now implemented across HDL, loader validation, assembler, and disassembler
+- stages 1 through 8 are now implemented across HDL, loader validation, assembler, and disassembler
 - edge state is stored in per-slot scratch SDRAM instead of FPGA fabric state arrays
 - timer state is stored in the existing per-slot timer region
 - PLC upload/commit flow has already needed runtime hardening, including non-blocking NodeNet TX handling and deferred auto-load after `plcUploadCommitRes`
@@ -1373,27 +1468,6 @@ Known work that still remains around the current subset:
 
 The next stages should add user value without reopening large architectural surfaces too early.
 
-### Stage 8: Complete The Timer Family
-
-Recommended implementation set:
-
-- `TON_ELAPSED timer_idx16`
-- `TON_REMAINING timer_idx16`
-- `TOF_START`, `TOF_DONE`, `TOF_RESET`
-- `TP_START`, `TP_DONE`, `TP_RESET`
-
-Why this stage is next:
-
-- timers are already the active user workflow, so the next return on effort is immediate
-- the slot timer memory model already exists, so this extends a known-good architectural path
-- elapsed/remaining visibility will make hardware debugging much easier than trying to infer behavior only from outputs
-
-Validation focus:
-
-- `TON`, `TOF`, and `TP` must stay deterministic across repeated scans and input chatter
-- timer introspection values must remain monotonic and bounded
-- reset/restart behavior must be explicit and easy to observe with `VAR PUBLIC`
-
 ### Stage 9: IEC-Style Counters
 
 Recommended implementation set:
@@ -1402,7 +1476,7 @@ Recommended implementation set:
 - `CTD_COUNT`, `CTD_DONE`, `CTD_RESET`
 - optional early introspection: current count readback if it stays cheap in the ISA and runtime layout
 
-Why this stage follows timers:
+Why this stage is next:
 
 - counters are the next most useful stateful IEC primitive after timers and edge detection
 - they can reuse the same architectural pattern: explicit slot-owned state with narrow HDL primitives
@@ -1416,13 +1490,13 @@ Validation focus:
 
 ### Stage 10: Targeted Runtime And ISA Hardening
 
-Recommended scope:
+Recommended implementation set:
 
 - finish any missing fault-path determinism found during Stage 8 and 9 field tests
 - add more hardware-facing validation programs to this spec for upload, reset, restart, and fault recovery
 - only then consider widening arithmetic or diagnostics
 
-Why this stage matters:
+Why this stage follows timers:
 
 - the current system has already shown that practical robustness work appears exactly when real hardware programs become non-trivial
 - hardening after each feature wave is cheaper than trying to debug several new stateful families at once
