@@ -95,6 +95,14 @@ module wb_plc #(
     localparam [7:0] OPCODE_TP_START = 8'h39;
     localparam [7:0] OPCODE_TP_DONE = 8'h3A;
     localparam [7:0] OPCODE_TP_RESET = 8'h3B;
+    localparam [7:0] OPCODE_CTU_COUNT = 8'h3C;
+    localparam [7:0] OPCODE_CTU_DONE = 8'h3D;
+    localparam [7:0] OPCODE_CTU_VALUE = 8'h3E;
+    localparam [7:0] OPCODE_CTU_RESET = 8'h3F;
+    localparam [7:0] OPCODE_CTD_COUNT = 8'h40;
+    localparam [7:0] OPCODE_CTD_DONE = 8'h41;
+    localparam [7:0] OPCODE_CTD_VALUE = 8'h42;
+    localparam [7:0] OPCODE_CTD_RESET = 8'h43;
     localparam integer EDGE_STATE_BITS = 384;
     localparam integer EDGE_STATE_WORD_COUNT = EDGE_STATE_BITS / 32;
     localparam integer EDGE_STATE_SECTION_BYTES = EDGE_STATE_WORD_COUNT * 4;
@@ -119,6 +127,9 @@ module wb_plc #(
     localparam [1:0] TIMER_MODE_TON = 2'd1;
     localparam [1:0] TIMER_MODE_TOF = 2'd2;
     localparam [1:0] TIMER_MODE_TP = 2'd3;
+    localparam [1:0] COUNTER_MODE_NONE = 2'd0;
+    localparam [1:0] COUNTER_MODE_CTU = 2'd1;
+    localparam [1:0] COUNTER_MODE_CTD = 2'd2;
     localparam [31:0] RUNTIME_WRITE_QUEUE_TAIL_ADDR = RUNTIME_WRITE_QUEUE_BASE + 32'd4;
     localparam [31:0] RUNTIME_WRITE_QUEUE_INDEX_BASE = RUNTIME_WRITE_QUEUE_BASE + 32'd12;
     localparam [31:0] RUNTIME_WRITE_QUEUE_CAPACITY = 32'd384;
@@ -196,6 +207,13 @@ module wb_plc #(
     localparam [6:0] ST_TIMER_WRITE_WORD0 = 7'd62;
     localparam [6:0] ST_TIMER_WRITE_WORD1 = 7'd63;
     localparam [6:0] ST_TIMER_WRITE_FLAGS = 7'd64;
+    localparam [6:0] ST_COUNTER_PREP_START = 7'd65;
+    localparam [6:0] ST_COUNTER_READ_WORD0 = 7'd66;
+    localparam [6:0] ST_COUNTER_READ_WORD1 = 7'd67;
+    localparam [6:0] ST_COUNTER_READ_FLAGS = 7'd68;
+    localparam [6:0] ST_COUNTER_WRITE_WORD0 = 7'd69;
+    localparam [6:0] ST_COUNTER_WRITE_WORD1 = 7'd70;
+    localparam [6:0] ST_COUNTER_WRITE_FLAGS = 7'd71;
 
     reg        engine_enable;
     reg [31:0] scan_interval_cycles;
@@ -433,6 +451,135 @@ module wb_plc #(
         input [31:0] metric_value;
         begin
             timer_metric_i16 = (metric_value > 32'd32767) ? 16'h7FFF : metric_value[15:0];
+        end
+    endfunction
+
+    function [1:0] counter_mode_from_flags;
+        input [31:0] flags;
+        begin
+            counter_mode_from_flags = flags[9:8];
+        end
+    endfunction
+
+    function [1:0] counter_mode_from_opcode;
+        input [7:0] opcode;
+        begin
+            case (opcode)
+                OPCODE_CTU_COUNT,
+                OPCODE_CTU_DONE,
+                OPCODE_CTU_VALUE,
+                OPCODE_CTU_RESET: counter_mode_from_opcode = COUNTER_MODE_CTU;
+                OPCODE_CTD_COUNT,
+                OPCODE_CTD_DONE,
+                OPCODE_CTD_VALUE,
+                OPCODE_CTD_RESET: counter_mode_from_opcode = COUNTER_MODE_CTD;
+                default: counter_mode_from_opcode = COUNTER_MODE_NONE;
+            endcase
+        end
+    endfunction
+
+    function counter_input_high;
+        input [31:0] flags;
+        begin
+            counter_input_high = (flags & TIMER_FLAG_INPUT_HIGH) != 32'd0;
+        end
+    endfunction
+
+    function [31:0] counter_pack_flags;
+        input [1:0] mode;
+        input       input_high;
+        begin
+            counter_pack_flags = ({22'd0, mode, 8'd0}) |
+                                 (input_high ? TIMER_FLAG_INPUT_HIGH : 32'd0);
+        end
+    endfunction
+
+    function [31:0] sign_extend_i16;
+        input [15:0] raw_value;
+        begin
+            sign_extend_i16 = {{16{raw_value[15]}}, raw_value};
+        end
+    endfunction
+
+    function counter_done_live;
+        input [7:0] opcode;
+        input [15:0] value_raw;
+        input [15:0] preset_raw;
+        reg signed [15:0] signed_value;
+        reg signed [15:0] signed_preset;
+        begin
+            signed_value = value_raw;
+            signed_preset = preset_raw;
+            case (counter_mode_from_opcode(opcode))
+                COUNTER_MODE_CTU: counter_done_live = signed_value >= signed_preset;
+                COUNTER_MODE_CTD: counter_done_live = signed_value <= 16'sd0;
+                default: counter_done_live = 1'b0;
+            endcase
+        end
+    endfunction
+
+    function [15:0] counter_up_next_value;
+        input [15:0] stored_value;
+        input [31:0] flags;
+        input        next_input_high;
+        reg signed [16:0] signed_value;
+        begin
+            if (counter_mode_from_flags(flags) == COUNTER_MODE_CTU) begin
+                signed_value = $signed(stored_value);
+            end else begin
+                signed_value = 17'sd0;
+            end
+
+            if (next_input_high && !counter_input_high(flags)) begin
+                if (signed_value >= 17'sd32767) begin
+                    counter_up_next_value = 16'h7FFF;
+                end else begin
+                    signed_value = signed_value + 17'sd1;
+                    counter_up_next_value = signed_value[15:0];
+                end
+            end else begin
+                counter_up_next_value = signed_value[15:0];
+            end
+        end
+    endfunction
+
+    function [15:0] counter_down_next_value;
+        input [15:0] stored_value;
+        input [15:0] preset_value;
+        input [31:0] flags;
+        input        next_input_high;
+        reg signed [16:0] signed_value;
+        begin
+            if (counter_mode_from_flags(flags) == COUNTER_MODE_CTD) begin
+                signed_value = $signed(stored_value);
+            end else begin
+                signed_value = $signed(preset_value);
+            end
+
+            if (next_input_high && !counter_input_high(flags)) begin
+                if (signed_value <= 17'sd0) begin
+                    counter_down_next_value = 16'd0;
+                end else begin
+                    signed_value = signed_value - 17'sd1;
+                    counter_down_next_value = signed_value[15:0];
+                end
+            end else if (signed_value <= 17'sd0) begin
+                counter_down_next_value = 16'd0;
+            end else begin
+                counter_down_next_value = signed_value[15:0];
+            end
+        end
+    endfunction
+
+    function [15:0] counter_reset_value;
+        input [7:0] opcode;
+        input [15:0] stored_preset;
+        begin
+            if (counter_mode_from_opcode(opcode) == COUNTER_MODE_CTD) begin
+                counter_reset_value = stored_preset;
+            end else begin
+                counter_reset_value = 16'd0;
+            end
         end
     endfunction
 
@@ -807,7 +954,9 @@ module wb_plc #(
                             state <= ST_BRANCH_EXECUTE;
                         end else if (current_opcode == OPCODE_TON_START ||
                                      current_opcode == OPCODE_TOF_START ||
-                                     current_opcode == OPCODE_TP_START) begin
+                                     current_opcode == OPCODE_TP_START ||
+                                     current_opcode == OPCODE_CTU_COUNT ||
+                                     current_opcode == OPCODE_CTD_COUNT) begin
                             state <= ST_FETCH_IMMEDIATE0;
                         end else if (current_opcode == OPCODE_TON_DONE ||
                                      current_opcode == OPCODE_TON_RESET ||
@@ -818,6 +967,13 @@ module wb_plc #(
                                      current_opcode == OPCODE_TP_DONE ||
                                      current_opcode == OPCODE_TP_RESET) begin
                             state <= ST_TIMER_READ_WORD0;
+                        end else if (current_opcode == OPCODE_CTU_DONE ||
+                                     current_opcode == OPCODE_CTU_VALUE ||
+                                     current_opcode == OPCODE_CTU_RESET ||
+                                     current_opcode == OPCODE_CTD_DONE ||
+                                     current_opcode == OPCODE_CTD_VALUE ||
+                                     current_opcode == OPCODE_CTD_RESET) begin
+                            state <= ST_COUNTER_READ_WORD0;
                         end else begin
                             state <= ST_READ_DESC0;
                         end
@@ -836,7 +992,9 @@ module wb_plc #(
                             state <= ST_BRANCH_EXECUTE;
                         end else if (current_opcode == OPCODE_TON_START ||
                                      current_opcode == OPCODE_TOF_START ||
-                                     current_opcode == OPCODE_TP_START) begin
+                                     current_opcode == OPCODE_TP_START ||
+                                     current_opcode == OPCODE_CTU_COUNT ||
+                                     current_opcode == OPCODE_CTD_COUNT) begin
                             state <= ST_FETCH_IMMEDIATE0;
                         end else if (current_opcode == OPCODE_TON_DONE ||
                                      current_opcode == OPCODE_TON_RESET ||
@@ -847,6 +1005,13 @@ module wb_plc #(
                                      current_opcode == OPCODE_TP_DONE ||
                                      current_opcode == OPCODE_TP_RESET) begin
                             state <= ST_TIMER_READ_WORD0;
+                        end else if (current_opcode == OPCODE_CTU_DONE ||
+                                     current_opcode == OPCODE_CTU_VALUE ||
+                                     current_opcode == OPCODE_CTU_RESET ||
+                                     current_opcode == OPCODE_CTD_DONE ||
+                                     current_opcode == OPCODE_CTD_VALUE ||
+                                     current_opcode == OPCODE_CTD_RESET) begin
+                            state <= ST_COUNTER_READ_WORD0;
                         end else begin
                             state <= ST_READ_DESC0;
                         end
@@ -878,8 +1043,11 @@ module wb_plc #(
                         begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_pc - 32'd4);
                     end else if (cached_word_valid && (cached_word_addr == ((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC))) begin
                         current_immediate_u32[15:8] <= pick_byte(cached_word_data, (cb_bytecode_base + current_pc) & 32'd3);
+                        current_immediate_u32[31:16] <= 16'd0;
                         current_pc <= current_pc + 32'd1;
-                        state <= ST_FETCH_IMMEDIATE2;
+                        state <= (current_opcode == OPCODE_CTU_COUNT || current_opcode == OPCODE_CTD_COUNT)
+                            ? ST_COUNTER_PREP_START
+                            : ST_FETCH_IMMEDIATE2;
                     end else if (!m_cyc_o) begin
                         start_read((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC);
                     end else if (m_ack_i) begin
@@ -888,8 +1056,11 @@ module wb_plc #(
                         cached_word_addr <= (cb_bytecode_base + current_pc) & 32'hFFFF_FFFC;
                         cached_word_data <= m_dat_i;
                         current_immediate_u32[15:8] <= pick_byte(m_dat_i, (cb_bytecode_base + current_pc) & 32'd3);
+                        current_immediate_u32[31:16] <= 16'd0;
                         current_pc <= current_pc + 32'd1;
-                        state <= ST_FETCH_IMMEDIATE2;
+                        state <= (current_opcode == OPCODE_CTU_COUNT || current_opcode == OPCODE_CTD_COUNT)
+                            ? ST_COUNTER_PREP_START
+                            : ST_FETCH_IMMEDIATE2;
                     end
                 end
 
@@ -1282,6 +1453,14 @@ module wb_plc #(
                         OPCODE_TP_START,
                         OPCODE_TP_DONE,
                         OPCODE_TP_RESET,
+                        OPCODE_CTU_COUNT,
+                        OPCODE_CTU_DONE,
+                        OPCODE_CTU_VALUE,
+                        OPCODE_CTU_RESET,
+                        OPCODE_CTD_COUNT,
+                        OPCODE_CTD_DONE,
+                        OPCODE_CTD_VALUE,
+                        OPCODE_CTD_RESET,
                         OPCODE_JMP,
                         OPCODE_JZ,
                         OPCODE_JNZ: state <= ST_FETCH_OPERAND0;
@@ -1681,6 +1860,129 @@ module wb_plc #(
                                                     ? timer_pack_flags(TIMER_MODE_TP, 1'b1, 1'b0, 1'b0)
                                                     : timer_pack_flags(TIMER_MODE_TP, 1'b0, 1'b0, 1'b0));
                         end
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        state <= ST_FETCH_OPCODE;
+                    end
+                end
+
+                ST_COUNTER_PREP_START: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (stack_depth == 3'd0) begin
+                        begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
+                    end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                        begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
+                    end else begin
+                        pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                        stack_depth <= stack_depth - 3'd1;
+                        state <= ST_COUNTER_READ_WORD0;
+                    end
+                end
+
+                ST_COUNTER_READ_WORD0: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if ((current_opcode == OPCODE_CTU_DONE ||
+                                  current_opcode == OPCODE_CTU_VALUE ||
+                                  current_opcode == OPCODE_CTD_DONE ||
+                                  current_opcode == OPCODE_CTD_VALUE) &&
+                                 stack_depth >= STACK_DEPTH_MAX) begin
+                        begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
+                    end else if (!m_cyc_o) begin
+                        start_read(timer_entry_addr(cb_timer_base, current_runtime_index));
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        value_word0 <= m_dat_i;
+                        state <= ST_COUNTER_READ_WORD1;
+                    end
+                end
+
+                ST_COUNTER_READ_WORD1: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (!m_cyc_o) begin
+                        start_read(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd4);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        value_word1 <= m_dat_i;
+                        state <= ST_COUNTER_READ_FLAGS;
+                    end
+                end
+
+                ST_COUNTER_READ_FLAGS: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (!m_cyc_o) begin
+                        start_read(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        value_word2 <= m_dat_i;
+                        if (current_opcode == OPCODE_CTU_DONE || current_opcode == OPCODE_CTD_DONE) begin
+                            stack_value[stack_value_bit_index(stack_depth) +: 16] <= {15'd0,
+                                counter_done_live(current_opcode, value_word0[15:0], value_word1[15:0])};
+                            stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_BOOL;
+                            stack_depth <= stack_depth + 3'd1;
+                            state <= ST_FETCH_OPCODE;
+                        end else if (current_opcode == OPCODE_CTU_VALUE || current_opcode == OPCODE_CTD_VALUE) begin
+                            stack_value[stack_value_bit_index(stack_depth) +: 16] <= value_word0[15:0];
+                            stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_INT16;
+                            stack_depth <= stack_depth + 3'd1;
+                            state <= ST_FETCH_OPCODE;
+                        end else begin
+                            state <= ST_COUNTER_WRITE_WORD0;
+                        end
+                    end
+                end
+
+                ST_COUNTER_WRITE_WORD0: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (!m_cyc_o) begin
+                        if (current_opcode == OPCODE_CTU_RESET || current_opcode == OPCODE_CTD_RESET) begin
+                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index),
+                                        sign_extend_i16(counter_reset_value(current_opcode, value_word1[15:0])));
+                        end else if (current_opcode == OPCODE_CTU_COUNT) begin
+                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index),
+                                        sign_extend_i16(counter_up_next_value(value_word0[15:0],
+                                                                             value_word2,
+                                                                             pending_stack_value[0])));
+                        end else begin
+                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index),
+                                        sign_extend_i16(counter_down_next_value(value_word0[15:0],
+                                                                               current_immediate_u32[15:0],
+                                                                               value_word2,
+                                                                               pending_stack_value[0])));
+                        end
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        state <= ST_COUNTER_WRITE_WORD1;
+                    end
+                end
+
+                ST_COUNTER_WRITE_WORD1: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (!m_cyc_o) begin
+                        start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd4,
+                                    (current_opcode == OPCODE_CTU_COUNT || current_opcode == OPCODE_CTD_COUNT)
+                                        ? sign_extend_i16(current_immediate_u32[15:0])
+                                        : value_word1);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        state <= ST_COUNTER_WRITE_FLAGS;
+                    end
+                end
+
+                ST_COUNTER_WRITE_FLAGS: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (!m_cyc_o) begin
+                        start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8,
+                                    counter_pack_flags(counter_mode_from_opcode(current_opcode),
+                                                       (current_opcode == OPCODE_CTU_COUNT || current_opcode == OPCODE_CTD_COUNT)
+                                                           ? pending_stack_value[0]
+                                                           : 1'b0));
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         state <= ST_FETCH_OPCODE;

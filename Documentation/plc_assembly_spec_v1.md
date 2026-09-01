@@ -1472,9 +1472,15 @@ The next stages should add user value without reopening large architectural surf
 
 Recommended implementation set:
 
-- `CTU_COUNT`, `CTU_DONE`, `CTU_RESET`
-- `CTD_COUNT`, `CTD_DONE`, `CTD_RESET`
-- optional early introspection: current count readback if it stays cheap in the ISA and runtime layout
+- `CTU_COUNT counter_idx16, preset_i16`
+- `CTU_DONE counter_idx16`
+- `CTU_VALUE counter_idx16`
+- `CTU_RESET counter_idx16`
+- `CTD_COUNT counter_idx16, preset_i16`
+- `CTD_DONE counter_idx16`
+- `CTD_VALUE counter_idx16`
+- `CTD_RESET counter_idx16`
+- defer `CTUD` until single-direction counters are stable on hardware
 
 Why this stage is next:
 
@@ -1482,10 +1488,100 @@ Why this stage is next:
 - they can reuse the same architectural pattern: explicit slot-owned state with narrow HDL primitives
 - they unlock many practical machine use cases without requiring floats or deep control flow
 
+Execution contract:
+
+- `CTU_COUNT` pops one `BOOL` count-enable value from the stack and increments the addressed counter once on each low-to-high transition seen by that counter instance
+- `CTD_COUNT` pops one `BOOL` count-enable value from the stack and decrements the addressed counter once on each low-to-high transition seen by that counter instance
+- `preset_i16` is written into the counter instance whenever `*_COUNT` executes so `*_DONE` and `*_VALUE` always observe the latest configured preset for that counter
+- `CTU_DONE` pushes `true` when `current_value >= preset`, otherwise `false`
+- `CTD_DONE` pushes `true` when `current_value <= 0`, otherwise `false`
+- `CTU_VALUE` and `CTD_VALUE` push the current counter value as `INT16`
+- `CTU_RESET` and `CTD_RESET` clear the counter value and latched input state; `CTU_RESET` returns the value to `0`, and `CTD_RESET` returns the value to the current stored preset
+- all counter instructions use the same `timer_idx16`-style addressing discipline as the timer family and must fault on out-of-range instance indices
+- current Stage 9 implementation reuses the existing per-slot timer instance region as a shared state pool for both timers and counters, so a slot must not reuse the same instance index for both families
+- values use the current `INT16` stack type, so saturation or clamping must be defined explicitly rather than relying on silent wraparound
+
+Minimal per-counter state:
+
+- current value as signed `INT16`
+- preset as signed `INT16`
+- last input high flag for edge qualification
+- done flag if that stays cheaper than recomputing from value and preset
+- counter mode (`CTU` or `CTD`) if a shared storage layout is used
+
+Validation program: count rising edges into a public value
+
+```text
+CONST POINT_ID in1, gb9fao5yk4f.modbus0.waveshare8ch.input1
+VAR PUBLIC INT pulseCount
+VAR PUBLIC BOOL pulseDone
+
+LOAD_BOOL in1
+CTU_COUNT 0, 3
+
+CTU_VALUE 0
+STORE_I16 pulseCount
+
+CTU_DONE 0
+STORE_BOOL pulseDone
+HALT
+```
+
+Expected behavior:
+
+- `pulseCount` increments only once per low-to-high transition of `input1`
+- keeping `input1=true` across many scans must not keep incrementing the count
+- `pulseDone` becomes `true` on the third rising edge and stays `true` until reset
+
+Validation program: drive an output every third pulse
+
+```text
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare8ch.input1
+CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare8ch.output4
+
+LOAD_BOOL in1
+CTU_COUNT 0, 3
+
+CTU_DONE 0
+STORE_BOOL out4
+HALT
+```
+
+Expected behavior:
+
+- `output4` stays `false` for the first two rising edges
+- `output4` becomes `true` on the third rising edge and remains `true` until reset
+- this gives a simple machine-cycle threshold test without extra arithmetic
+
+Validation program: count down to zero
+
+```text
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare8ch.input1
+CONST POINT_ID out5, gb9fao5yk4f.modbus0.waveshare8ch.output5
+VAR PUBLIC INT remaining
+
+LOAD_BOOL in1
+CTD_COUNT 1, 5
+
+CTD_VALUE 1
+STORE_I16 remaining
+
+CTD_DONE 1
+STORE_BOOL out5
+HALT
+```
+
+Expected behavior:
+
+- `remaining` moves from the chosen initial value toward `0` one event at a time
+- `output5` becomes `true` only when the counter reaches zero or below
+- repeated scans with `input1=true` held high must not consume multiple counts
+
 Validation focus:
 
-- count only once per intended event, usually paired with `R_TRIG`
+- count only once per intended event, whether edge qualification lives inside the counter opcode or is composed with `R_TRIG`
 - enforce reset semantics before optimizing convenience features
+- define clamping behavior for underflow and overflow before enabling wide field tests
 - avoid hidden coupling between timer state and counter state layouts
 
 ### Stage 10: Targeted Runtime And ISA Hardening

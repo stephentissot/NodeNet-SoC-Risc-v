@@ -365,6 +365,12 @@ namespace BigSisterNodeNet.Plc
                     case PlcMachineCodeAssembler.TimerOffResetOpcode:
                     case PlcMachineCodeAssembler.TimerPulseDoneOpcode:
                     case PlcMachineCodeAssembler.TimerPulseResetOpcode:
+                    case PlcMachineCodeAssembler.CounterUpDoneOpcode:
+                    case PlcMachineCodeAssembler.CounterUpValueOpcode:
+                    case PlcMachineCodeAssembler.CounterUpResetOpcode:
+                    case PlcMachineCodeAssembler.CounterDownDoneOpcode:
+                    case PlcMachineCodeAssembler.CounterDownValueOpcode:
+                    case PlcMachineCodeAssembler.CounterDownResetOpcode:
                         if ((pc + 2) >= codeBytes.Length)
                         {
                             throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
@@ -376,6 +382,22 @@ namespace BigSisterNodeNet.Plc
                                .AppendLine();
                         pc += 3;
                         break;
+
+                          case PlcMachineCodeAssembler.CounterUpCountOpcode:
+                          case PlcMachineCodeAssembler.CounterDownCountOpcode:
+                           if ((pc + 4) >= codeBytes.Length)
+                           {
+                            throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
+                           }
+
+                           builder.Append(FormatOpcode(opcode))
+                               .Append(' ')
+                               .Append(ReadUInt16(codeBytes, pc + 1).ToString(System.Globalization.CultureInfo.InvariantCulture))
+                               .Append(", ")
+                               .Append(FormatInt16Literal(ReadUInt16(codeBytes, pc + 3)))
+                               .AppendLine();
+                           pc += 5;
+                           break;
 
                           case PlcMachineCodeAssembler.TimerOffStartOpcode:
                           case PlcMachineCodeAssembler.TimerPulseStartOpcode:
@@ -526,7 +548,15 @@ namespace BigSisterNodeNet.Plc
                                      value == PlcMachineCodeAssembler.TimerOffResetOpcode ||
                                      value == PlcMachineCodeAssembler.TimerPulseStartOpcode ||
                                      value == PlcMachineCodeAssembler.TimerPulseDoneOpcode ||
-                                     value == PlcMachineCodeAssembler.TimerPulseResetOpcode;
+                                     value == PlcMachineCodeAssembler.TimerPulseResetOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterUpCountOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterUpDoneOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterUpValueOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterUpResetOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterDownCountOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterDownDoneOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterDownValueOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterDownResetOpcode;
         }
 
         private static string FormatOpcode(byte opcode)
@@ -625,6 +655,22 @@ namespace BigSisterNodeNet.Plc
                     return "TP_DONE";
                 case PlcMachineCodeAssembler.TimerPulseResetOpcode:
                     return "TP_RESET";
+                case PlcMachineCodeAssembler.CounterUpCountOpcode:
+                    return "CTU_COUNT";
+                case PlcMachineCodeAssembler.CounterUpDoneOpcode:
+                    return "CTU_DONE";
+                case PlcMachineCodeAssembler.CounterUpValueOpcode:
+                    return "CTU_VALUE";
+                case PlcMachineCodeAssembler.CounterUpResetOpcode:
+                    return "CTU_RESET";
+                case PlcMachineCodeAssembler.CounterDownCountOpcode:
+                    return "CTD_COUNT";
+                case PlcMachineCodeAssembler.CounterDownDoneOpcode:
+                    return "CTD_DONE";
+                case PlcMachineCodeAssembler.CounterDownValueOpcode:
+                    return "CTD_VALUE";
+                case PlcMachineCodeAssembler.CounterDownResetOpcode:
+                    return "CTD_RESET";
                 default:
                     return "DB";
             }

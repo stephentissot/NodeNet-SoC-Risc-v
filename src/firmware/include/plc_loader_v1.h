@@ -639,7 +639,13 @@ private:
                opcode == 0x37u ||
                opcode == 0x38u ||
                opcode == 0x3Au ||
-               opcode == 0x3Bu;
+               opcode == 0x3Bu ||
+               opcode == 0x3Du ||
+               opcode == 0x3Eu ||
+               opcode == 0x3Fu ||
+               opcode == 0x41u ||
+               opcode == 0x42u ||
+               opcode == 0x43u;
     }
 
     static bool opcodeHasTimerStartOperand(uint8_t opcode)
@@ -647,6 +653,11 @@ private:
         return opcode == 0x31u ||
                opcode == 0x36u ||
                opcode == 0x39u;
+    }
+
+    static bool opcodeHasCounterCountOperand(uint8_t opcode)
+    {
+        return opcode == 0x3Cu || opcode == 0x40u;
     }
 
     static bool opcodeIsBranch(uint8_t opcode)
@@ -695,6 +706,14 @@ private:
                opcode == 0x39u ||
                opcode == 0x3Au ||
                opcode == 0x3Bu ||
+               opcode == 0x3Cu ||
+               opcode == 0x3Du ||
+               opcode == 0x3Eu ||
+               opcode == 0x3Fu ||
+               opcode == 0x40u ||
+               opcode == 0x41u ||
+               opcode == 0x42u ||
+               opcode == 0x43u ||
                opcodeHasU16Operand(opcode);
     }
 
@@ -702,6 +721,10 @@ private:
     {
         if (opcodeHasTimerStartOperand(opcode)) {
             return 7u;
+        }
+
+        if (opcodeHasCounterCountOperand(opcode)) {
+            return 5u;
         }
 
         return opcodeHasU16Operand(opcode) ? 3u : 1u;

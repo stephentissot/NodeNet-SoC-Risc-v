@@ -88,6 +88,14 @@ namespace BigSisterNodeNet.Plc
         public const byte TimerPulseStartOpcode = 0x39;
         public const byte TimerPulseDoneOpcode = 0x3A;
         public const byte TimerPulseResetOpcode = 0x3B;
+        public const byte CounterUpCountOpcode = 0x3C;
+        public const byte CounterUpDoneOpcode = 0x3D;
+        public const byte CounterUpValueOpcode = 0x3E;
+        public const byte CounterUpResetOpcode = 0x3F;
+        public const byte CounterDownCountOpcode = 0x40;
+        public const byte CounterDownDoneOpcode = 0x41;
+        public const byte CounterDownValueOpcode = 0x42;
+        public const byte CounterDownResetOpcode = 0x43;
 
         public static PlcAssemblyResult Assemble(string source, PlcObjectFileOptions options)
         {
@@ -450,6 +458,56 @@ namespace BigSisterNodeNet.Plc
                             WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "timer index"));
                             break;
 
+                        case "CTU_COUNT":
+                            RequireOperandCount(tokens, 3, parsedLine.LineNumber);
+                            output.Add(CounterUpCountOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "counter index"));
+                            WriteUInt16(output, ParseInt16Literal(tokens[2], parsedLine.LineNumber));
+                            break;
+
+                        case "CTU_DONE":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(CounterUpDoneOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "counter index"));
+                            break;
+
+                        case "CTU_VALUE":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(CounterUpValueOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "counter index"));
+                            break;
+
+                        case "CTU_RESET":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(CounterUpResetOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "counter index"));
+                            break;
+
+                        case "CTD_COUNT":
+                            RequireOperandCount(tokens, 3, parsedLine.LineNumber);
+                            output.Add(CounterDownCountOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "counter index"));
+                            WriteUInt16(output, ParseInt16Literal(tokens[2], parsedLine.LineNumber));
+                            break;
+
+                        case "CTD_DONE":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(CounterDownDoneOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "counter index"));
+                            break;
+
+                        case "CTD_VALUE":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(CounterDownValueOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "counter index"));
+                            break;
+
+                        case "CTD_RESET":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(CounterDownResetOpcode);
+                            WriteUInt16(output, ParseUInt16Literal(tokens[1], parsedLine.LineNumber, "counter index"));
+                            break;
+
                         case "INC_INT":
                         case "INC":
                             RequireOperandCount(tokens, 2, parsedLine.LineNumber);
@@ -590,11 +648,20 @@ namespace BigSisterNodeNet.Plc
                 case "TOF_RESET":
                 case "TP_DONE":
                 case "TP_RESET":
+                case "CTU_DONE":
+                case "CTU_VALUE":
+                case "CTU_RESET":
+                case "CTD_DONE":
+                case "CTD_VALUE":
+                case "CTD_RESET":
                 case "INC_INT":
                 case "INC":
                 case "DEC_INT":
                 case "DEC":
                     return 3;
+                case "CTU_COUNT":
+                case "CTD_COUNT":
+                    return 5;
                 case "TON_START":
                 case "TOF_START":
                 case "TP_START":
