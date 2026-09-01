@@ -93,7 +93,7 @@ Example:
 
 ```text
 PARAM POINT_ID input
-CONST POINT_ID y, gb9fao5yk4f.modbus0.waveshare8ch.output4
+CONST POINT_ID y, gb9fao5yk4f.modbus0.waveshare0.output4
 VAR BOOL latch
 
 LOAD_BOOL input
@@ -333,7 +333,7 @@ Purpose:
 Example:
 
 ```text
-CONST POINT_ID y, gb9fao5yk4f.modbus0.waveshare8ch.output4
+CONST POINT_ID y, gb9fao5yk4f.modbus0.waveshare0.output4
 ```
 
 Usage notes:
@@ -1512,7 +1512,7 @@ Minimal per-counter state:
 Validation program: count rising edges into a public value
 
 ```text
-CONST POINT_ID in1, gb9fao5yk4f.modbus0.waveshare8ch.input1
+CONST POINT_ID in1, gb9fao5yk4f.modbus0.waveshare0.input1
 VAR PUBLIC INT pulseCount
 VAR PUBLIC BOOL pulseDone
 
@@ -1536,8 +1536,8 @@ Expected behavior:
 Validation program: drive an output every third pulse
 
 ```text
-CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare8ch.input1
-CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare8ch.output4
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare0.input1
+CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare0.output4
 
 LOAD_BOOL in1
 CTU_COUNT 0, 3
@@ -1556,8 +1556,8 @@ Expected behavior:
 Validation program: count down to zero
 
 ```text
-CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare8ch.input1
-CONST POINT_ID out5, gb9fao5yk4f.modbus0.waveshare8ch.output5
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare0.input1
+CONST POINT_ID out5, gb9fao5yk4f.modbus0.waveshare0.output5
 VAR PUBLIC INT remaining
 
 LOAD_BOOL in1
@@ -1592,10 +1592,157 @@ Recommended implementation set:
 - add more hardware-facing validation programs to this spec for upload, reset, restart, and fault recovery
 - only then consider widening arithmetic or diagnostics
 
+Why this is its own stage:
+
+- the VM is now useful enough that most remaining risk comes from lifecycle behavior, not missing mnemonics
+- the recent field failures were caused by load/reload/runtime interactions rather than by boolean or arithmetic semantics
+- once a slot owns state across scans, every reset, fault, and reload path becomes part of the ISA contract in practice
+
+Stage 10 scope:
+
+- keep the Stage 9 instruction surface stable
+- tighten runtime behavior around upload, deferred auto-load, restart, and fault stop/recovery
+- make failure behavior as testable and repeatable as normal execution behavior
+
+Hardening contract:
+
+- the same malformed or unsupported program must produce the same fault code on repeated runs
+- a fault in one slot must stop that slot cleanly without corrupting other slots or shared runtime tables
+- partial execution of a stateful instruction must not leave a slot in an ambiguous half-updated state after restart or reload
+- after deferred auto-load, the slot must return to the same paused/running state it had before the upload began
+- clearing a fault or loading a replacement program must not require a power cycle to recover normal execution
+- runtime-owned SDRAM structures must remain self-consistent even when a slot faults during stateful timer or counter operations
+
+Primary fault classes to lock down:
+
+- invalid opcode or truncated instruction stream
+- stack underflow and stack overflow
+- type mismatch on stack or point access
+- point index out of range
+- timer or counter instance index out of range
+- runtime write rejection on non-writable points
+- reload while the slot previously owned stateful timer/counter instances
+
+Implementation focus:
+
+- prefer deterministic stop-and-report over attempting clever in-place recovery during the same scan
+- preserve slot isolation even if that means a slightly more conservative fault path
+- treat loader validation and runtime fault handling as one surface: reject what can be rejected before execution, fault cleanly for what must be detected at execution time
+- document every intentional simplification, such as shared timer/counter instance pools, so test programs can exercise those boundaries explicitly
+
 Why this stage follows timers:
 
 - the current system has already shown that practical robustness work appears exactly when real hardware programs become non-trivial
 - hardening after each feature wave is cheaper than trying to debug several new stateful families at once
+
+Validation matrix:
+
+- upload a valid replacement over a previously running slot and verify the slot resumes in the same running state
+- upload a valid replacement over a previously stopped slot and verify the slot remains stopped after auto-load
+- trigger a deterministic runtime fault and verify the same fault code and stop behavior over repeated runs
+- recover from that fault by loading a valid program and verify normal execution resumes without board reset
+- verify that timer/counter state from an old program does not leak into a newly loaded program using different indices
+- verify that an out-of-range timer/counter reference faults the slot and leaves other slots running
+
+Validation program: deterministic counter index fault
+
+```text
+CONST POINT_ID in1, gb9fao5yk4f.modbus0.waveshare0.input1
+
+LOAD_BOOL in1
+CTU_COUNT 1024, 3
+HALT
+```
+
+Expected behavior:
+
+- execution must stop with a deterministic point-or-instance out-of-range fault
+- repeating the same load/run sequence must produce the same fault code and the same slot stop state
+- other slots must continue to scan normally
+
+Validation program: fault recovery after replacement upload
+
+```text
+CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare0.output4
+
+PUSH_TRUE
+STORE_BOOL out4
+HALT
+```
+
+Expected behavior:
+
+- after a deliberate Stage 10 fault test, loading this trivial replacement must restore normal execution without a board reboot
+- `output4` must become `true`
+- the previous fault code should be clearable by the normal runtime recovery path rather than only by power cycling
+
+Validation program: reset stability across repeated scans
+
+```text
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare0.input1
+CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare0.output4
+VAR PUBLIC INT count
+
+LOAD_BOOL in1
+CTU_COUNT 0, 2
+
+LOAD_BOOL in1
+JZ no_reset
+CTU_RESET 0
+no_reset:
+
+CTU_VALUE 0
+STORE_I16 count
+
+CTU_DONE 0
+STORE_BOOL out4
+HALT
+```
+
+Expected behavior:
+
+- with `input1=false`, the counter remains stable scan to scan
+- with `input1=true`, the reset path behaves deterministically and does not leave the counter in a partially updated state
+- repeated toggling must not accumulate ghost counts or require a restart to restore correct behavior
+
+Validation program: reload boundary between timer and counter indices
+
+```text
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare0.input1
+CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare0.output4
+
+LOAD_BOOL in1
+TON_START 0, 1000
+TON_DONE 0
+STORE_BOOL out4
+HALT
+```
+
+Then replace it with:
+
+```text
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare0.input1
+CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare0.output4
+
+LOAD_BOOL in1
+CTU_COUNT 1, 2
+CTU_DONE 1
+STORE_BOOL out4
+HALT
+```
+
+Expected behavior:
+
+- the second program must start from a clean state for counter index `1`
+- the timer state previously used by index `0` must not affect the counter behavior at index `1`
+- replacing a stateful program with another stateful program must remain stable across repeated uploads
+
+Stage 10 completion criteria:
+
+- at least one negative test exists for each major VM fault class already reachable from the current ISA
+- upload, auto-load, restart, and fault recovery have documented validation programs in this spec
+- the user can recover from an intentionally faulting program by loading a valid replacement without needing an FPGA reflash or power cycle
+- all known lifecycle-related simplifications and limits are written down next to the validation guidance that exercises them
 
 Candidate follow-on after Stage 10:
 
@@ -2288,7 +2435,7 @@ For the next toolchain step, keep source conservative:
 
 ```text
 PARAM POINT_ID input
-CONST POINT_ID y, gb9fao5yk4f.modbus0.waveshare8ch.output4
+CONST POINT_ID y, gb9fao5yk4f.modbus0.waveshare0.output4
 VAR BOOL latch
 
 LOAD_BOOL input

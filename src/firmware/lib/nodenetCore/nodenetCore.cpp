@@ -904,6 +904,22 @@ static void plc_engine_set_enabled(bool enabled)
     *plc_reg_ptr(0x00u) = enabled ? 0x1u : 0x0u;
 }
 
+static uint32_t plc_slot_run_mask_snapshot()
+{
+    uint32_t mask = 0u;
+    for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1 && slot_id < 32u; ++slot_id) {
+        const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+            static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+        if (!plc_control_block_loaded(*control_block, slot_id)) {
+            continue;
+        }
+        if (!plc_slot_paused(*control_block)) {
+            mask |= (1u << slot_id);
+        }
+    }
+    return mask;
+}
+
 static void plc_engine_clear_fault_latch()
 {
     const uint32_t current = *plc_reg_ptr(0x00u);
@@ -1536,6 +1552,8 @@ void NodeNetCore::savePreferences()
         return;
     }
 
+    snapshotPlcPersistentRuntimeState();
+
     JsonDocument prefsDoc;
     toJson(prefsDoc);
 
@@ -1609,6 +1627,36 @@ void NodeNetCore::loadPreferences()
 
     fromJson(prefsDoc);
 
+}
+
+void NodeNetCore::snapshotPlcPersistentRuntimeState()
+{
+    _persistedPlcEngineEnabled = plc_engine_enabled();
+    _persistedPlcSlotRunMask = plc_slot_run_mask_snapshot();
+}
+
+void NodeNetCore::applyPersistedPlcRuntimeState()
+{
+    for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1 && slot_id < 32u; ++slot_id) {
+        volatile PlcProgramControlBlockV1* control_block = reinterpret_cast<volatile PlcProgramControlBlockV1*>(
+            static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+        const bool loaded = control_block->magic == kPlcProgramControlBlockMagicV1 &&
+                            control_block->slot_id == slot_id &&
+                            control_block->bytecode_size != 0u &&
+                            control_block->bytecode_base != 0u;
+        if (!loaded) {
+            continue;
+        }
+
+        const uint32_t slot_mask = (1u << slot_id);
+        if ((_persistedPlcSlotRunMask & slot_mask) != 0u) {
+            control_block->control &= ~kPlcSlotControlPausedV1;
+        } else {
+            control_block->control |= kPlcSlotControlPausedV1;
+        }
+    }
+
+    plc_engine_set_enabled(_persistedPlcEngineEnabled);
 }
 
 bool NodeNetCore::isInitialized()
@@ -2138,6 +2186,9 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
         if (plc_meta.point_kind == PointCatalog::PlcPointKind::EngineEnabled) {
             plc_engine_set_enabled(requested);
             ok = (plc_engine_enabled() == requested);
+            if (ok) {
+                savePreferences();
+            }
         } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::EngineClearFault) {
             if (requested) {
                 plc_engine_clear_fault_latch();
@@ -2291,6 +2342,7 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
                 control_block->status = kPlcSlotStatusLoadedV1;
             }
             ok = true;
+            savePreferences();
         }
     } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotStop) {
         if (requested && loaded) {
@@ -2299,6 +2351,7 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
                 control_block->status = kPlcSlotStatusLoadedV1;
             }
             ok = true;
+            savePreferences();
         }
     } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotReset) {
         if (requested && loaded) {
@@ -3851,6 +3904,8 @@ uint16_t NodeNetCore::restorePersistedPlcSlots()
     }
 
     oled::showBootProgress("Restore PLC slots", kBootRestoreProgressEnd);
+
+    applyPersistedPlcRuntimeState();
 
     publishBuiltinPlcPointStates(true);
     return restored_count;

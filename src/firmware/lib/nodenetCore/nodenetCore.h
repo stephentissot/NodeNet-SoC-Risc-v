@@ -73,6 +73,9 @@ class NodeNetCore
             doc["deviceId"] = deviceId;
             doc["instrumentName"] = instrumentName;
             doc["master"] = master;
+            JsonObject plc = doc["plc"].to<JsonObject>();
+            plc["engineEnabled"] = _persistedPlcEngineEnabled;
+            plc["slotRunMask"] = _persistedPlcSlotRunMask;
             JsonObject modbus0 = doc["modbus0"].to<JsonObject>();
             modbus0["speed"] = modbus0Settings.comSettings.baudrate;
             modbus0["timeout"] = modbus0Settings.comSettings.timeout_ms;
@@ -90,6 +93,9 @@ class NodeNetCore
             const uint8_t currentModbus0Retries = modbus0Settings.comSettings.retries;
             const uint8_t currentModbus0Interframe = modbus0Settings.comSettings.interframe_chars_q1;
             const uint16_t currentModbus0MaxGap = modbus0Settings.comSettings.max_gap;
+            const bool currentPlcEngineEnabled = _persistedPlcEngineEnabled;
+            const uint32_t currentPlcSlotRunMask = _persistedPlcSlotRunMask;
+            JsonObjectConst plc = doc["plc"].as<JsonObjectConst>();
             JsonObjectConst modbus0 = doc["modbus0"].as<JsonObjectConst>();
 
             addr = doc["addr"] | currentAddr;
@@ -98,6 +104,8 @@ class NodeNetCore
             strncpy(instrumentName, doc["instrumentName"] | currentInstrumentName, sizeof(instrumentName) - 1);
             instrumentName[sizeof(instrumentName) - 1] = '\0';
             master = doc["master"] | currentMaster;
+            _persistedPlcEngineEnabled = plc["engineEnabled"] | currentPlcEngineEnabled;
+            _persistedPlcSlotRunMask = plc["slotRunMask"] | currentPlcSlotRunMask;
             modbus0Settings.comSettings.baudrate = modbus0["speed"] | currentModbus0Speed;
             modbus0Settings.comSettings.timeout_ms = modbus0["timeout"] | currentModbus0Timeout;
             modbus0Settings.comSettings.retries = modbus0["retries"] | currentModbus0Retries;
@@ -121,7 +129,7 @@ class NodeNetCore
     private:
         static constexpr uint8_t kInputQueueCapacity = 8u;
         static constexpr uint8_t kOutputQueueCapacity = 8u;
-        static constexpr size_t kPreferencesJsonMaxSize = 256u;
+        static constexpr size_t kPreferencesJsonMaxSize = 512u;
 
         struct QueuedMessage {
             uint8_t srcAddr = 0u;
@@ -148,6 +156,8 @@ class NodeNetCore
         bool _pointCatalogAutosaveEnabled = true;
         bool _pointCatalogDirty = false;
         uint32_t _lastPlcBuiltinPointPublishMs = 0u;
+        bool _persistedPlcEngineEnabled = false;
+        uint32_t _persistedPlcSlotRunMask = 0u;
         MessageQueue<kInputQueueCapacity> _inputQueue;
         MessageQueue<kOutputQueueCapacity> _outputQueue;
         volatile bool _inputQueueOverflow = false;
@@ -219,6 +229,9 @@ class NodeNetCore
         // Pops the next pending output message from the fixed output queue.
         // msg: destination object that receives the copied queued message.
         bool dequeueOutputMessage(QueuedMessage& msg);
+
+        void snapshotPlcPersistentRuntimeState();
+        void applyPersistedPlcRuntimeState();
 
         // Rebuilds the PLC runtime descriptor map after point definitions change.
         void syncPlcRuntimeDefinitions();
