@@ -3293,8 +3293,7 @@ bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonD
                         control_block->bytecode_size != 0u &&
                         control_block->bytecode_base != 0u;
     const bool slot_running = loaded &&
-                              (control_block->control & kPlcSlotControlPausedV1) == 0u &&
-                              (control_block->status & kPlcSlotStatusFaultedV1) == 0u;
+                              (control_block->control & kPlcSlotControlPausedV1) == 0u;
     if (loaded) {
         control_block->control |= kPlcSlotControlPausedV1;
         if ((control_block->status & kPlcSlotStatusFaultedV1) == 0u) {
