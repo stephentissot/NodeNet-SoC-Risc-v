@@ -3891,6 +3891,7 @@ uint16_t NodeNetCore::restorePersistedPlcSlots()
     uint16_t restored_count = 0u;
     _plcSlotRuntimeDiagnostics.valid = false;
 
+    _pointCatalog.beginBatchUpdate();
     for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
         oled::showBootProgress("Restore PLC slots", boot_restore_progress(slot_id));
         const PlcFlashPackageEntry& entry = entries[slot_id];
@@ -3925,6 +3926,7 @@ uint16_t NodeNetCore::restorePersistedPlcSlots()
 
         ++restored_count;
     }
+    _pointCatalog.endBatchUpdate();
 
     oled::showBootProgress("Restore PLC slots", kBootRestoreProgressEnd);
 
