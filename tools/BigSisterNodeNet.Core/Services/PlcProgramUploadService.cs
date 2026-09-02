@@ -10,8 +10,8 @@ namespace BigSisterNodeNet.Core.Services
     {
         private const int BytecodeReadChunkSize = 768;
         private static readonly TimeSpan PersistedCommitResponseTimeout = TimeSpan.FromSeconds(20);
-        private static readonly TimeSpan DeferredStatusResponseTimeout = TimeSpan.FromSeconds(3);
-        private static readonly TimeSpan DeferredStatusObservationWindow = TimeSpan.FromSeconds(6);
+        private static readonly TimeSpan DeferredStatusResponseTimeout = TimeSpan.FromSeconds(5);
+        private static readonly TimeSpan DeferredStatusObservationWindow = TimeSpan.FromSeconds(12);
 
         private readonly NodeNetCore _nodeNetCore;
         private readonly PlcUploadClient _uploadClient = new PlcUploadClient();
