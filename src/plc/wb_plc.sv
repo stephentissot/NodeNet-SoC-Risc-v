@@ -117,6 +117,7 @@ module wb_plc #(
     localparam [7:0] RUNTIME_TYPE_INT16 = 8'd3;
     localparam [7:0] RUNTIME_FLAG_READABLE = 8'h01;
     localparam [7:0] RUNTIME_FLAG_WRITABLE = 8'h02;
+    localparam [7:0] RUNTIME_FLAG_SHARED_POINT_STATE = 8'h40;
     localparam [31:0] RUNTIME_WRITER_PLC_VM = 32'd2;
     localparam [31:0] POINT_QUALITY_GOOD = 32'd1;
     localparam [31:0] SHARED_POINT_STATE_VALUE_OFFSET = 32'd0;
@@ -254,7 +255,6 @@ module wb_plc #(
     reg [7:0]  desc_value_type;
     reg [7:0]  desc_flags;
     reg [31:0] desc_value_offset;
-    reg [31:0] desc_status_offset;
     reg [31:0] runtime_value_addr;
     reg [31:0] runtime_status_addr;
     reg [31:0] slot_scratch_base;
@@ -721,7 +721,6 @@ module wb_plc #(
             desc_value_type <= 8'd0;
             desc_flags <= 8'd0;
             desc_value_offset <= 32'd0;
-            desc_status_offset <= 32'd0;
             runtime_value_addr <= 32'd0;
             runtime_status_addr <= 32'd0;
             slot_scratch_base <= 32'd0;
@@ -1538,14 +1537,18 @@ module wb_plc #(
                         desc_value_offset <= m_dat_i;
                         if (current_opcode == OPCODE_LOAD_BOOL) begin
                             runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
-                            if (desc_value_type != RUNTIME_TYPE_BOOL || (desc_flags & RUNTIME_FLAG_READABLE) == 8'd0) begin
+                            if (desc_value_type != RUNTIME_TYPE_BOOL ||
+                                (desc_flags & (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                             end else begin
                                 state <= ST_LOAD_BOOL_VALUE;
                             end
                         end else if (current_opcode == OPCODE_R_TRIG || current_opcode == OPCODE_F_TRIG) begin
                             runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
-                            if (desc_value_type != RUNTIME_TYPE_BOOL || (desc_flags & RUNTIME_FLAG_READABLE) == 8'd0) begin
+                            if (desc_value_type != RUNTIME_TYPE_BOOL ||
+                                (desc_flags & (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                             end else begin
                                 state <= ST_EDGE_READ_VALUE;
@@ -1553,7 +1556,9 @@ module wb_plc #(
                         end else if (current_opcode == OPCODE_STORE_BOOL) begin
                             runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
                             runtime_status_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_QUALITY_OFFSET;
-                            if (desc_value_type != RUNTIME_TYPE_BOOL || (desc_flags & RUNTIME_FLAG_WRITABLE) == 8'd0) begin
+                            if (desc_value_type != RUNTIME_TYPE_BOOL ||
+                                (desc_flags & (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
                                 begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
                             end else if (stack_depth == 3'd0) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
@@ -1566,7 +1571,9 @@ module wb_plc #(
                             end
                         end else if (current_opcode == OPCODE_LOAD_I16) begin
                             runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
-                            if (desc_value_type != RUNTIME_TYPE_INT16 || (desc_flags & RUNTIME_FLAG_READABLE) == 8'd0) begin
+                            if (desc_value_type != RUNTIME_TYPE_INT16 ||
+                                (desc_flags & (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                             end else begin
                                 state <= ST_INT16_READ_VALUE;
@@ -1574,7 +1581,9 @@ module wb_plc #(
                         end else if (current_opcode == OPCODE_STORE_I16) begin
                             runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
                             runtime_status_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_QUALITY_OFFSET;
-                            if (desc_value_type != RUNTIME_TYPE_INT16 || (desc_flags & RUNTIME_FLAG_WRITABLE) == 8'd0) begin
+                            if (desc_value_type != RUNTIME_TYPE_INT16 ||
+                                (desc_flags & (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
                                 begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
                             end else if (stack_depth == 3'd0) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
@@ -1589,78 +1598,8 @@ module wb_plc #(
                             runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
                             runtime_status_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_QUALITY_OFFSET;
                             if (desc_value_type != RUNTIME_TYPE_INT16 ||
-                                (desc_flags & (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_WRITABLE)) != (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_WRITABLE)) begin
-                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
-                            end else begin
-                                state <= ST_INT16_READ_VALUE;
-                            end
-                        end else begin
-                            state <= ST_READ_DESC2;
-                        end
-                    end
-                end
-
-                ST_READ_DESC2: begin
-                    if (!m_cyc_o) begin
-                        start_read(RUNTIME_DESCRIPTOR_BASE + (current_runtime_index * 32'd20) + 32'd8);
-                    end else if (m_ack_i) begin
-                        finish_bus_cycle();
-                        desc_status_offset <= m_dat_i;
-                        runtime_status_addr <= RUNTIME_STATUS_BASE + m_dat_i;
-                        if (current_opcode == OPCODE_LOAD_BOOL) begin
-                            runtime_value_addr <= SHARED_POINT_STATE_BASE + desc_value_offset + SHARED_POINT_STATE_VALUE_OFFSET;
-                            if (desc_value_type != RUNTIME_TYPE_BOOL || (desc_flags & RUNTIME_FLAG_READABLE) == 8'd0) begin
-                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
-                            end else begin
-                                state <= ST_LOAD_BOOL_VALUE;
-                            end
-                        end else if (current_opcode == OPCODE_R_TRIG || current_opcode == OPCODE_F_TRIG) begin
-                            runtime_value_addr <= SHARED_POINT_STATE_BASE + desc_value_offset + SHARED_POINT_STATE_VALUE_OFFSET;
-                            if (desc_value_type != RUNTIME_TYPE_BOOL || (desc_flags & RUNTIME_FLAG_READABLE) == 8'd0) begin
-                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
-                            end else begin
-                                state <= ST_EDGE_READ_VALUE;
-                            end
-                        end else if (current_opcode == OPCODE_STORE_BOOL) begin
-                            runtime_value_addr <= SHARED_POINT_STATE_BASE + desc_value_offset + SHARED_POINT_STATE_VALUE_OFFSET;
-                            runtime_status_addr <= SHARED_POINT_STATE_BASE + desc_value_offset + SHARED_POINT_STATE_QUALITY_OFFSET;
-                            if (desc_value_type != RUNTIME_TYPE_BOOL || (desc_flags & RUNTIME_FLAG_WRITABLE) == 8'd0) begin
-                                begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
-                            end else if (stack_depth == 3'd0) begin
-                                begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
-                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
-                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
-                            end else begin
-                                pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
-                                stack_depth <= stack_depth - 3'd1;
-                                state <= ST_STORE_BOOL_READ_VALUE;
-                            end
-                        end else if (current_opcode == OPCODE_LOAD_I16) begin
-                            runtime_value_addr <= SHARED_POINT_STATE_BASE + desc_value_offset + SHARED_POINT_STATE_VALUE_OFFSET;
-                            if (desc_value_type != RUNTIME_TYPE_INT16 || (desc_flags & RUNTIME_FLAG_READABLE) == 8'd0) begin
-                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
-                            end else begin
-                                state <= ST_INT16_READ_VALUE;
-                            end
-                        end else if (current_opcode == OPCODE_STORE_I16) begin
-                            runtime_value_addr <= SHARED_POINT_STATE_BASE + desc_value_offset + SHARED_POINT_STATE_VALUE_OFFSET;
-                            runtime_status_addr <= SHARED_POINT_STATE_BASE + desc_value_offset + SHARED_POINT_STATE_QUALITY_OFFSET;
-                            if (desc_value_type != RUNTIME_TYPE_INT16 || (desc_flags & RUNTIME_FLAG_WRITABLE) == 8'd0) begin
-                                begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
-                            end else if (stack_depth == 3'd0) begin
-                                begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
-                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
-                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
-                            end else begin
-                                pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
-                                stack_depth <= stack_depth - 3'd1;
-                                state <= ST_INT16_READ_VALUE;
-                            end
-                        end else begin
-                            runtime_value_addr <= SHARED_POINT_STATE_BASE + desc_value_offset + SHARED_POINT_STATE_VALUE_OFFSET;
-                            runtime_status_addr <= SHARED_POINT_STATE_BASE + desc_value_offset + SHARED_POINT_STATE_QUALITY_OFFSET;
-                            if (desc_value_type != RUNTIME_TYPE_INT16 ||
-                                (desc_flags & (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_WRITABLE)) != (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_WRITABLE)) begin
+                                (desc_flags & (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                             end else begin
                                 state <= ST_INT16_READ_VALUE;

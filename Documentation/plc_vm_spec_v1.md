@@ -250,8 +250,13 @@ struct PlcPointDescriptorV1 {
 - bit `3`: output point
 - bit `4`: internal point
 - bit `5`: float point
-- bit `6`: reserved
+- bit `6`: descriptor addresses a shared `PointState` record
 - bit `7`: reserved
+
+When bit `6` is set:
+
+- `value_offset` is the byte offset of the owning `PointState` record from `SDRAM_POINT_STATE_BASE`
+- `status_offset` is unused and shall be `0`
 
 ### 2.4 Point Value Table
 

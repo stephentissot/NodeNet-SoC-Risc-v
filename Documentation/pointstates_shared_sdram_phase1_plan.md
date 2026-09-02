@@ -96,8 +96,10 @@ Recommended meaning:
 
 - `value_offset` becomes the byte offset of the owning `PointState` record from
   `SDRAM_POINT_STATE_BASE`
-- `status_offset` is retained for compatibility in Phase 1, but should stop
-  representing a second authoritative status store
+- descriptor flag bit `6` marks that the runtime point uses shared
+  `PointState` storage
+- `status_offset` becomes unused for those shared descriptors and should be
+  published as `0`
 
 That lets the runtime index indirection survive while the value/status mirror
 surface is removed incrementally.

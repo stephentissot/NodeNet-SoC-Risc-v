@@ -48,6 +48,7 @@ enum PlcRuntimeDescriptorFlagsV1 : uint8_t {
     kPlcRuntimeFlagOutput = 1u << 3,
     kPlcRuntimeFlagInternal = 1u << 4,
     kPlcRuntimeFlagFloat = 1u << 5,
+    kPlcRuntimeFlagSharedPointState = 1u << 6,
 };
 
 enum PlcRuntimeLastWriterV1 : uint32_t {
@@ -573,6 +574,10 @@ private:
         if (definition.value_type == PointValueType::Float) {
             flags |= kPlcRuntimeFlagFloat;
         }
+        if (definition.value_type == PointValueType::Bool ||
+            definition.value_type == PointValueType::Int16) {
+            flags |= kPlcRuntimeFlagSharedPointState;
+        }
         return flags;
     }
 
@@ -706,7 +711,9 @@ private:
             descriptor.value_type = mapValueType(definition.value_type);
             descriptor.flags = mapFlags(definition);
             descriptor.value_offset = sharedPointStateRecordOffset(i);
-            descriptor.status_offset = published_count_ * static_cast<uint32_t>(sizeof(PlcPointStatusV1));
+            descriptor.status_offset = usesSharedPointState(definition.value_type)
+                                           ? 0u
+                                           : (published_count_ * static_cast<uint32_t>(sizeof(PlcPointStatusV1)));
 
             writeDescriptor(descriptors[published_count_], descriptor);
             catalog_to_runtime_[i] = published_count_;
