@@ -259,15 +259,19 @@ public:
             return;
         }
 
-        std::memset(reinterpret_cast<void*>(static_cast<uintptr_t>(kPlcSlotBytecodeRegionBaseV1)),
-                    0,
-                    kPlcSlotBytecodeRegionSizeV1);
+        const uint32_t control_bytes = alignUp(slotControlBlockRegionBase() +
+                                                   (static_cast<uint32_t>(kPlcSlotCountV1) * sizeof(PlcProgramControlBlockV1)) -
+                                                   kPlcSlotControlRegionBaseV1,
+                                               16u);
         std::memset(reinterpret_cast<void*>(static_cast<uintptr_t>(kPlcSlotControlRegionBaseV1)),
                     0,
-                    kPlcSlotControlRegionSizeV1);
-        std::memset(reinterpret_cast<void*>(static_cast<uintptr_t>(kPlcSlotObjectRegionBaseV1)),
-                    0,
-                    kPlcSlotObjectRegionSizeV1);
+                    control_bytes);
+
+        for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
+            std::memset(reinterpret_cast<void*>(static_cast<uintptr_t>(slotObjectSnapshotHeaderAddress(slot_id))),
+                        0,
+                        sizeof(PlcObjectSnapshotHeaderV1));
+        }
     }
 
     static PlcSlotLoadResultV1 loadParsedObjectIntoSlot(const PlcRuntimePublisherV1& publisher,
