@@ -368,48 +368,6 @@ void PlcCore::rebuildPollPlan()
     }
 }
 
-bool PlcCore::readRuntimeBool(uint16_t runtime_index, bool& value_out) const
-{
-    if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
-        return false;
-    }
-
-    const size_t catalog_index = runtime_publisher_->catalogIndexForRuntimeIndex(runtime_index);
-    if (catalog_index >= point_catalog_->size()) {
-        return false;
-    }
-
-    const PointDefinition& definition = point_catalog_->entries()[catalog_index];
-    const PointState& state = point_catalog_->states()[catalog_index];
-    if (definition.value_type != PointValueType::Bool) {
-        return false;
-    }
-
-    value_out = state.value.b;
-    return true;
-}
-
-bool PlcCore::readRuntimeUint16(uint16_t runtime_index, uint16_t& value_out) const
-{
-    if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
-        return false;
-    }
-
-    const size_t catalog_index = runtime_publisher_->catalogIndexForRuntimeIndex(runtime_index);
-    if (catalog_index >= point_catalog_->size()) {
-        return false;
-    }
-
-    const PointDefinition& definition = point_catalog_->entries()[catalog_index];
-    const PointState& state = point_catalog_->states()[catalog_index];
-    if (definition.value_type != PointValueType::Uint16) {
-        return false;
-    }
-
-    value_out = state.value.u16;
-    return true;
-}
-
 bool PlcCore::commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now_ms)
 {
     if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
@@ -536,27 +494,6 @@ bool PlcCore::commitRuntimeUint16(uint16_t runtime_index, uint16_t value, uint32
     return ok && state_ok && command_ok;
 }
 
-bool PlcCore::readRuntimeInt16(uint16_t runtime_index, int16_t& value_out) const
-{
-    if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
-        return false;
-    }
-
-    const size_t catalog_index = runtime_publisher_->catalogIndexForRuntimeIndex(runtime_index);
-    if (catalog_index >= point_catalog_->size()) {
-        return false;
-    }
-
-    const PointDefinition& definition = point_catalog_->entries()[catalog_index];
-    const PointState& state = point_catalog_->states()[catalog_index];
-    if (definition.value_type != PointValueType::Int16) {
-        return false;
-    }
-
-    value_out = state.value.i16;
-    return true;
-}
-
 bool PlcCore::commitRuntimeInt16(uint16_t runtime_index, int16_t value, uint32_t now_ms)
 {
     if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
@@ -614,27 +551,6 @@ bool PlcCore::commitRuntimeInt16(uint16_t runtime_index, int16_t value, uint32_t
     const bool state_ok = point_catalog_->updateState(definition.id, next_state);
     const bool command_ok = point_catalog_->updateCommandState(definition.id, command_state);
     return ok && state_ok && command_ok;
-}
-
-bool PlcCore::readRuntimeEnum(uint16_t runtime_index, int32_t& value_out) const
-{
-    if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
-        return false;
-    }
-
-    const size_t catalog_index = runtime_publisher_->catalogIndexForRuntimeIndex(runtime_index);
-    if (catalog_index >= point_catalog_->size()) {
-        return false;
-    }
-
-    const PointDefinition& definition = point_catalog_->entries()[catalog_index];
-    const PointState& state = point_catalog_->states()[catalog_index];
-    if (definition.value_type != PointValueType::Enum) {
-        return false;
-    }
-
-    value_out = state.value.enum_value;
-    return true;
 }
 
 bool PlcCore::commitRuntimeEnum(uint16_t runtime_index, int32_t value, uint32_t now_ms)
