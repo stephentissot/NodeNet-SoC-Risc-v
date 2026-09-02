@@ -5,7 +5,7 @@ module wb_plc #(
     parameter integer CLK_HZ = 25_000_000,
     parameter [31:0] CONTROL_REGION_BASE = 32'h2017_0000,
     parameter [31:0] RUNTIME_DESCRIPTOR_BASE = 32'h2010_0100,
-    parameter [31:0] SHARED_POINT_STATE_BASE = 32'h2000_0000,
+    parameter [31:0] SHARED_POINT_STATE_BASE = 32'h207E_0000,
     parameter [31:0] RUNTIME_VALUE_BASE = 32'h2011_0000,
     parameter [31:0] RUNTIME_STATUS_BASE = 32'h2012_0000,
     parameter [31:0] RUNTIME_WRITE_QUEUE_BASE = 32'h2017_1000,
