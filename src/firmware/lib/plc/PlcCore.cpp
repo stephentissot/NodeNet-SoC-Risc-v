@@ -398,6 +398,7 @@ bool PlcCore::commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now
         return false;
     }
 
+    PointCommandState command_state = point_catalog_->commandStates()[catalog_index];
     bool ok = false;
     if (definition.backend == PointBackend::Modbus &&
         modbus0_ != nullptr &&
@@ -405,7 +406,10 @@ bool PlcCore::commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now
         definition.ref.modbus.table == ModbusTable::Coils &&
         (definition.ref.modbus.access == ModbusAccess::Write ||
          definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
-        const bool already_applied = current_state.quality == PointQuality::Good && current_state.value.b == value;
+        const bool already_applied = command_state.command_quality == PointCommandQuality::Acked &&
+                                     command_state.last_commanded_value.b == value &&
+                                     current_state.quality == PointQuality::Good &&
+                                     current_state.value.b == value;
         if (already_applied) {
             ok = true;
         } else {
@@ -417,7 +421,6 @@ bool PlcCore::commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now
         ok = true;
     }
 
-    PointCommandState command_state = point_catalog_->commandStates()[catalog_index];
     command_state.last_commanded_value.b = value;
     command_state.last_command_ts_ms = now_ms;
     command_state.pending = false;
