@@ -105,8 +105,12 @@ private:
                              PointState& state) const;
     bool readRuntimeBool(uint16_t runtime_index, bool& value_out) const;
     bool commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now_ms);
+    bool readRuntimeUint16(uint16_t runtime_index, uint16_t& value_out) const;
+    bool commitRuntimeUint16(uint16_t runtime_index, uint16_t value, uint32_t now_ms);
     bool readRuntimeInt16(uint16_t runtime_index, int16_t& value_out) const;
     bool commitRuntimeInt16(uint16_t runtime_index, int16_t value, uint32_t now_ms);
+    bool readRuntimeEnum(uint16_t runtime_index, int32_t& value_out) const;
+    bool commitRuntimeEnum(uint16_t runtime_index, int32_t value, uint32_t now_ms);
     PointQuality qualityFromModbusError(ModbusMaster::Error error) const;
 };
 

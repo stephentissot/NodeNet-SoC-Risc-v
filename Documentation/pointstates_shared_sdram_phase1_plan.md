@@ -101,6 +101,18 @@ Recommended meaning:
 - `status_offset` becomes unused for those shared descriptors and should be
   published as `0`
 
+Current implementation status on this branch:
+
+- shared descriptors are now published for `Bool`, `Uint16`, `Int16`,
+  `Uint32`, `Int32`, and `Enum`
+- CPU-side runtime write consumption also handles `Uint16` and `Enum` directly
+  from shared `PointState` records
+- the PLC VM execution core currently consumes shared `Bool` plus the shared
+  16-bit scalar path (`Int16` and `Uint16` through `LOAD_I16`/`STORE_I16`)
+- `Uint32`, `Int32`, and `Enum` are aligned at the shared-descriptor ABI layer,
+  but still need dedicated PLC opcode/execution support before they are usable
+  from slot bytecode
+
 That lets the runtime index indirection survive while the value/status mirror
 surface is removed incrementally.
 

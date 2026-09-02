@@ -212,9 +212,12 @@ Strings are not supported inside `plc_vm` V1.
 Implementation priority for the current freeze:
 
 - the runtime ABI keeps the full scalar catalog above
-- the first frozen execution core should prioritize `bool` and `int16`
-- `uint16`, `uint32`, and `int32` may remain reserved in the instruction set
-  until their load/store and ALU semantics are implemented
+- the first frozen execution core prioritizes `bool` plus the 16-bit scalar
+  load/store path
+- `LOAD_I16` and `STORE_I16` currently accept shared descriptors tagged as
+  either `uint16` or `int16`
+- `uint32` and `int32` remain part of the versioned runtime ABI, but do not yet
+  have a dedicated PLC VM opcode family in the current core
 - `float32` remains part of the versioned V1 contract, but its execution family
   may be deferred beyond the current branch
 

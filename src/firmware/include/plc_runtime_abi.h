@@ -412,6 +412,8 @@ private:
             return kPlcRuntimeTypeInt32;
         case PointValueType::Float:
             return kPlcRuntimeTypeFloat32;
+        case PointValueType::Enum:
+            return kPlcRuntimeTypeInt16;
         default:
             return kPlcRuntimeTypeInvalid;
         }
@@ -544,7 +546,11 @@ private:
             flags |= kPlcRuntimeFlagFloat;
         }
         if (definition.value_type == PointValueType::Bool ||
-            definition.value_type == PointValueType::Int16) {
+            definition.value_type == PointValueType::Uint16 ||
+            definition.value_type == PointValueType::Int16 ||
+            definition.value_type == PointValueType::Uint32 ||
+            definition.value_type == PointValueType::Int32 ||
+            definition.value_type == PointValueType::Enum) {
             flags |= kPlcRuntimeFlagSharedPointState;
         }
         return flags;
@@ -554,7 +560,11 @@ private:
     {
         switch (value_type) {
         case PointValueType::Bool:
+        case PointValueType::Uint16:
         case PointValueType::Int16:
+        case PointValueType::Uint32:
+        case PointValueType::Int32:
+        case PointValueType::Enum:
             return true;
         default:
             return false;
@@ -592,6 +602,8 @@ private:
             std::memcpy(&raw, &state.value.f32, sizeof(raw));
             return raw;
         }
+        case PointValueType::Enum:
+            return static_cast<uint32_t>(state.value.enum_value);
         default:
             return 0u;
         }

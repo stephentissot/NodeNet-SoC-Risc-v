@@ -112,6 +112,7 @@ module wb_plc #(
     localparam [1:0] STACK_TYPE_INT16 = 2'd2;
 
     localparam [7:0] RUNTIME_TYPE_BOOL = 8'd1;
+    localparam [7:0] RUNTIME_TYPE_UINT16 = 8'd2;
     localparam [7:0] RUNTIME_TYPE_INT16 = 8'd3;
     localparam [7:0] RUNTIME_FLAG_READABLE = 8'h01;
     localparam [7:0] RUNTIME_FLAG_WRITABLE = 8'h02;
@@ -1565,7 +1566,8 @@ module wb_plc #(
                             end
                         end else if (current_opcode == OPCODE_LOAD_I16) begin
                             runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
-                            if (desc_value_type != RUNTIME_TYPE_INT16 ||
+                            if ((desc_value_type != RUNTIME_TYPE_UINT16 &&
+                                 desc_value_type != RUNTIME_TYPE_INT16) ||
                                 (desc_flags & (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
                                     (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
@@ -1575,7 +1577,8 @@ module wb_plc #(
                         end else if (current_opcode == OPCODE_STORE_I16) begin
                             runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
                             runtime_status_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_QUALITY_OFFSET;
-                            if (desc_value_type != RUNTIME_TYPE_INT16 ||
+                            if ((desc_value_type != RUNTIME_TYPE_UINT16 &&
+                                 desc_value_type != RUNTIME_TYPE_INT16) ||
                                 (desc_flags & (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
                                     (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
                                 begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
