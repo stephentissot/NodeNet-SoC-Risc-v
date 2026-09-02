@@ -184,40 +184,40 @@ bool PlcCore::consumeRuntimeWriteIndex(uint16_t runtime_index, uint32_t now_ms)
         return false;
     }
 
-    volatile PlcPointValueV1* runtime_values = reinterpret_cast<volatile PlcPointValueV1*>(
-        static_cast<uintptr_t>(kPlcRuntimeValueBase));
-    volatile PlcPointStatusV1* runtime_statuses = reinterpret_cast<volatile PlcPointStatusV1*>(
-        static_cast<uintptr_t>(kPlcRuntimeStatusBase));
-    volatile const PlcPointStatusV1& runtime_status = runtime_statuses[runtime_index];
-    if (runtime_status.last_writer != kPlcRuntimeWriterPlcVm) {
-        return false;
-    }
-
     const PointDefinition& definition = point_catalog_->entries()[catalog_index];
-    const uint32_t effective_now_ms = runtime_status.last_update_ms != 0u
-        ? runtime_status.last_update_ms
+    const PointState& shared_state = point_catalog_->states()[catalog_index];
+    const uint32_t effective_now_ms = shared_state.last_update_ms != 0u
+        ? shared_state.last_update_ms
         : now_ms;
     bool consumed = false;
 
     switch (definition.value_type) {
     case PointValueType::Bool: {
-        const bool value = (runtime_values[runtime_index].raw0 & 1u) != 0u;
+        const bool value = shared_state.value.b;
         consumed = commitRuntimeBool(runtime_index, value, effective_now_ms);
         break;
     }
 
+    case PointValueType::Uint16: {
+        const uint16_t value = shared_state.value.u16;
+        consumed = commitRuntimeUint16(runtime_index, value, effective_now_ms);
+        break;
+    }
+
     case PointValueType::Int16: {
-        const int16_t value = static_cast<int16_t>(runtime_values[runtime_index].raw0 & 0xFFFFu);
+        const int16_t value = shared_state.value.i16;
         consumed = commitRuntimeInt16(runtime_index, value, effective_now_ms);
+        break;
+    }
+
+    case PointValueType::Enum: {
+        const int32_t value = shared_state.value.enum_value;
+        consumed = commitRuntimeEnum(runtime_index, value, effective_now_ms);
         break;
     }
 
     default:
         break;
-    }
-
-    if (consumed) {
-        runtime_statuses[runtime_index].last_writer = kPlcRuntimeWriterCpu;
     }
 
     return consumed;
@@ -368,27 +368,6 @@ void PlcCore::rebuildPollPlan()
     }
 }
 
-bool PlcCore::readRuntimeBool(uint16_t runtime_index, bool& value_out) const
-{
-    if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
-        return false;
-    }
-
-    const size_t catalog_index = runtime_publisher_->catalogIndexForRuntimeIndex(runtime_index);
-    if (catalog_index >= point_catalog_->size()) {
-        return false;
-    }
-
-    const PointDefinition& definition = point_catalog_->entries()[catalog_index];
-    const PointState& state = point_catalog_->states()[catalog_index];
-    if (definition.value_type != PointValueType::Bool) {
-        return false;
-    }
-
-    value_out = state.value.b;
-    return true;
-}
-
 bool PlcCore::commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now_ms)
 {
     if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
@@ -410,6 +389,7 @@ bool PlcCore::commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now
         return false;
     }
 
+    PointCommandState command_state = point_catalog_->commandStates()[catalog_index];
     bool ok = false;
     if (definition.backend == PointBackend::Modbus &&
         modbus0_ != nullptr &&
@@ -417,7 +397,10 @@ bool PlcCore::commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now
         definition.ref.modbus.table == ModbusTable::Coils &&
         (definition.ref.modbus.access == ModbusAccess::Write ||
          definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
-        const bool already_applied = current_state.quality == PointQuality::Good && current_state.value.b == value;
+        const bool already_applied = command_state.command_quality == PointCommandQuality::Acked &&
+                                     command_state.last_commanded_value.b == value &&
+                                     current_state.quality == PointQuality::Good &&
+                                     current_state.value.b == value;
         if (already_applied) {
             ok = true;
         } else {
@@ -429,7 +412,6 @@ bool PlcCore::commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now
         ok = true;
     }
 
-    PointCommandState command_state = point_catalog_->commandStates()[catalog_index];
     command_state.last_commanded_value.b = value;
     command_state.last_command_ts_ms = now_ms;
     command_state.pending = false;
@@ -453,7 +435,7 @@ bool PlcCore::commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now
     return ok && state_ok && command_ok;
 }
 
-bool PlcCore::readRuntimeInt16(uint16_t runtime_index, int16_t& value_out) const
+bool PlcCore::commitRuntimeUint16(uint16_t runtime_index, uint16_t value, uint32_t now_ms)
 {
     if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
         return false;
@@ -465,13 +447,51 @@ bool PlcCore::readRuntimeInt16(uint16_t runtime_index, int16_t& value_out) const
     }
 
     const PointDefinition& definition = point_catalog_->entries()[catalog_index];
-    const PointState& state = point_catalog_->states()[catalog_index];
-    if (definition.value_type != PointValueType::Int16) {
+    const bool internal_slot_variable = is_dynamic_slot_variable_point(definition);
+    if (definition.value_type != PointValueType::Uint16 ||
+        (!internal_slot_variable &&
+         definition.direction != PointDirection::Output &&
+         definition.direction != PointDirection::InOut)) {
         return false;
     }
 
-    value_out = state.value.i16;
-    return true;
+    bool ok = false;
+    if (definition.backend == PointBackend::Modbus &&
+        modbus0_ != nullptr &&
+        definition.ref.modbus.port_index == 0u &&
+        definition.ref.modbus.table == ModbusTable::HoldingRegisters &&
+        definition.ref.modbus.register_count == 1u &&
+        (definition.ref.modbus.access == ModbusAccess::Write ||
+         definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
+        ok = modbus0_->writeSingleRegister(definition.ref.modbus.slave_address,
+                                           definition.ref.modbus.address,
+                                           value);
+    } else if (definition.backend == PointBackend::Local) {
+        ok = true;
+    }
+
+    PointCommandState command_state = point_catalog_->commandStates()[catalog_index];
+    command_state.last_commanded_value.u16 = value;
+    command_state.last_command_ts_ms = now_ms;
+    command_state.pending = false;
+
+    PointState next_state = point_catalog_->states()[catalog_index];
+    next_state.value.u16 = value;
+    next_state.last_update_ms = now_ms;
+
+    if (ok) {
+        command_state.command_quality = PointCommandQuality::Acked;
+        command_state.last_ack_ts_ms = now_ms;
+        next_state.quality = PointQuality::Good;
+        next_state.last_good_update_ms = now_ms;
+    } else {
+        command_state.command_quality = PointCommandQuality::ProtocolError;
+        next_state.quality = PointQuality::BadWriteRejected;
+    }
+
+    const bool state_ok = point_catalog_->updateState(definition.id, next_state);
+    const bool command_ok = point_catalog_->updateCommandState(definition.id, command_state);
+    return ok && state_ok && command_ok;
 }
 
 bool PlcCore::commitRuntimeInt16(uint16_t runtime_index, int16_t value, uint32_t now_ms)
@@ -516,6 +536,65 @@ bool PlcCore::commitRuntimeInt16(uint16_t runtime_index, int16_t value, uint32_t
 
     PointState next_state = point_catalog_->states()[catalog_index];
     next_state.value.i16 = value;
+    next_state.last_update_ms = now_ms;
+
+    if (ok) {
+        command_state.command_quality = PointCommandQuality::Acked;
+        command_state.last_ack_ts_ms = now_ms;
+        next_state.quality = PointQuality::Good;
+        next_state.last_good_update_ms = now_ms;
+    } else {
+        command_state.command_quality = PointCommandQuality::ProtocolError;
+        next_state.quality = PointQuality::BadWriteRejected;
+    }
+
+    const bool state_ok = point_catalog_->updateState(definition.id, next_state);
+    const bool command_ok = point_catalog_->updateCommandState(definition.id, command_state);
+    return ok && state_ok && command_ok;
+}
+
+bool PlcCore::commitRuntimeEnum(uint16_t runtime_index, int32_t value, uint32_t now_ms)
+{
+    if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
+        return false;
+    }
+
+    const size_t catalog_index = runtime_publisher_->catalogIndexForRuntimeIndex(runtime_index);
+    if (catalog_index >= point_catalog_->size()) {
+        return false;
+    }
+
+    const PointDefinition& definition = point_catalog_->entries()[catalog_index];
+    const bool internal_slot_variable = is_dynamic_slot_variable_point(definition);
+    if (definition.value_type != PointValueType::Enum ||
+        (!internal_slot_variable &&
+         definition.direction != PointDirection::Output &&
+         definition.direction != PointDirection::InOut)) {
+        return false;
+    }
+
+    bool ok = false;
+    if (definition.backend == PointBackend::Modbus &&
+        modbus0_ != nullptr &&
+        definition.ref.modbus.port_index == 0u &&
+        definition.ref.modbus.table == ModbusTable::HoldingRegisters &&
+        definition.ref.modbus.register_count == 1u &&
+        (definition.ref.modbus.access == ModbusAccess::Write ||
+         definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
+        ok = modbus0_->writeSingleRegister(definition.ref.modbus.slave_address,
+                                           definition.ref.modbus.address,
+                                           static_cast<uint16_t>(value));
+    } else if (definition.backend == PointBackend::Local) {
+        ok = true;
+    }
+
+    PointCommandState command_state = point_catalog_->commandStates()[catalog_index];
+    command_state.last_commanded_value.enum_value = value;
+    command_state.last_command_ts_ms = now_ms;
+    command_state.pending = false;
+
+    PointState next_state = point_catalog_->states()[catalog_index];
+    next_state.value.enum_value = value;
     next_state.last_update_ms = now_ms;
 
     if (ok) {

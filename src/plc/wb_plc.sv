@@ -5,8 +5,7 @@ module wb_plc #(
     parameter integer CLK_HZ = 25_000_000,
     parameter [31:0] CONTROL_REGION_BASE = 32'h2017_0000,
     parameter [31:0] RUNTIME_DESCRIPTOR_BASE = 32'h2010_0100,
-    parameter [31:0] RUNTIME_VALUE_BASE = 32'h2011_0000,
-    parameter [31:0] RUNTIME_STATUS_BASE = 32'h2012_0000,
+    parameter [31:0] SHARED_POINT_STATE_BASE = 32'h207E_0000,
     parameter [31:0] RUNTIME_WRITE_QUEUE_BASE = 32'h2017_1000,
     parameter integer SLOT_COUNT = 16,
     parameter integer SLOT_MANIFEST_BYTES = 72,
@@ -113,11 +112,17 @@ module wb_plc #(
     localparam [1:0] STACK_TYPE_INT16 = 2'd2;
 
     localparam [7:0] RUNTIME_TYPE_BOOL = 8'd1;
+    localparam [7:0] RUNTIME_TYPE_UINT16 = 8'd2;
     localparam [7:0] RUNTIME_TYPE_INT16 = 8'd3;
     localparam [7:0] RUNTIME_FLAG_READABLE = 8'h01;
     localparam [7:0] RUNTIME_FLAG_WRITABLE = 8'h02;
+    localparam [7:0] RUNTIME_FLAG_SHARED_POINT_STATE = 8'h40;
     localparam [31:0] RUNTIME_WRITER_PLC_VM = 32'd2;
     localparam [31:0] POINT_QUALITY_GOOD = 32'd1;
+    localparam [31:0] SHARED_POINT_STATE_VALUE_OFFSET = 32'd0;
+    localparam [31:0] SHARED_POINT_STATE_QUALITY_OFFSET = 32'd68;
+    localparam [31:0] SHARED_POINT_STATE_LAST_UPDATE_OFFSET = 32'd72;
+    localparam [31:0] SHARED_POINT_STATE_LAST_GOOD_UPDATE_OFFSET = 32'd76;
     localparam [31:0] TIMER_FLAG_RUNNING = 32'h0000_0001;
     localparam [31:0] TIMER_FLAG_DONE = 32'h0000_0002;
     localparam [31:0] TIMER_FLAG_INPUT_HIGH = 32'h0000_0004;
@@ -159,7 +164,6 @@ module wb_plc #(
     localparam [6:0] ST_DECODE = 7'd14;
     localparam [6:0] ST_READ_DESC0 = 7'd15;
     localparam [6:0] ST_READ_DESC1 = 7'd16;
-    localparam [6:0] ST_READ_DESC2 = 7'd17;
     localparam [6:0] ST_LOAD_BOOL_VALUE = 7'd18;
     localparam [6:0] ST_STORE_BOOL_READ_VALUE = 7'd19;
     localparam [6:0] ST_STORE_BOOL_WRITE_VALUE0 = 7'd20;
@@ -248,8 +252,6 @@ module wb_plc #(
     reg [15:0] current_runtime_index;
     reg [7:0]  desc_value_type;
     reg [7:0]  desc_flags;
-    reg [31:0] desc_value_offset;
-    reg [31:0] desc_status_offset;
     reg [31:0] runtime_value_addr;
     reg [31:0] runtime_status_addr;
     reg [31:0] slot_scratch_base;
@@ -715,8 +717,6 @@ module wb_plc #(
             current_runtime_index <= 16'd0;
             desc_value_type <= 8'd0;
             desc_flags <= 8'd0;
-            desc_value_offset <= 32'd0;
-            desc_status_offset <= 32'd0;
             runtime_value_addr <= 32'd0;
             runtime_status_addr <= 32'd0;
             slot_scratch_base <= 32'd0;
@@ -1530,33 +1530,30 @@ module wb_plc #(
                         start_read(RUNTIME_DESCRIPTOR_BASE + (current_runtime_index * 32'd20) + 32'd4);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
-                        desc_value_offset <= m_dat_i;
-                        state <= ST_READ_DESC2;
-                    end
-                end
-
-                ST_READ_DESC2: begin
-                    if (!m_cyc_o) begin
-                        start_read(RUNTIME_DESCRIPTOR_BASE + (current_runtime_index * 32'd20) + 32'd8);
-                    end else if (m_ack_i) begin
-                        finish_bus_cycle();
-                        desc_status_offset <= m_dat_i;
-                        runtime_value_addr <= RUNTIME_VALUE_BASE + desc_value_offset;
-                        runtime_status_addr <= RUNTIME_STATUS_BASE + m_dat_i;
                         if (current_opcode == OPCODE_LOAD_BOOL) begin
-                            if (desc_value_type != RUNTIME_TYPE_BOOL || (desc_flags & RUNTIME_FLAG_READABLE) == 8'd0) begin
+                            runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
+                            if (desc_value_type != RUNTIME_TYPE_BOOL ||
+                                (desc_flags & (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                             end else begin
                                 state <= ST_LOAD_BOOL_VALUE;
                             end
                         end else if (current_opcode == OPCODE_R_TRIG || current_opcode == OPCODE_F_TRIG) begin
-                            if (desc_value_type != RUNTIME_TYPE_BOOL || (desc_flags & RUNTIME_FLAG_READABLE) == 8'd0) begin
+                            runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
+                            if (desc_value_type != RUNTIME_TYPE_BOOL ||
+                                (desc_flags & (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                             end else begin
                                 state <= ST_EDGE_READ_VALUE;
                             end
                         end else if (current_opcode == OPCODE_STORE_BOOL) begin
-                            if (desc_value_type != RUNTIME_TYPE_BOOL || (desc_flags & RUNTIME_FLAG_WRITABLE) == 8'd0) begin
+                            runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
+                            runtime_status_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_QUALITY_OFFSET;
+                            if (desc_value_type != RUNTIME_TYPE_BOOL ||
+                                (desc_flags & (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
                                 begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
                             end else if (stack_depth == 3'd0) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
@@ -1568,13 +1565,22 @@ module wb_plc #(
                                 state <= ST_STORE_BOOL_READ_VALUE;
                             end
                         end else if (current_opcode == OPCODE_LOAD_I16) begin
-                            if (desc_value_type != RUNTIME_TYPE_INT16 || (desc_flags & RUNTIME_FLAG_READABLE) == 8'd0) begin
+                            runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
+                            if ((desc_value_type != RUNTIME_TYPE_UINT16 &&
+                                 desc_value_type != RUNTIME_TYPE_INT16) ||
+                                (desc_flags & (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                             end else begin
                                 state <= ST_INT16_READ_VALUE;
                             end
                         end else if (current_opcode == OPCODE_STORE_I16) begin
-                            if (desc_value_type != RUNTIME_TYPE_INT16 || (desc_flags & RUNTIME_FLAG_WRITABLE) == 8'd0) begin
+                            runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
+                            runtime_status_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_QUALITY_OFFSET;
+                            if ((desc_value_type != RUNTIME_TYPE_UINT16 &&
+                                 desc_value_type != RUNTIME_TYPE_INT16) ||
+                                (desc_flags & (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
                                 begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
                             end else if (stack_depth == 3'd0) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
@@ -1585,13 +1591,18 @@ module wb_plc #(
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_INT16_READ_VALUE;
                             end
-                        end else begin
+                        end else if (current_opcode == OPCODE_INC_INT16 || current_opcode == OPCODE_DEC_INT16) begin
+                            runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
+                            runtime_status_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_QUALITY_OFFSET;
                             if (desc_value_type != RUNTIME_TYPE_INT16 ||
-                                (desc_flags & (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_WRITABLE)) != (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_WRITABLE)) begin
+                                (desc_flags & (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                             end else begin
                                 state <= ST_INT16_READ_VALUE;
                             end
+                        end else begin
+                            begin_fault(FAULT_INVALID_OPCODE, current_opcode);
                         end
                     end
                 end
@@ -2004,31 +2015,17 @@ module wb_plc #(
                 end
 
                 ST_WRITE_RUNTIME_LAST_WRITER: begin
-                    if (!m_cyc_o) begin
-                        start_read(runtime_status_addr + 32'd8);
-                    end else if (m_ack_i) begin
-                        finish_bus_cycle();
-                        runtime_write_enqueue_pending <= (m_dat_i != RUNTIME_WRITER_PLC_VM);
-                        if (current_opcode == OPCODE_STORE_BOOL) begin
-                            state <= ST_STORE_BOOL_WRITE_VALUE0;
-                        end else begin
-                            state <= ST_INT16_WRITE_VALUE0;
-                        end
+                    runtime_write_enqueue_pending <= 1'b1;
+                    if (current_opcode == OPCODE_STORE_BOOL) begin
+                        state <= ST_STORE_BOOL_WRITE_VALUE0;
+                    end else begin
+                        state <= ST_INT16_WRITE_VALUE0;
                     end
                 end
 
                 ST_STORE_BOOL_WRITE_VALUE0: begin
                     if (!m_cyc_o) begin
                         start_write(runtime_value_addr, {31'd0, pending_stack_value[0]});
-                    end else if (m_ack_i) begin
-                        finish_bus_cycle();
-                        state <= ST_STORE_BOOL_WRITE_VALUE1;
-                    end
-                end
-
-                ST_STORE_BOOL_WRITE_VALUE1: begin
-                    if (!m_cyc_o) begin
-                        start_write(runtime_value_addr + 32'd4, 32'd0);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         state <= ST_STORE_BOOL_WRITE_STATUS0;
@@ -2046,7 +2043,7 @@ module wb_plc #(
 
                 ST_STORE_BOOL_WRITE_STATUS1: begin
                     if (!m_cyc_o) begin
-                        start_write(runtime_status_addr + 32'd4, ms_counter);
+                        start_write(runtime_status_addr + (SHARED_POINT_STATE_LAST_UPDATE_OFFSET - SHARED_POINT_STATE_QUALITY_OFFSET), ms_counter);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         state <= ST_STORE_BOOL_WRITE_STATUS2;
@@ -2055,7 +2052,7 @@ module wb_plc #(
 
                 ST_STORE_BOOL_WRITE_STATUS2: begin
                     if (!m_cyc_o) begin
-                        start_write(runtime_status_addr + 32'd8, RUNTIME_WRITER_PLC_VM);
+                        start_write(runtime_status_addr + (SHARED_POINT_STATE_LAST_GOOD_UPDATE_OFFSET - SHARED_POINT_STATE_QUALITY_OFFSET), ms_counter);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         state <= ST_STORE_BOOL_WRITE_STATUS3;
@@ -2063,15 +2060,10 @@ module wb_plc #(
                 end
 
                 ST_STORE_BOOL_WRITE_STATUS3: begin
-                    if (!m_cyc_o) begin
-                        start_write(runtime_status_addr + 32'd12, 32'd0);
-                    end else if (m_ack_i) begin
-                        finish_bus_cycle();
-                        if (runtime_write_enqueue_pending) begin
-                            state <= ST_QUEUE_READ_TAIL;
-                        end else begin
-                            state <= ST_FETCH_OPCODE;
-                        end
+                    if (runtime_write_enqueue_pending) begin
+                        state <= ST_QUEUE_READ_TAIL;
+                    end else begin
+                        state <= ST_FETCH_OPCODE;
                     end
                 end
 
@@ -2113,15 +2105,6 @@ module wb_plc #(
                                             : ($signed({{16{value_word0[15]}}, value_word0[15:0]}) - 32'sd1)));
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
-                        state <= ST_INT16_WRITE_VALUE1;
-                    end
-                end
-
-                ST_INT16_WRITE_VALUE1: begin
-                    if (!m_cyc_o) begin
-                        start_write(runtime_value_addr + 32'd4, 32'd0);
-                    end else if (m_ack_i) begin
-                        finish_bus_cycle();
                         state <= ST_INT16_WRITE_STATUS0;
                     end
                 end
@@ -2137,7 +2120,7 @@ module wb_plc #(
 
                 ST_INT16_WRITE_STATUS1: begin
                     if (!m_cyc_o) begin
-                        start_write(runtime_status_addr + 32'd4, ms_counter);
+                        start_write(runtime_status_addr + (SHARED_POINT_STATE_LAST_UPDATE_OFFSET - SHARED_POINT_STATE_QUALITY_OFFSET), ms_counter);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         state <= ST_INT16_WRITE_STATUS2;
@@ -2146,7 +2129,7 @@ module wb_plc #(
 
                 ST_INT16_WRITE_STATUS2: begin
                     if (!m_cyc_o) begin
-                        start_write(runtime_status_addr + 32'd8, RUNTIME_WRITER_PLC_VM);
+                        start_write(runtime_status_addr + (SHARED_POINT_STATE_LAST_GOOD_UPDATE_OFFSET - SHARED_POINT_STATE_QUALITY_OFFSET), ms_counter);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         state <= ST_INT16_WRITE_STATUS3;
@@ -2154,15 +2137,10 @@ module wb_plc #(
                 end
 
                 ST_INT16_WRITE_STATUS3: begin
-                    if (!m_cyc_o) begin
-                        start_write(runtime_status_addr + 32'd12, 32'd0);
-                    end else if (m_ack_i) begin
-                        finish_bus_cycle();
-                        if (runtime_write_enqueue_pending) begin
-                            state <= ST_QUEUE_READ_TAIL;
-                        end else begin
-                            state <= ST_FETCH_OPCODE;
-                        end
+                    if (runtime_write_enqueue_pending) begin
+                        state <= ST_QUEUE_READ_TAIL;
+                    end else begin
+                        state <= ST_FETCH_OPCODE;
                     end
                 end
 

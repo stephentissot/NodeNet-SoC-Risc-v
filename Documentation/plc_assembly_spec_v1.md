@@ -949,7 +949,10 @@ Current branch status:
 - assembler/disassembler, firmware loader opcode validation, and `wb_plc`
   execution support are now implemented for `PUSH_I16`, `LOAD_I16`,
   `STORE_I16`, `ADD`, and `SUB`
-- hardware validation is still pending for the Stage 3 integer stack batch
+- the current shared-point-state migration widens `LOAD_I16` and `STORE_I16`
+  so they accept both `INT` and `UINT16` point bindings on the same 16-bit path
+- hardware validation is still pending for the widened `UINT16` shared-state
+  batch
 
 Recommended implementation set:
 
@@ -1025,8 +1028,9 @@ Implementation checklist:
   exact encoding difference between stack ALU instructions and direct memory
   update instructions.
 - Firmware loader (`PlcSlotLoaderV1`): validate `INT` point operands for
-  `LOAD_I16`, `STORE_I16`, `INC_INT`, and `DEC_INT`; reject `BOOL`, `ENUM`, or
-  `UINT16` bindings in the frozen core profile.
+  `INC_INT` and `DEC_INT`; validate `INT` or `UINT16` point operands for
+  `LOAD_I16` and `STORE_I16`; reject `BOOL`, `ENUM`, and 32-bit bindings in the
+  frozen core profile.
 - Shared ABI contract ([src/firmware/include/plc_runtime_abi.h](src/firmware/include/plc_runtime_abi.h)): confirm `Int16` load/store paths and queue publication are already sufficient for integer commits.
 - Execution engine (`src/plc/wb_plc.sv` or the firmware validation executor):
   add typed integer stack entries, signed add/subtract behavior, and clear

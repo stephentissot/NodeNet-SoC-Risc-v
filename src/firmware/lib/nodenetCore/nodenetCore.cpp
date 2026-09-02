@@ -3891,6 +3891,7 @@ uint16_t NodeNetCore::restorePersistedPlcSlots()
     uint16_t restored_count = 0u;
     _plcSlotRuntimeDiagnostics.valid = false;
 
+    _pointCatalog.beginBatchUpdate();
     for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
         oled::showBootProgress("Restore PLC slots", boot_restore_progress(slot_id));
         const PlcFlashPackageEntry& entry = entries[slot_id];
@@ -3925,6 +3926,7 @@ uint16_t NodeNetCore::restorePersistedPlcSlots()
 
         ++restored_count;
     }
+    _pointCatalog.endBatchUpdate();
 
     oled::showBootProgress("Restore PLC slots", kBootRestoreProgressEnd);
 
@@ -3993,6 +3995,8 @@ void NodeNetCore::publishNodePointStates(JsonDocument& doc)
 
 void NodeNetCore::registerBuiltinPointDefinitions()
 {
+    _pointCatalog.beginBatchUpdate();
+
     PointDefinition definition = {};    
 
     make_point_identity(definition.id, deviceId, "core", "instrumentName");
@@ -4255,6 +4259,8 @@ void NodeNetCore::registerBuiltinPointDefinitions()
         register_slot_point("reset", "Reset", PointDirection::InOut, PointValueType::Bool, 0u);
         register_slot_point("clearFault", "Clear Fault", PointDirection::InOut, PointValueType::Bool, 0u);
     }
+
+    _pointCatalog.endBatchUpdate();
 
     oled::showBootProgress("Node services: builtins", kBootNodeServicesProgressEnd);
 }

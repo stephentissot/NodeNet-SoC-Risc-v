@@ -19,6 +19,12 @@ static constexpr uint32_t kPlcRuntimeDescriptorWindowSize = 0x00010000u;
 static constexpr uint32_t kPlcRuntimeValueWindowSize = 0x00010000u;
 static constexpr uint32_t kPlcRuntimeStatusWindowSize = 0x00010000u;
 static constexpr uint32_t kPlcRuntimeWriteQueueWindowSize = 0x00001000u;
+static constexpr uint32_t kPlcSharedPointStateBase = SDRAM_POINT_STATE_BASE;
+static constexpr uint32_t kPlcSharedPointStateStride = static_cast<uint32_t>(sizeof(PointState));
+static constexpr uint32_t kPlcSharedPointStateValueOffset = static_cast<uint32_t>(offsetof(PointState, value));
+static constexpr uint32_t kPlcSharedPointStateQualityOffset = static_cast<uint32_t>(offsetof(PointState, quality));
+static constexpr uint32_t kPlcSharedPointStateLastUpdateOffset = static_cast<uint32_t>(offsetof(PointState, last_update_ms));
+static constexpr uint32_t kPlcSharedPointStateLastGoodUpdateOffset = static_cast<uint32_t>(offsetof(PointState, last_good_update_ms));
 
 enum PlcRuntimeHeaderFlagsV1 : uint16_t {
     kPlcRuntimeHeaderFlagWriteQueue = 1u << 0,
@@ -41,6 +47,7 @@ enum PlcRuntimeDescriptorFlagsV1 : uint8_t {
     kPlcRuntimeFlagOutput = 1u << 3,
     kPlcRuntimeFlagInternal = 1u << 4,
     kPlcRuntimeFlagFloat = 1u << 5,
+    kPlcRuntimeFlagSharedPointState = 1u << 6,
 };
 
 enum PlcRuntimeLastWriterV1 : uint32_t {
@@ -113,11 +120,24 @@ static_assert(sizeof(PlcPointStatusV1) == 16u, "Unexpected status size");
 static_assert(sizeof(PlcRuntimeHeaderV1) == 28u, "Unexpected header size");
 static_assert(sizeof(PlcRuntimeWriteQueueV1) <= kPlcRuntimeWriteQueueWindowSize,
               "Runtime write queue exceeds reserved SDRAM window");
+static_assert(kPlcSharedPointStateStride == sizeof(PointState), "PointState stride mismatch");
+static_assert(kPlcSharedPointStateValueOffset == 0u, "PointState value must stay at offset 0");
+static_assert((kPlcSharedPointStateQualityOffset & 0x3u) == 0u,
+              "PointState quality offset must stay 32-bit aligned");
+static_assert((kPlcSharedPointStateLastUpdateOffset & 0x3u) == 0u,
+              "PointState last_update_ms offset must stay 32-bit aligned");
+static_assert((kPlcSharedPointStateLastGoodUpdateOffset & 0x3u) == 0u,
+              "PointState last_good_update_ms offset must stay 32-bit aligned");
 
 class PlcRuntimePublisherV1 {
 public:
     static constexpr uint16_t kInvalidPointIndex = 0xFFFFu;
     static constexpr size_t kInvalidCatalogIndex = PointCatalog::kMaxPoints;
+
+    static constexpr uint32_t sharedPointStateRecordOffset(size_t catalog_index)
+    {
+        return static_cast<uint32_t>(catalog_index) * kPlcSharedPointStateStride;
+    }
 
     struct ResolveResult {
         bool found;
@@ -392,6 +412,8 @@ private:
             return kPlcRuntimeTypeInt32;
         case PointValueType::Float:
             return kPlcRuntimeTypeFloat32;
+        case PointValueType::Enum:
+            return kPlcRuntimeTypeInt16;
         default:
             return kPlcRuntimeTypeInvalid;
         }
@@ -523,7 +545,30 @@ private:
         if (definition.value_type == PointValueType::Float) {
             flags |= kPlcRuntimeFlagFloat;
         }
+        if (definition.value_type == PointValueType::Bool ||
+            definition.value_type == PointValueType::Uint16 ||
+            definition.value_type == PointValueType::Int16 ||
+            definition.value_type == PointValueType::Uint32 ||
+            definition.value_type == PointValueType::Int32 ||
+            definition.value_type == PointValueType::Enum) {
+            flags |= kPlcRuntimeFlagSharedPointState;
+        }
         return flags;
+    }
+
+    static bool usesSharedPointState(PointValueType value_type)
+    {
+        switch (value_type) {
+        case PointValueType::Bool:
+        case PointValueType::Uint16:
+        case PointValueType::Int16:
+        case PointValueType::Uint32:
+        case PointValueType::Int32:
+        case PointValueType::Enum:
+            return true;
+        default:
+            return false;
+        }
     }
 
     static uint32_t mapLastWriter(const PointDefinition& definition)
@@ -557,6 +602,8 @@ private:
             std::memcpy(&raw, &state.value.f32, sizeof(raw));
             return raw;
         }
+        case PointValueType::Enum:
+            return static_cast<uint32_t>(state.value.enum_value);
         default:
             return 0u;
         }
@@ -644,8 +691,10 @@ private:
             descriptor.point_index = published_count_;
             descriptor.value_type = mapValueType(definition.value_type);
             descriptor.flags = mapFlags(definition);
-            descriptor.value_offset = published_count_ * static_cast<uint32_t>(sizeof(PlcPointValueV1));
-            descriptor.status_offset = published_count_ * static_cast<uint32_t>(sizeof(PlcPointStatusV1));
+            descriptor.value_offset = sharedPointStateRecordOffset(i);
+            descriptor.status_offset = usesSharedPointState(definition.value_type)
+                                           ? 0u
+                                           : (published_count_ * static_cast<uint32_t>(sizeof(PlcPointStatusV1)));
 
             writeDescriptor(descriptors[published_count_], descriptor);
             catalog_to_runtime_[i] = published_count_;
@@ -662,6 +711,10 @@ private:
         for (size_t i = 0; i < catalog.size(); ++i) {
             const uint16_t runtime_index = catalog_to_runtime_[i];
             if (runtime_index == kInvalidPointIndex || runtime_index >= published_count_) {
+                continue;
+            }
+
+            if (usesSharedPointState(definitions[i].value_type)) {
                 continue;
             }
 
@@ -683,6 +736,10 @@ private:
             }
 
             const PointDefinition& definition = catalog.entries()[catalog_index];
+            if (usesSharedPointState(definition.value_type)) {
+                continue;
+            }
+
             const PointState& state = catalog.states()[catalog_index];
             syncPointValueAndStatus(definition, state, runtime_index, now_ms);
         }
