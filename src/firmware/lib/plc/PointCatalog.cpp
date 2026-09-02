@@ -486,13 +486,43 @@ const PointCommandState* PointCatalog::findCommandState(const PointIdentity& id)
     return index < count_ ? &command_states_[index] : nullptr;
 }
 
+void PointCatalog::beginBatchUpdate() {
+    ++batch_update_depth_;
+}
+
+void PointCatalog::endBatchUpdate() {
+    if (batch_update_depth_ == 0u) {
+        return;
+    }
+
+    --batch_update_depth_;
+    if (batch_update_depth_ != 0u) {
+        return;
+    }
+
+    if (batch_browse_rebuild_pending_) {
+        rebuildBrowseIndex();
+        batch_browse_rebuild_pending_ = false;
+    }
+
+    if (batch_runtime_full_sync_pending_) {
+        requestRuntimeFullSync();
+        batch_runtime_full_sync_pending_ = false;
+    }
+}
+
 bool PointCatalog::upsert(const PointDefinition& definition) {
     const size_t existing_index = lookupIndex(definition.id);
     if (existing_index < count_) {
         copyDefinition(entries_[existing_index], definition);
         plc_point_meta_[existing_index] = classifyPlcPointMeta(definition);
-        rebuildBrowseIndex();
-        requestRuntimeFullSync();
+        if (batch_update_depth_ != 0u) {
+            batch_browse_rebuild_pending_ = true;
+            batch_runtime_full_sync_pending_ = true;
+        } else {
+            rebuildBrowseIndex();
+            requestRuntimeFullSync();
+        }
         return true;
     }
 
@@ -506,8 +536,13 @@ bool PointCatalog::upsert(const PointDefinition& definition) {
     plc_point_meta_[count_] = classifyPlcPointMeta(definition);
     insertIndex(entries_[count_].id, count_);
     count_ += 1u;
-    rebuildBrowseIndex();
-    requestRuntimeFullSync();
+    if (batch_update_depth_ != 0u) {
+        batch_browse_rebuild_pending_ = true;
+        batch_runtime_full_sync_pending_ = true;
+    } else {
+        rebuildBrowseIndex();
+        requestRuntimeFullSync();
+    }
     return true;
 }
 

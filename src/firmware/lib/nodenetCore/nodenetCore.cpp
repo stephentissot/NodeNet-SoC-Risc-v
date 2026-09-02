@@ -3993,6 +3993,8 @@ void NodeNetCore::publishNodePointStates(JsonDocument& doc)
 
 void NodeNetCore::registerBuiltinPointDefinitions()
 {
+    _pointCatalog.beginBatchUpdate();
+
     PointDefinition definition = {};    
 
     make_point_identity(definition.id, deviceId, "core", "instrumentName");
@@ -4255,6 +4257,8 @@ void NodeNetCore::registerBuiltinPointDefinitions()
         register_slot_point("reset", "Reset", PointDirection::InOut, PointValueType::Bool, 0u);
         register_slot_point("clearFault", "Clear Fault", PointDirection::InOut, PointValueType::Bool, 0u);
     }
+
+    _pointCatalog.endBatchUpdate();
 
     oled::showBootProgress("Node services: builtins", kBootNodeServicesProgressEnd);
 }

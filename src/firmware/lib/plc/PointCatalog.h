@@ -65,6 +65,8 @@ public:
     const PointState* findState(const PointIdentity& id) const;
     PointCommandState* findCommandState(const PointIdentity& id);
     const PointCommandState* findCommandState(const PointIdentity& id) const;
+    void beginBatchUpdate();
+    void endBatchUpdate();
     bool upsert(const PointDefinition& definition);
     bool remove(const PointIdentity& id);
     bool replaceSlotVariableDefinitions(uint16_t slot_id,
@@ -119,6 +121,9 @@ private:
     size_t dirty_state_queue_tail_ = 0u;
     size_t dirty_state_queue_count_ = 0u;
     bool runtime_full_sync_required_ = true;
+    size_t batch_update_depth_ = 0u;
+    bool batch_browse_rebuild_pending_ = false;
+    bool batch_runtime_full_sync_pending_ = false;
 };
 
 #endif
