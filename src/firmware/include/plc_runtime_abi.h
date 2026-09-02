@@ -576,6 +576,17 @@ private:
         return flags;
     }
 
+    static bool usesSharedPointState(PointValueType value_type)
+    {
+        switch (value_type) {
+        case PointValueType::Bool:
+        case PointValueType::Int16:
+            return true;
+        default:
+            return false;
+        }
+    }
+
     static uint32_t mapLastWriter(const PointDefinition& definition)
     {
         switch (definition.backend) {
@@ -715,6 +726,10 @@ private:
                 continue;
             }
 
+            if (usesSharedPointState(definitions[i].value_type)) {
+                continue;
+            }
+
             syncPointValueAndStatus(definitions[i], states[i], runtime_index, now_ms);
         }
     }
@@ -733,6 +748,10 @@ private:
             }
 
             const PointDefinition& definition = catalog.entries()[catalog_index];
+            if (usesSharedPointState(definition.value_type)) {
+                continue;
+            }
+
             const PointState& state = catalog.states()[catalog_index];
             syncPointValueAndStatus(definition, state, runtime_index, now_ms);
         }
