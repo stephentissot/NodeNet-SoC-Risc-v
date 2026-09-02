@@ -50,10 +50,67 @@ module wb_plc #(
     localparam [31:0] SLOT_STATUS_FAULTED = 32'h8000_0000;
 
     localparam [7:0] OPCODE_HALT = 8'h00;
+    localparam [7:0] OPCODE_NOP = 8'h01;
+    localparam [7:0] OPCODE_PUSH_TRUE = 8'h02;
+    localparam [7:0] OPCODE_PUSH_FALSE = 8'h03;
+    localparam [7:0] OPCODE_DUP = 8'h04;
+    localparam [7:0] OPCODE_DROP = 8'h05;
+    localparam [7:0] OPCODE_SWAP = 8'h06;
+    localparam [7:0] OPCODE_AND = 8'h07;
+    localparam [7:0] OPCODE_OR = 8'h08;
+    localparam [7:0] OPCODE_XOR = 8'h09;
+    localparam [7:0] OPCODE_NOT = 8'h0A;
+    localparam [7:0] OPCODE_EQ = 8'h0B;
+    localparam [7:0] OPCODE_NE = 8'h0C;
     localparam [7:0] OPCODE_LOAD_BOOL = 8'h10;
     localparam [7:0] OPCODE_STORE_BOOL = 8'h11;
+    localparam [7:0] OPCODE_LOAD_I16 = 8'h12;
+    localparam [7:0] OPCODE_STORE_I16 = 8'h13;
+    localparam [7:0] OPCODE_PUSH_I16 = 8'h14;
     localparam [7:0] OPCODE_INC_INT16 = 8'h20;
     localparam [7:0] OPCODE_DEC_INT16 = 8'h21;
+    localparam [7:0] OPCODE_ADD = 8'h22;
+    localparam [7:0] OPCODE_SUB = 8'h23;
+    localparam [7:0] OPCODE_LT = 8'h24;
+    localparam [7:0] OPCODE_LE = 8'h25;
+    localparam [7:0] OPCODE_GT = 8'h26;
+    localparam [7:0] OPCODE_GE = 8'h27;
+    localparam [7:0] OPCODE_MIN = 8'h28;
+    localparam [7:0] OPCODE_MAX = 8'h29;
+    localparam [7:0] OPCODE_CLAMP = 8'h2A;
+    localparam [7:0] OPCODE_SEL = 8'h2B;
+    localparam [7:0] OPCODE_JMP = 8'h2C;
+    localparam [7:0] OPCODE_JZ = 8'h2D;
+    localparam [7:0] OPCODE_JNZ = 8'h2E;
+    localparam [7:0] OPCODE_R_TRIG = 8'h2F;
+    localparam [7:0] OPCODE_F_TRIG = 8'h30;
+    localparam [7:0] OPCODE_TON_START = 8'h31;
+    localparam [7:0] OPCODE_TON_DONE = 8'h32;
+    localparam [7:0] OPCODE_TON_RESET = 8'h33;
+    localparam [7:0] OPCODE_TON_ELAPSED = 8'h34;
+    localparam [7:0] OPCODE_TON_REMAINING = 8'h35;
+    localparam [7:0] OPCODE_TOF_START = 8'h36;
+    localparam [7:0] OPCODE_TOF_DONE = 8'h37;
+    localparam [7:0] OPCODE_TOF_RESET = 8'h38;
+    localparam [7:0] OPCODE_TP_START = 8'h39;
+    localparam [7:0] OPCODE_TP_DONE = 8'h3A;
+    localparam [7:0] OPCODE_TP_RESET = 8'h3B;
+    localparam [7:0] OPCODE_CTU_COUNT = 8'h3C;
+    localparam [7:0] OPCODE_CTU_DONE = 8'h3D;
+    localparam [7:0] OPCODE_CTU_VALUE = 8'h3E;
+    localparam [7:0] OPCODE_CTU_RESET = 8'h3F;
+    localparam [7:0] OPCODE_CTD_COUNT = 8'h40;
+    localparam [7:0] OPCODE_CTD_DONE = 8'h41;
+    localparam [7:0] OPCODE_CTD_VALUE = 8'h42;
+    localparam [7:0] OPCODE_CTD_RESET = 8'h43;
+    localparam integer EDGE_STATE_BITS = 384;
+    localparam integer EDGE_STATE_WORD_COUNT = EDGE_STATE_BITS / 32;
+    localparam integer EDGE_STATE_SECTION_BYTES = EDGE_STATE_WORD_COUNT * 4;
+    localparam [2:0] STACK_DEPTH_MAX = 3'd4;
+
+    localparam [1:0] STACK_TYPE_NONE = 2'd0;
+    localparam [1:0] STACK_TYPE_BOOL = 2'd1;
+    localparam [1:0] STACK_TYPE_INT16 = 2'd2;
 
     localparam [7:0] RUNTIME_TYPE_BOOL = 8'd1;
     localparam [7:0] RUNTIME_TYPE_INT16 = 8'd3;
@@ -61,6 +118,18 @@ module wb_plc #(
     localparam [7:0] RUNTIME_FLAG_WRITABLE = 8'h02;
     localparam [31:0] RUNTIME_WRITER_PLC_VM = 32'd2;
     localparam [31:0] POINT_QUALITY_GOOD = 32'd1;
+    localparam [31:0] TIMER_FLAG_RUNNING = 32'h0000_0001;
+    localparam [31:0] TIMER_FLAG_DONE = 32'h0000_0002;
+    localparam [31:0] TIMER_FLAG_INPUT_HIGH = 32'h0000_0004;
+    localparam [31:0] TIMER_MODE_MASK = 32'h0000_0300;
+    localparam [31:0] TIMER_MODE_SHIFT = 32'd8;
+    localparam [1:0] TIMER_MODE_NONE = 2'd0;
+    localparam [1:0] TIMER_MODE_TON = 2'd1;
+    localparam [1:0] TIMER_MODE_TOF = 2'd2;
+    localparam [1:0] TIMER_MODE_TP = 2'd3;
+    localparam [1:0] COUNTER_MODE_NONE = 2'd0;
+    localparam [1:0] COUNTER_MODE_CTU = 2'd1;
+    localparam [1:0] COUNTER_MODE_CTD = 2'd2;
     localparam [31:0] RUNTIME_WRITE_QUEUE_TAIL_ADDR = RUNTIME_WRITE_QUEUE_BASE + 32'd4;
     localparam [31:0] RUNTIME_WRITE_QUEUE_INDEX_BASE = RUNTIME_WRITE_QUEUE_BASE + 32'd12;
     localparam [31:0] RUNTIME_WRITE_QUEUE_CAPACITY = 32'd384;
@@ -69,52 +138,82 @@ module wb_plc #(
     localparam [31:0] FAULT_POINT_INDEX_OUT_OF_RANGE = 32'h0000_0004;
     localparam [31:0] FAULT_TYPE_MISMATCH = 32'h0000_0005;
     localparam [31:0] FAULT_WRITE_REJECTED = 32'h0000_000D;
+    localparam [31:0] FAULT_STACK_UNDERFLOW = 32'h0000_000E;
+    localparam [31:0] FAULT_STACK_OVERFLOW = 32'h0000_000F;
     localparam [31:0] FAULT_SCAN_BUDGET_EXCEEDED = 32'h0000_000A;
 
-    localparam [5:0] ST_IDLE = 6'd0;
-    localparam [5:0] ST_READ_CB_MAGIC = 6'd1;
-    localparam [5:0] ST_READ_CB_HEADER = 6'd2;
-    localparam [5:0] ST_READ_CB_CONTROL = 6'd3;
-    localparam [5:0] ST_READ_CB_STATUS = 6'd4;
-    localparam [5:0] ST_READ_CB_PC = 6'd5;
-    localparam [5:0] ST_READ_CB_CYCLE = 6'd6;
-    localparam [5:0] ST_READ_CB_CODE_BASE = 6'd7;
-    localparam [5:0] ST_READ_CB_CODE_SIZE = 6'd8;
-    localparam [5:0] ST_READ_CB_MAX_INSTR = 6'd9;
-    localparam [5:0] ST_SLOT_CHECK = 6'd10;
-    localparam [5:0] ST_FETCH_OPCODE = 6'd11;
-    localparam [5:0] ST_FETCH_OPERAND0 = 6'd12;
-    localparam [5:0] ST_FETCH_OPERAND1 = 6'd13;
-    localparam [5:0] ST_DECODE = 6'd14;
-    localparam [5:0] ST_READ_DESC0 = 6'd15;
-    localparam [5:0] ST_READ_DESC1 = 6'd16;
-    localparam [5:0] ST_READ_DESC2 = 6'd17;
-    localparam [5:0] ST_LOAD_BOOL_VALUE = 6'd18;
-    localparam [5:0] ST_STORE_BOOL_READ_VALUE = 6'd19;
-    localparam [5:0] ST_STORE_BOOL_WRITE_VALUE0 = 6'd20;
-    localparam [5:0] ST_STORE_BOOL_WRITE_VALUE1 = 6'd21;
-    localparam [5:0] ST_STORE_BOOL_WRITE_STATUS0 = 6'd22;
-    localparam [5:0] ST_STORE_BOOL_WRITE_STATUS1 = 6'd23;
-    localparam [5:0] ST_STORE_BOOL_WRITE_STATUS2 = 6'd24;
-    localparam [5:0] ST_STORE_BOOL_WRITE_STATUS3 = 6'd25;
-    localparam [5:0] ST_INT16_READ_VALUE = 6'd26;
-    localparam [5:0] ST_INT16_WRITE_VALUE0 = 6'd27;
-    localparam [5:0] ST_INT16_WRITE_VALUE1 = 6'd28;
-    localparam [5:0] ST_INT16_WRITE_STATUS0 = 6'd29;
-    localparam [5:0] ST_INT16_WRITE_STATUS1 = 6'd30;
-    localparam [5:0] ST_INT16_WRITE_STATUS2 = 6'd31;
-    localparam [5:0] ST_INT16_WRITE_STATUS3 = 6'd32;
-    localparam [5:0] ST_HALT_WRITE_STATUS = 6'd33;
-    localparam [5:0] ST_HALT_WRITE_PC = 6'd34;
-    localparam [5:0] ST_HALT_WRITE_CYCLE = 6'd35;
-    localparam [5:0] ST_FAULT_WRITE_STATUS = 6'd36;
-    localparam [5:0] ST_FAULT_WRITE_CODE = 6'd37;
-    localparam [5:0] ST_FAULT_WRITE_INFO = 6'd38;
-    localparam [5:0] ST_NEXT_SLOT = 6'd39;
-    localparam [5:0] ST_WRITE_RUNTIME_LAST_WRITER = 6'd40;
-    localparam [5:0] ST_QUEUE_READ_TAIL = 6'd41;
-    localparam [5:0] ST_QUEUE_WRITE_INDEX = 6'd42;
-    localparam [5:0] ST_QUEUE_WRITE_TAIL = 6'd43;
+    localparam [6:0] ST_IDLE = 7'd0;
+    localparam [6:0] ST_READ_CB_MAGIC = 7'd1;
+    localparam [6:0] ST_READ_CB_HEADER = 7'd2;
+    localparam [6:0] ST_READ_CB_CONTROL = 7'd3;
+    localparam [6:0] ST_READ_CB_STATUS = 7'd4;
+    localparam [6:0] ST_READ_CB_PC = 7'd5;
+    localparam [6:0] ST_READ_CB_CYCLE = 7'd6;
+    localparam [6:0] ST_READ_CB_CODE_BASE = 7'd7;
+    localparam [6:0] ST_READ_CB_CODE_SIZE = 7'd8;
+    localparam [6:0] ST_READ_CB_MAX_INSTR = 7'd9;
+    localparam [6:0] ST_SLOT_CHECK = 7'd10;
+    localparam [6:0] ST_FETCH_OPCODE = 7'd11;
+    localparam [6:0] ST_FETCH_OPERAND0 = 7'd12;
+    localparam [6:0] ST_FETCH_OPERAND1 = 7'd13;
+    localparam [6:0] ST_DECODE = 7'd14;
+    localparam [6:0] ST_READ_DESC0 = 7'd15;
+    localparam [6:0] ST_READ_DESC1 = 7'd16;
+    localparam [6:0] ST_READ_DESC2 = 7'd17;
+    localparam [6:0] ST_LOAD_BOOL_VALUE = 7'd18;
+    localparam [6:0] ST_STORE_BOOL_READ_VALUE = 7'd19;
+    localparam [6:0] ST_STORE_BOOL_WRITE_VALUE0 = 7'd20;
+    localparam [6:0] ST_STORE_BOOL_WRITE_VALUE1 = 7'd21;
+    localparam [6:0] ST_STORE_BOOL_WRITE_STATUS0 = 7'd22;
+    localparam [6:0] ST_STORE_BOOL_WRITE_STATUS1 = 7'd23;
+    localparam [6:0] ST_STORE_BOOL_WRITE_STATUS2 = 7'd24;
+    localparam [6:0] ST_STORE_BOOL_WRITE_STATUS3 = 7'd25;
+    localparam [6:0] ST_INT16_READ_VALUE = 7'd26;
+    localparam [6:0] ST_INT16_WRITE_VALUE0 = 7'd27;
+    localparam [6:0] ST_INT16_WRITE_VALUE1 = 7'd28;
+    localparam [6:0] ST_INT16_WRITE_STATUS0 = 7'd29;
+    localparam [6:0] ST_INT16_WRITE_STATUS1 = 7'd30;
+    localparam [6:0] ST_INT16_WRITE_STATUS2 = 7'd31;
+    localparam [6:0] ST_INT16_WRITE_STATUS3 = 7'd32;
+    localparam [6:0] ST_HALT_WRITE_STATUS = 7'd33;
+    localparam [6:0] ST_HALT_WRITE_PC = 7'd34;
+    localparam [6:0] ST_HALT_WRITE_CYCLE = 7'd35;
+    localparam [6:0] ST_FAULT_WRITE_STATUS = 7'd36;
+    localparam [6:0] ST_FAULT_WRITE_CODE = 7'd37;
+    localparam [6:0] ST_FAULT_WRITE_INFO = 7'd38;
+    localparam [6:0] ST_NEXT_SLOT = 7'd39;
+    localparam [6:0] ST_WRITE_RUNTIME_LAST_WRITER = 7'd40;
+    localparam [6:0] ST_QUEUE_READ_TAIL = 7'd41;
+    localparam [6:0] ST_QUEUE_WRITE_INDEX = 7'd42;
+    localparam [6:0] ST_QUEUE_WRITE_TAIL = 7'd43;
+    localparam [6:0] ST_PUSH_I16_VALUE = 7'd44;
+    localparam [6:0] ST_BRANCH_EXECUTE = 7'd45;
+    localparam [6:0] ST_READ_SLOT_SCRATCH_BASE = 7'd46;
+    localparam [6:0] ST_EDGE_READ_VALUE = 7'd47;
+    localparam [6:0] ST_EDGE_READ_PREV_WORD = 7'd48;
+    localparam [6:0] ST_EDGE_READ_VALID_WORD = 7'd49;
+    localparam [6:0] ST_EDGE_WRITE_PREV_WORD = 7'd50;
+    localparam [6:0] ST_EDGE_WRITE_VALID_WORD = 7'd51;
+    localparam [6:0] ST_READ_CB_TIMER_BASE = 7'd52;
+    localparam [6:0] ST_READ_CB_TIMER_COUNT = 7'd53;
+    localparam [6:0] ST_FETCH_IMMEDIATE0 = 7'd54;
+    localparam [6:0] ST_FETCH_IMMEDIATE1 = 7'd55;
+    localparam [6:0] ST_FETCH_IMMEDIATE2 = 7'd56;
+    localparam [6:0] ST_FETCH_IMMEDIATE3 = 7'd57;
+    localparam [6:0] ST_TIMER_PREP_START = 7'd58;
+    localparam [6:0] ST_TIMER_READ_WORD0 = 7'd59;
+    localparam [6:0] ST_TIMER_READ_WORD1 = 7'd60;
+    localparam [6:0] ST_TIMER_READ_FLAGS = 7'd61;
+    localparam [6:0] ST_TIMER_WRITE_WORD0 = 7'd62;
+    localparam [6:0] ST_TIMER_WRITE_WORD1 = 7'd63;
+    localparam [6:0] ST_TIMER_WRITE_FLAGS = 7'd64;
+    localparam [6:0] ST_COUNTER_PREP_START = 7'd65;
+    localparam [6:0] ST_COUNTER_READ_WORD0 = 7'd66;
+    localparam [6:0] ST_COUNTER_READ_WORD1 = 7'd67;
+    localparam [6:0] ST_COUNTER_READ_FLAGS = 7'd68;
+    localparam [6:0] ST_COUNTER_WRITE_WORD0 = 7'd69;
+    localparam [6:0] ST_COUNTER_WRITE_WORD1 = 7'd70;
+    localparam [6:0] ST_COUNTER_WRITE_FLAGS = 7'd71;
 
     reg        engine_enable;
     reg [31:0] scan_interval_cycles;
@@ -125,7 +224,7 @@ module wb_plc #(
     reg [31:0] last_fault_code;
     reg [7:0]  last_fault_slot;
 
-    reg [5:0]  state;
+    reg [6:0]  state;
     reg [4:0]  active_slot;
     reg [31:0] control_block_addr;
     reg [31:0] cb_control;
@@ -134,11 +233,17 @@ module wb_plc #(
     reg [31:0] cb_cycle_counter;
     reg [31:0] cb_bytecode_base;
     reg [31:0] cb_bytecode_size;
+    reg [31:0] cb_timer_base;
+    reg [31:0] cb_timer_count;
     reg [31:0] cb_max_instructions;
     reg [31:0] slot_entry_pc;
     reg [31:0] current_pc;
     reg [31:0] instruction_count;
-    reg        accumulator;
+    reg [63:0] stack_value;
+    reg [7:0]  stack_type;
+    reg [2:0]  stack_depth;
+    reg [15:0] pending_stack_value;
+    reg [31:0] current_immediate_u32;
     reg [7:0]  current_opcode;
     reg [15:0] current_runtime_index;
     reg [7:0]  desc_value_type;
@@ -147,8 +252,10 @@ module wb_plc #(
     reg [31:0] desc_status_offset;
     reg [31:0] runtime_value_addr;
     reg [31:0] runtime_status_addr;
+    reg [31:0] slot_scratch_base;
     reg [31:0] value_word0;
     reg [31:0] value_word1;
+    reg [31:0] value_word2;
     reg [31:0] fault_code_pending;
     reg [31:0] fault_info_pending;
     reg [31:0] runtime_write_queue_tail;
@@ -167,6 +274,13 @@ module wb_plc #(
         end
     endfunction
 
+    function [31:0] slot_manifest_addr;
+        input [4:0] slot_id;
+        begin
+            slot_manifest_addr = CONTROL_REGION_BASE + SLOT_DIRECTORY_BYTES + (slot_id * SLOT_MANIFEST_BYTES);
+        end
+    endfunction
+
     function [7:0] pick_byte;
         input [31:0] word_value;
         input [1:0]  lane;
@@ -177,6 +291,309 @@ module wb_plc #(
                 2'd2: pick_byte = word_value[23:16];
                 default: pick_byte = word_value[31:24];
             endcase
+        end
+    endfunction
+
+    function [6:0] stack_value_bit_index;
+        input [2:0] stack_index;
+        begin
+            stack_value_bit_index = {stack_index, 4'b0000};
+        end
+    endfunction
+
+    function [31:0] branch_target_pc;
+        input [31:0] base_pc;
+        input [15:0] rel16;
+        reg signed [31:0] signed_base;
+        reg signed [31:0] signed_offset;
+        reg signed [31:0] signed_target;
+        begin
+            signed_base = base_pc;
+            signed_offset = {{16{rel16[15]}}, rel16};
+            signed_target = signed_base + signed_offset;
+            branch_target_pc = signed_target[31:0];
+        end
+    endfunction
+
+    function [31:0] timer_entry_addr;
+        input [31:0] timer_base;
+        input [15:0] timer_index;
+        begin
+            timer_entry_addr = timer_base + {12'd0, timer_index, 4'b0000};
+        end
+    endfunction
+
+    function [1:0] timer_mode_from_flags;
+        input [31:0] flags;
+        begin
+            timer_mode_from_flags = flags[9:8];
+        end
+    endfunction
+
+    function [1:0] timer_mode_from_opcode;
+        input [7:0] opcode;
+        begin
+            case (opcode)
+                OPCODE_TON_START,
+                OPCODE_TON_DONE,
+                OPCODE_TON_RESET,
+                OPCODE_TON_ELAPSED,
+                OPCODE_TON_REMAINING: timer_mode_from_opcode = TIMER_MODE_TON;
+                OPCODE_TOF_START,
+                OPCODE_TOF_DONE,
+                OPCODE_TOF_RESET: timer_mode_from_opcode = TIMER_MODE_TOF;
+                OPCODE_TP_START,
+                OPCODE_TP_DONE,
+                OPCODE_TP_RESET: timer_mode_from_opcode = TIMER_MODE_TP;
+                default: timer_mode_from_opcode = TIMER_MODE_NONE;
+            endcase
+        end
+    endfunction
+
+    function timer_running;
+        input [31:0] flags;
+        begin
+            timer_running = (flags & TIMER_FLAG_RUNNING) != 32'd0;
+        end
+    endfunction
+
+    function timer_done_stored;
+        input [31:0] flags;
+        begin
+            timer_done_stored = (flags & TIMER_FLAG_DONE) != 32'd0;
+        end
+    endfunction
+
+    function timer_input_high;
+        input [31:0] flags;
+        begin
+            timer_input_high = (flags & TIMER_FLAG_INPUT_HIGH) != 32'd0;
+        end
+    endfunction
+
+    function [31:0] timer_pack_flags;
+        input [1:0] mode;
+        input       input_high;
+        input       running;
+        input       done;
+        begin
+            timer_pack_flags = ({22'd0, mode, 8'd0}) |
+                               (input_high ? TIMER_FLAG_INPUT_HIGH : 32'd0) |
+                               (running ? TIMER_FLAG_RUNNING : 32'd0) |
+                               (done ? TIMER_FLAG_DONE : 32'd0);
+        end
+    endfunction
+
+    function [31:0] timer_elapsed_value;
+        input [31:0] anchor_ms;
+        input [31:0] preset_ms;
+        input [31:0] flags;
+        input [31:0] now_ms;
+        reg [31:0] delta_ms;
+        begin
+            delta_ms = now_ms - anchor_ms;
+            case (timer_mode_from_flags(flags))
+                TIMER_MODE_TON: begin
+                    if (timer_done_stored(flags)) begin
+                        timer_elapsed_value = preset_ms;
+                    end else if (timer_running(flags)) begin
+                        timer_elapsed_value = (delta_ms >= preset_ms) ? preset_ms : delta_ms;
+                    end else begin
+                        timer_elapsed_value = 32'd0;
+                    end
+                end
+                TIMER_MODE_TOF,
+                TIMER_MODE_TP: begin
+                    if (timer_running(flags)) begin
+                        timer_elapsed_value = (delta_ms >= preset_ms) ? preset_ms : delta_ms;
+                    end else begin
+                        timer_elapsed_value = 32'd0;
+                    end
+                end
+                default: timer_elapsed_value = 32'd0;
+            endcase
+        end
+    endfunction
+
+    function timer_done_live;
+        input [31:0] anchor_ms;
+        input [31:0] preset_ms;
+        input [31:0] flags;
+        input [31:0] now_ms;
+        reg [31:0] delta_ms;
+        begin
+            delta_ms = now_ms - anchor_ms;
+            case (timer_mode_from_flags(flags))
+                TIMER_MODE_TON: timer_done_live = timer_done_stored(flags) ||
+                                                 (timer_running(flags) && (delta_ms >= preset_ms));
+                TIMER_MODE_TOF: timer_done_live = timer_input_high(flags) ||
+                                                 (timer_running(flags) && (delta_ms < preset_ms));
+                TIMER_MODE_TP: timer_done_live = timer_done_stored(flags) ||
+                                                (timer_running(flags) && (delta_ms < preset_ms));
+                default: timer_done_live = 1'b0;
+            endcase
+        end
+    endfunction
+
+    function [31:0] timer_remaining_value;
+        input [31:0] anchor_ms;
+        input [31:0] preset_ms;
+        input [31:0] flags;
+        input [31:0] now_ms;
+        reg [31:0] elapsed_ms;
+        begin
+            elapsed_ms = timer_elapsed_value(anchor_ms, preset_ms, flags, now_ms);
+            timer_remaining_value = (elapsed_ms >= preset_ms) ? 32'd0 : (preset_ms - elapsed_ms);
+        end
+    endfunction
+
+    function [15:0] timer_metric_i16;
+        input [31:0] metric_value;
+        begin
+            timer_metric_i16 = (metric_value > 32'd32767) ? 16'h7FFF : metric_value[15:0];
+        end
+    endfunction
+
+    function [1:0] counter_mode_from_flags;
+        input [31:0] flags;
+        begin
+            counter_mode_from_flags = flags[9:8];
+        end
+    endfunction
+
+    function [1:0] counter_mode_from_opcode;
+        input [7:0] opcode;
+        begin
+            case (opcode)
+                OPCODE_CTU_COUNT,
+                OPCODE_CTU_DONE,
+                OPCODE_CTU_VALUE,
+                OPCODE_CTU_RESET: counter_mode_from_opcode = COUNTER_MODE_CTU;
+                OPCODE_CTD_COUNT,
+                OPCODE_CTD_DONE,
+                OPCODE_CTD_VALUE,
+                OPCODE_CTD_RESET: counter_mode_from_opcode = COUNTER_MODE_CTD;
+                default: counter_mode_from_opcode = COUNTER_MODE_NONE;
+            endcase
+        end
+    endfunction
+
+    function counter_input_high;
+        input [31:0] flags;
+        begin
+            counter_input_high = (flags & TIMER_FLAG_INPUT_HIGH) != 32'd0;
+        end
+    endfunction
+
+    function [31:0] counter_pack_flags;
+        input [1:0] mode;
+        input       input_high;
+        begin
+            counter_pack_flags = ({22'd0, mode, 8'd0}) |
+                                 (input_high ? TIMER_FLAG_INPUT_HIGH : 32'd0);
+        end
+    endfunction
+
+    function [31:0] sign_extend_i16;
+        input [15:0] raw_value;
+        begin
+            sign_extend_i16 = {{16{raw_value[15]}}, raw_value};
+        end
+    endfunction
+
+    function counter_done_live;
+        input [7:0] opcode;
+        input [15:0] value_raw;
+        input [15:0] preset_raw;
+        reg signed [15:0] signed_value;
+        reg signed [15:0] signed_preset;
+        begin
+            signed_value = value_raw;
+            signed_preset = preset_raw;
+            case (counter_mode_from_opcode(opcode))
+                COUNTER_MODE_CTU: counter_done_live = signed_value >= signed_preset;
+                COUNTER_MODE_CTD: counter_done_live = signed_value <= 16'sd0;
+                default: counter_done_live = 1'b0;
+            endcase
+        end
+    endfunction
+
+    function [15:0] counter_up_next_value;
+        input [15:0] stored_value;
+        input [31:0] flags;
+        input        next_input_high;
+        reg signed [16:0] signed_value;
+        begin
+            if (counter_mode_from_flags(flags) == COUNTER_MODE_CTU) begin
+                signed_value = $signed(stored_value);
+            end else begin
+                signed_value = 17'sd0;
+            end
+
+            if (next_input_high && !counter_input_high(flags)) begin
+                if (signed_value >= 17'sd32767) begin
+                    counter_up_next_value = 16'h7FFF;
+                end else begin
+                    signed_value = signed_value + 17'sd1;
+                    counter_up_next_value = signed_value[15:0];
+                end
+            end else begin
+                counter_up_next_value = signed_value[15:0];
+            end
+        end
+    endfunction
+
+    function [15:0] counter_down_next_value;
+        input [15:0] stored_value;
+        input [15:0] preset_value;
+        input [31:0] flags;
+        input        next_input_high;
+        reg signed [16:0] signed_value;
+        begin
+            if (counter_mode_from_flags(flags) == COUNTER_MODE_CTD) begin
+                signed_value = $signed(stored_value);
+            end else begin
+                signed_value = $signed(preset_value);
+            end
+
+            if (next_input_high && !counter_input_high(flags)) begin
+                if (signed_value <= 17'sd0) begin
+                    counter_down_next_value = 16'd0;
+                end else begin
+                    signed_value = signed_value - 17'sd1;
+                    counter_down_next_value = signed_value[15:0];
+                end
+            end else if (signed_value <= 17'sd0) begin
+                counter_down_next_value = 16'd0;
+            end else begin
+                counter_down_next_value = signed_value[15:0];
+            end
+        end
+    endfunction
+
+    function [15:0] counter_reset_value;
+        input [7:0] opcode;
+        input [15:0] stored_preset;
+        begin
+            if (counter_mode_from_opcode(opcode) == COUNTER_MODE_CTD) begin
+                counter_reset_value = stored_preset;
+            end else begin
+                counter_reset_value = 16'd0;
+            end
+        end
+    endfunction
+
+    function [31:0] edge_state_word_byte_offset;
+        input [15:0] runtime_index;
+        begin
+            edge_state_word_byte_offset = {25'd0, runtime_index[8:5], 2'b00};
+        end
+    endfunction
+
+    function [31:0] edge_state_bit_mask;
+        input [15:0] runtime_index;
+        begin
+            edge_state_bit_mask = 32'h0000_0001 << runtime_index[4:0];
         end
     endfunction
 
@@ -283,11 +700,17 @@ module wb_plc #(
             cb_cycle_counter <= 32'd0;
             cb_bytecode_base <= 32'd0;
             cb_bytecode_size <= 32'd0;
+            cb_timer_base <= 32'd0;
+            cb_timer_count <= 32'd0;
             cb_max_instructions <= 32'd0;
             slot_entry_pc <= 32'd0;
             current_pc <= 32'd0;
             instruction_count <= 32'd0;
-            accumulator <= 1'b0;
+            stack_value <= 64'd0;
+            stack_type <= 8'd0;
+            stack_depth <= 3'd0;
+            pending_stack_value <= 16'd0;
+            current_immediate_u32 <= 32'd0;
             current_opcode <= 8'd0;
             current_runtime_index <= 16'd0;
             desc_value_type <= 8'd0;
@@ -296,8 +719,10 @@ module wb_plc #(
             desc_status_offset <= 32'd0;
             runtime_value_addr <= 32'd0;
             runtime_status_addr <= 32'd0;
+            slot_scratch_base <= 32'd0;
             value_word0 <= 32'd0;
             value_word1 <= 32'd0;
+            value_word2 <= 32'd0;
             fault_code_pending <= 32'd0;
             fault_info_pending <= 32'd0;
             runtime_write_queue_tail <= 32'd0;
@@ -409,6 +834,26 @@ module wb_plc #(
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         cb_bytecode_size <= m_dat_i;
+                        state <= ST_READ_CB_TIMER_BASE;
+                    end
+                end
+
+                ST_READ_CB_TIMER_BASE: begin
+                    if (!m_cyc_o) begin
+                        start_read(control_block_addr + 32'd48);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        cb_timer_base <= m_dat_i;
+                        state <= ST_READ_CB_TIMER_COUNT;
+                    end
+                end
+
+                ST_READ_CB_TIMER_COUNT: begin
+                    if (!m_cyc_o) begin
+                        start_read(control_block_addr + 32'd52);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        cb_timer_count <= m_dat_i;
                         state <= ST_READ_CB_MAX_INSTR;
                     end
                 end
@@ -419,6 +864,16 @@ module wb_plc #(
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         cb_max_instructions <= m_dat_i;
+                        state <= ST_READ_SLOT_SCRATCH_BASE;
+                    end
+                end
+
+                ST_READ_SLOT_SCRATCH_BASE: begin
+                    if (!m_cyc_o) begin
+                        start_read(slot_manifest_addr(active_slot) + 32'd56);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        slot_scratch_base <= m_dat_i;
                         state <= ST_SLOT_CHECK;
                     end
                 end
@@ -434,7 +889,10 @@ module wb_plc #(
                         slot_entry_pc <= (cb_pc < cb_bytecode_size) ? cb_pc : 32'd0;
                         current_pc <= (cb_pc < cb_bytecode_size) ? cb_pc : 32'd0;
                         instruction_count <= 32'd0;
-                        accumulator <= 1'b0;
+                        stack_value <= 64'd0;
+                        stack_type <= 8'd0;
+                        stack_depth <= 3'd0;
+                        pending_stack_value <= 16'd0;
                         cached_word_valid <= 1'b0;
                         state <= ST_FETCH_OPCODE;
                     end
@@ -490,7 +948,35 @@ module wb_plc #(
                     end else if (cached_word_valid && (cached_word_addr == ((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC))) begin
                         current_runtime_index[15:8] <= pick_byte(cached_word_data, (cb_bytecode_base + current_pc) & 32'd3);
                         current_pc <= current_pc + 32'd1;
-                        state <= ST_READ_DESC0;
+                        if (current_opcode == OPCODE_PUSH_I16) begin
+                            state <= ST_PUSH_I16_VALUE;
+                        end else if (current_opcode == OPCODE_JMP || current_opcode == OPCODE_JZ || current_opcode == OPCODE_JNZ) begin
+                            state <= ST_BRANCH_EXECUTE;
+                        end else if (current_opcode == OPCODE_TON_START ||
+                                     current_opcode == OPCODE_TOF_START ||
+                                     current_opcode == OPCODE_TP_START ||
+                                     current_opcode == OPCODE_CTU_COUNT ||
+                                     current_opcode == OPCODE_CTD_COUNT) begin
+                            state <= ST_FETCH_IMMEDIATE0;
+                        end else if (current_opcode == OPCODE_TON_DONE ||
+                                     current_opcode == OPCODE_TON_RESET ||
+                                     current_opcode == OPCODE_TON_ELAPSED ||
+                                     current_opcode == OPCODE_TON_REMAINING ||
+                                     current_opcode == OPCODE_TOF_DONE ||
+                                     current_opcode == OPCODE_TOF_RESET ||
+                                     current_opcode == OPCODE_TP_DONE ||
+                                     current_opcode == OPCODE_TP_RESET) begin
+                            state <= ST_TIMER_READ_WORD0;
+                        end else if (current_opcode == OPCODE_CTU_DONE ||
+                                     current_opcode == OPCODE_CTU_VALUE ||
+                                     current_opcode == OPCODE_CTU_RESET ||
+                                     current_opcode == OPCODE_CTD_DONE ||
+                                     current_opcode == OPCODE_CTD_VALUE ||
+                                     current_opcode == OPCODE_CTD_RESET) begin
+                            state <= ST_COUNTER_READ_WORD0;
+                        end else begin
+                            state <= ST_READ_DESC0;
+                        end
                     end else if (!m_cyc_o) begin
                         start_read((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC);
                     end else if (m_ack_i) begin
@@ -500,17 +986,530 @@ module wb_plc #(
                         cached_word_data <= m_dat_i;
                         current_runtime_index[15:8] <= pick_byte(m_dat_i, (cb_bytecode_base + current_pc) & 32'd3);
                         current_pc <= current_pc + 32'd1;
-                        state <= ST_READ_DESC0;
+                        if (current_opcode == OPCODE_PUSH_I16) begin
+                            state <= ST_PUSH_I16_VALUE;
+                        end else if (current_opcode == OPCODE_JMP || current_opcode == OPCODE_JZ || current_opcode == OPCODE_JNZ) begin
+                            state <= ST_BRANCH_EXECUTE;
+                        end else if (current_opcode == OPCODE_TON_START ||
+                                     current_opcode == OPCODE_TOF_START ||
+                                     current_opcode == OPCODE_TP_START ||
+                                     current_opcode == OPCODE_CTU_COUNT ||
+                                     current_opcode == OPCODE_CTD_COUNT) begin
+                            state <= ST_FETCH_IMMEDIATE0;
+                        end else if (current_opcode == OPCODE_TON_DONE ||
+                                     current_opcode == OPCODE_TON_RESET ||
+                                     current_opcode == OPCODE_TON_ELAPSED ||
+                                     current_opcode == OPCODE_TON_REMAINING ||
+                                     current_opcode == OPCODE_TOF_DONE ||
+                                     current_opcode == OPCODE_TOF_RESET ||
+                                     current_opcode == OPCODE_TP_DONE ||
+                                     current_opcode == OPCODE_TP_RESET) begin
+                            state <= ST_TIMER_READ_WORD0;
+                        end else if (current_opcode == OPCODE_CTU_DONE ||
+                                     current_opcode == OPCODE_CTU_VALUE ||
+                                     current_opcode == OPCODE_CTU_RESET ||
+                                     current_opcode == OPCODE_CTD_DONE ||
+                                     current_opcode == OPCODE_CTD_VALUE ||
+                                     current_opcode == OPCODE_CTD_RESET) begin
+                            state <= ST_COUNTER_READ_WORD0;
+                        end else begin
+                            state <= ST_READ_DESC0;
+                        end
+                    end
+                end
+
+                ST_FETCH_IMMEDIATE0: begin
+                    if (current_pc >= cb_bytecode_size) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_pc - 32'd3);
+                    end else if (cached_word_valid && (cached_word_addr == ((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC))) begin
+                        current_immediate_u32[7:0] <= pick_byte(cached_word_data, (cb_bytecode_base + current_pc) & 32'd3);
+                        current_pc <= current_pc + 32'd1;
+                        state <= ST_FETCH_IMMEDIATE1;
+                    end else if (!m_cyc_o) begin
+                        start_read((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        cached_word_valid <= 1'b1;
+                        cached_word_addr <= (cb_bytecode_base + current_pc) & 32'hFFFF_FFFC;
+                        cached_word_data <= m_dat_i;
+                        current_immediate_u32[7:0] <= pick_byte(m_dat_i, (cb_bytecode_base + current_pc) & 32'd3);
+                        current_pc <= current_pc + 32'd1;
+                        state <= ST_FETCH_IMMEDIATE1;
+                    end
+                end
+
+                ST_FETCH_IMMEDIATE1: begin
+                    if (current_pc >= cb_bytecode_size) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_pc - 32'd4);
+                    end else if (cached_word_valid && (cached_word_addr == ((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC))) begin
+                        current_immediate_u32[15:8] <= pick_byte(cached_word_data, (cb_bytecode_base + current_pc) & 32'd3);
+                        current_immediate_u32[31:16] <= 16'd0;
+                        current_pc <= current_pc + 32'd1;
+                        state <= (current_opcode == OPCODE_CTU_COUNT || current_opcode == OPCODE_CTD_COUNT)
+                            ? ST_COUNTER_PREP_START
+                            : ST_FETCH_IMMEDIATE2;
+                    end else if (!m_cyc_o) begin
+                        start_read((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        cached_word_valid <= 1'b1;
+                        cached_word_addr <= (cb_bytecode_base + current_pc) & 32'hFFFF_FFFC;
+                        cached_word_data <= m_dat_i;
+                        current_immediate_u32[15:8] <= pick_byte(m_dat_i, (cb_bytecode_base + current_pc) & 32'd3);
+                        current_immediate_u32[31:16] <= 16'd0;
+                        current_pc <= current_pc + 32'd1;
+                        state <= (current_opcode == OPCODE_CTU_COUNT || current_opcode == OPCODE_CTD_COUNT)
+                            ? ST_COUNTER_PREP_START
+                            : ST_FETCH_IMMEDIATE2;
+                    end
+                end
+
+                ST_FETCH_IMMEDIATE2: begin
+                    if (current_pc >= cb_bytecode_size) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_pc - 32'd5);
+                    end else if (cached_word_valid && (cached_word_addr == ((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC))) begin
+                        current_immediate_u32[23:16] <= pick_byte(cached_word_data, (cb_bytecode_base + current_pc) & 32'd3);
+                        current_pc <= current_pc + 32'd1;
+                        state <= ST_FETCH_IMMEDIATE3;
+                    end else if (!m_cyc_o) begin
+                        start_read((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        cached_word_valid <= 1'b1;
+                        cached_word_addr <= (cb_bytecode_base + current_pc) & 32'hFFFF_FFFC;
+                        cached_word_data <= m_dat_i;
+                        current_immediate_u32[23:16] <= pick_byte(m_dat_i, (cb_bytecode_base + current_pc) & 32'd3);
+                        current_pc <= current_pc + 32'd1;
+                        state <= ST_FETCH_IMMEDIATE3;
+                    end
+                end
+
+                ST_FETCH_IMMEDIATE3: begin
+                    if (current_pc >= cb_bytecode_size) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_pc - 32'd6);
+                    end else if (cached_word_valid && (cached_word_addr == ((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC))) begin
+                        current_immediate_u32[31:24] <= pick_byte(cached_word_data, (cb_bytecode_base + current_pc) & 32'd3);
+                        current_pc <= current_pc + 32'd1;
+                        state <= ST_TIMER_PREP_START;
+                    end else if (!m_cyc_o) begin
+                        start_read((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        cached_word_valid <= 1'b1;
+                        cached_word_addr <= (cb_bytecode_base + current_pc) & 32'hFFFF_FFFC;
+                        cached_word_data <= m_dat_i;
+                        current_immediate_u32[31:24] <= pick_byte(m_dat_i, (cb_bytecode_base + current_pc) & 32'd3);
+                        current_pc <= current_pc + 32'd1;
+                        state <= ST_TIMER_PREP_START;
+                    end
+                end
+
+                ST_PUSH_I16_VALUE: begin
+                    if (stack_depth >= STACK_DEPTH_MAX) begin
+                        begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
+                    end else begin
+                        stack_value[stack_value_bit_index(stack_depth) +: 16] <= current_runtime_index;
+                        stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_INT16;
+                        stack_depth <= stack_depth + 3'd1;
+                        state <= ST_FETCH_OPCODE;
                     end
                 end
 
                 ST_DECODE: begin
                     case (current_opcode)
+                        OPCODE_NOP: state <= ST_FETCH_OPCODE;
+                        OPCODE_PUSH_TRUE: begin
+                            if (stack_depth >= STACK_DEPTH_MAX) begin
+                                begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth) +: 16] <= 16'd1;
+                                stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth + 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_PUSH_FALSE: begin
+                            if (stack_depth >= STACK_DEPTH_MAX) begin
+                                begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth) +: 16] <= 16'd0;
+                                stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth + 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_DUP: begin
+                            if (stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_depth >= STACK_DEPTH_MAX) begin
+                                begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth) +: 16] <=
+                                    stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                                stack_type[(stack_depth << 1) +: 2] <= stack_type[((stack_depth - 3'd1) << 1) +: 2];
+                                stack_depth <= stack_depth + 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_DROP: begin
+                            if (stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else begin
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_SWAP: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else begin
+                                case (stack_depth)
+                                    3'd2: begin
+                                        stack_value[31:0] <= {stack_value[15:0], stack_value[31:16]};
+                                        stack_type[3:0] <= {stack_type[1:0], stack_type[3:2]};
+                                    end
+                                    3'd3: begin
+                                        stack_value[47:0] <= {stack_value[31:16], stack_value[47:32], stack_value[15:0]};
+                                        stack_type[5:0] <= {stack_type[3:2], stack_type[5:4], stack_type[1:0]};
+                                    end
+                                    default: begin
+                                        stack_value[63:0] <= {stack_value[47:32], stack_value[63:48], stack_value[31:16], stack_value[15:0]};
+                                        stack_type[7:0] <= {stack_type[5:4], stack_type[7:6], stack_type[3:2], stack_type[1:0]};
+                                    end
+                                endcase
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_AND: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_BOOL ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] &
+                                    stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_OR: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_BOOL ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] |
+                                    stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_XOR: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_BOOL ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] ^
+                                    stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_NOT: begin
+                            if (stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] <=
+                                    ~stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] & 16'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_EQ: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] == STACK_TYPE_NONE ||
+                                         stack_type[((stack_depth - 3'd2) << 1) +: 2] != stack_type[((stack_depth - 3'd1) << 1) +: 2]) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    (stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] ==
+                                     stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]) ? 16'd1 : 16'd0;
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_NE: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] == STACK_TYPE_NONE ||
+                                         stack_type[((stack_depth - 3'd2) << 1) +: 2] != stack_type[((stack_depth - 3'd1) << 1) +: 2]) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    (stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] !=
+                                     stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]) ? 16'd1 : 16'd0;
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_ADD: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    $signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) +
+                                    $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]);
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_INT16;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_SUB: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    $signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) -
+                                    $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]);
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_INT16;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_LT: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) <
+                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16])) ? 16'd1 : 16'd0;
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_LE: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) <=
+                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16])) ? 16'd1 : 16'd0;
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_GT: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) >
+                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16])) ? 16'd1 : 16'd0;
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_GE: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) >=
+                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16])) ? 16'd1 : 16'd0;
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_MIN: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) <=
+                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]))
+                                        ? stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]
+                                        : stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_INT16;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_MAX: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
+                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) >=
+                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]))
+                                        ? stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]
+                                        : stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_INT16;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_CLAMP: begin
+                            if (stack_depth < 3'd3) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd3) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
+                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 16] <=
+                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 16]) <
+                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]))
+                                        ? stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]
+                                        : (($signed(stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 16]) >
+                                            $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]))
+                                               ? stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]
+                                               : stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 16]);
+                                stack_type[((stack_depth - 3'd3) << 1) +: 2] <= STACK_TYPE_INT16;
+                                stack_depth <= stack_depth - 3'd2;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_SEL: begin
+                            if (stack_depth < 3'd3) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL ||
+                                         stack_type[((stack_depth - 3'd3) << 1) +: 2] == STACK_TYPE_NONE ||
+                                         stack_type[((stack_depth - 3'd3) << 1) +: 2] != stack_type[((stack_depth - 3'd2) << 1) +: 2]) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 16] <=
+                                    stack_value[stack_value_bit_index(
+                                        stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] != 16'd0
+                                            ? (stack_depth - 3'd2)
+                                            : (stack_depth - 3'd3)) +: 16];
+                                stack_type[((stack_depth - 3'd3) << 1) +: 2] <=
+                                    stack_type[((stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] != 16'd0
+                                        ? (stack_depth - 3'd2)
+                                        : (stack_depth - 3'd3)) << 1) +: 2];
+                                stack_depth <= stack_depth - 3'd2;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
                         OPCODE_HALT: state <= ST_HALT_WRITE_STATUS;
+                        OPCODE_PUSH_I16,
                         OPCODE_LOAD_BOOL,
                         OPCODE_STORE_BOOL,
+                        OPCODE_LOAD_I16,
+                        OPCODE_STORE_I16,
                         OPCODE_INC_INT16,
-                        OPCODE_DEC_INT16: state <= ST_FETCH_OPERAND0;
+                        OPCODE_DEC_INT16,
+                        OPCODE_R_TRIG,
+                        OPCODE_F_TRIG,
+                        OPCODE_TON_START,
+                        OPCODE_TON_DONE,
+                        OPCODE_TON_RESET,
+                        OPCODE_TON_ELAPSED,
+                        OPCODE_TON_REMAINING,
+                        OPCODE_TOF_START,
+                        OPCODE_TOF_DONE,
+                        OPCODE_TOF_RESET,
+                        OPCODE_TP_START,
+                        OPCODE_TP_DONE,
+                        OPCODE_TP_RESET,
+                        OPCODE_CTU_COUNT,
+                        OPCODE_CTU_DONE,
+                        OPCODE_CTU_VALUE,
+                        OPCODE_CTU_RESET,
+                        OPCODE_CTD_COUNT,
+                        OPCODE_CTD_DONE,
+                        OPCODE_CTD_VALUE,
+                        OPCODE_CTD_RESET,
+                        OPCODE_JMP,
+                        OPCODE_JZ,
+                        OPCODE_JNZ: state <= ST_FETCH_OPERAND0;
+                        default: begin_fault(FAULT_INVALID_OPCODE, current_opcode);
+                    endcase
+                end
+
+                ST_BRANCH_EXECUTE: begin
+                    case (current_opcode)
+                        OPCODE_JMP: begin
+                            if (branch_target_pc(current_pc, current_runtime_index) >= cb_bytecode_size) begin
+                                begin_fault(FAULT_INVALID_OPCODE, current_pc - 32'd3);
+                            end else begin
+                                current_pc <= branch_target_pc(current_pc, current_runtime_index);
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_JZ: begin
+                            if (stack_depth < 3'd1) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd3);
+                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd3);
+                            end else if ((stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] == 16'd0) &&
+                                         (branch_target_pc(current_pc, current_runtime_index) >= cb_bytecode_size)) begin
+                                begin_fault(FAULT_INVALID_OPCODE, current_pc - 32'd3);
+                            end else begin
+                                stack_depth <= stack_depth - 3'd1;
+                                if (stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] == 16'd0) begin
+                                    current_pc <= branch_target_pc(current_pc, current_runtime_index);
+                                end
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_JNZ: begin
+                            if (stack_depth < 3'd1) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd3);
+                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd3);
+                            end else if ((stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] != 16'd0) &&
+                                         (branch_target_pc(current_pc, current_runtime_index) >= cb_bytecode_size)) begin
+                                begin_fault(FAULT_INVALID_OPCODE, current_pc - 32'd3);
+                            end else begin
+                                stack_depth <= stack_depth - 3'd1;
+                                if (stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] != 16'd0) begin
+                                    current_pc <= branch_target_pc(current_pc, current_runtime_index);
+                                end
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
                         default: begin_fault(FAULT_INVALID_OPCODE, current_opcode);
                     endcase
                 end
@@ -550,11 +1549,41 @@ module wb_plc #(
                             end else begin
                                 state <= ST_LOAD_BOOL_VALUE;
                             end
+                        end else if (current_opcode == OPCODE_R_TRIG || current_opcode == OPCODE_F_TRIG) begin
+                            if (desc_value_type != RUNTIME_TYPE_BOOL || (desc_flags & RUNTIME_FLAG_READABLE) == 8'd0) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
+                            end else begin
+                                state <= ST_EDGE_READ_VALUE;
+                            end
                         end else if (current_opcode == OPCODE_STORE_BOOL) begin
                             if (desc_value_type != RUNTIME_TYPE_BOOL || (desc_flags & RUNTIME_FLAG_WRITABLE) == 8'd0) begin
                                 begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
+                            end else if (stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
+                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                             end else begin
+                                pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                                stack_depth <= stack_depth - 3'd1;
                                 state <= ST_STORE_BOOL_READ_VALUE;
+                            end
+                        end else if (current_opcode == OPCODE_LOAD_I16) begin
+                            if (desc_value_type != RUNTIME_TYPE_INT16 || (desc_flags & RUNTIME_FLAG_READABLE) == 8'd0) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
+                            end else begin
+                                state <= ST_INT16_READ_VALUE;
+                            end
+                        end else if (current_opcode == OPCODE_STORE_I16) begin
+                            if (desc_value_type != RUNTIME_TYPE_INT16 || (desc_flags & RUNTIME_FLAG_WRITABLE) == 8'd0) begin
+                                begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
+                            end else if (stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
+                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
+                            end else begin
+                                pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_INT16_READ_VALUE;
                             end
                         end else begin
                             if (desc_value_type != RUNTIME_TYPE_INT16 ||
@@ -572,7 +1601,390 @@ module wb_plc #(
                         start_read(runtime_value_addr);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
-                        accumulator <= m_dat_i[0];
+                        if (stack_depth >= STACK_DEPTH_MAX) begin
+                            begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
+                        end else begin
+                            stack_value[stack_value_bit_index(stack_depth) +: 16] <= {15'd0, m_dat_i[0]};
+                            stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_BOOL;
+                            stack_depth <= stack_depth + 3'd1;
+                            state <= ST_FETCH_OPCODE;
+                        end
+                    end
+                end
+
+                ST_EDGE_READ_VALUE: begin
+                    if (!m_cyc_o) begin
+                        start_read(runtime_value_addr);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        if (slot_scratch_base == 32'd0) begin
+                            begin_fault(FAULT_INVALID_OPCODE, current_opcode);
+                        end else if (current_runtime_index >= EDGE_STATE_BITS) begin
+                            begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                        end else if (stack_depth >= STACK_DEPTH_MAX) begin
+                            begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
+                        end else begin
+                            pending_stack_value <= {15'd0, m_dat_i[0]};
+                            state <= ST_EDGE_READ_PREV_WORD;
+                        end
+                    end
+                end
+
+                ST_EDGE_READ_PREV_WORD: begin
+                    if (!m_cyc_o) begin
+                        start_read(slot_scratch_base + edge_state_word_byte_offset(current_runtime_index));
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        value_word0 <= m_dat_i;
+                        state <= ST_EDGE_READ_VALID_WORD;
+                    end
+                end
+
+                ST_EDGE_READ_VALID_WORD: begin
+                    if (!m_cyc_o) begin
+                        start_read(slot_scratch_base + EDGE_STATE_SECTION_BYTES + edge_state_word_byte_offset(current_runtime_index));
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        value_word1 <= m_dat_i;
+                        stack_value[stack_value_bit_index(stack_depth) +: 16] <= {15'd0,
+                            (current_opcode == OPCODE_R_TRIG)
+                                ? (((m_dat_i & edge_state_bit_mask(current_runtime_index)) != 32'd0) &&
+                                   ((value_word0 & edge_state_bit_mask(current_runtime_index)) == 32'd0) &&
+                                   pending_stack_value[0])
+                                : (((m_dat_i & edge_state_bit_mask(current_runtime_index)) != 32'd0) &&
+                                   ((value_word0 & edge_state_bit_mask(current_runtime_index)) != 32'd0) &&
+                                   !pending_stack_value[0])};
+                        stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_BOOL;
+                        stack_depth <= stack_depth + 3'd1;
+                        state <= ST_EDGE_WRITE_PREV_WORD;
+                    end
+                end
+
+                ST_EDGE_WRITE_PREV_WORD: begin
+                    if (!m_cyc_o) begin
+                        start_write(slot_scratch_base + edge_state_word_byte_offset(current_runtime_index),
+                                    pending_stack_value[0]
+                                        ? (value_word0 | edge_state_bit_mask(current_runtime_index))
+                                        : (value_word0 & ~edge_state_bit_mask(current_runtime_index)));
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        state <= ST_EDGE_WRITE_VALID_WORD;
+                    end
+                end
+
+                ST_EDGE_WRITE_VALID_WORD: begin
+                    if (!m_cyc_o) begin
+                        start_write(slot_scratch_base + EDGE_STATE_SECTION_BYTES + edge_state_word_byte_offset(current_runtime_index),
+                                    value_word1 | edge_state_bit_mask(current_runtime_index));
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        state <= ST_FETCH_OPCODE;
+                    end
+                end
+
+                ST_TIMER_PREP_START: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (stack_depth == 3'd0) begin
+                        begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
+                    end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                        begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
+                    end else begin
+                        pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                        stack_depth <= stack_depth - 3'd1;
+                        state <= ST_TIMER_READ_WORD0;
+                    end
+                end
+
+                ST_TIMER_READ_WORD0: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if ((current_opcode == OPCODE_TON_DONE ||
+                                  current_opcode == OPCODE_TON_ELAPSED ||
+                                  current_opcode == OPCODE_TON_REMAINING ||
+                                  current_opcode == OPCODE_TOF_DONE ||
+                                  current_opcode == OPCODE_TP_DONE) &&
+                                 stack_depth >= STACK_DEPTH_MAX) begin
+                        begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
+                    end else if (!m_cyc_o) begin
+                        start_read(timer_entry_addr(cb_timer_base, current_runtime_index));
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        value_word0 <= m_dat_i;
+                        state <= ST_TIMER_READ_WORD1;
+                    end
+                end
+
+                ST_TIMER_READ_WORD1: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (!m_cyc_o) begin
+                        start_read(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd4);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        value_word1 <= m_dat_i;
+                        state <= ST_TIMER_READ_FLAGS;
+                    end
+                end
+
+                ST_TIMER_READ_FLAGS: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (!m_cyc_o) begin
+                        start_read(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        value_word2 <= m_dat_i;
+                        if (current_opcode == OPCODE_TON_DONE ||
+                            current_opcode == OPCODE_TOF_DONE ||
+                            current_opcode == OPCODE_TP_DONE) begin
+                            stack_value[stack_value_bit_index(stack_depth) +: 16] <= {15'd0,
+                                timer_done_live(value_word0, value_word1, m_dat_i, ms_counter)};
+                            stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_BOOL;
+                            stack_depth <= stack_depth + 3'd1;
+                            state <= ST_FETCH_OPCODE;
+                        end else if (current_opcode == OPCODE_TON_ELAPSED) begin
+                            stack_value[stack_value_bit_index(stack_depth) +: 16] <=
+                                timer_metric_i16(timer_elapsed_value(value_word0, value_word1, m_dat_i, ms_counter));
+                            stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_INT16;
+                            stack_depth <= stack_depth + 3'd1;
+                            state <= ST_FETCH_OPCODE;
+                        end else if (current_opcode == OPCODE_TON_REMAINING) begin
+                            stack_value[stack_value_bit_index(stack_depth) +: 16] <=
+                                timer_metric_i16(timer_remaining_value(value_word0, value_word1, m_dat_i, ms_counter));
+                            stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_INT16;
+                            stack_depth <= stack_depth + 3'd1;
+                            state <= ST_FETCH_OPCODE;
+                        end else begin
+                            state <= ST_TIMER_WRITE_WORD0;
+                        end
+                    end
+                end
+
+                ST_TIMER_WRITE_WORD0: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (!m_cyc_o) begin
+                        if (current_opcode == OPCODE_TON_RESET ||
+                            current_opcode == OPCODE_TOF_RESET ||
+                            current_opcode == OPCODE_TP_RESET) begin
+                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index), 32'd0);
+                        end else if (current_opcode == OPCODE_TON_START) begin
+                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index),
+                                        !pending_stack_value[0]
+                                            ? 32'd0
+                                            : (!timer_running(value_word2) && !timer_done_stored(value_word2))
+                                                ? ms_counter
+                                                : value_word0);
+                        end else if (current_opcode == OPCODE_TOF_START) begin
+                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index),
+                                        pending_stack_value[0]
+                                            ? 32'd0
+                                            : timer_input_high(value_word2)
+                                                ? ms_counter
+                                                : timer_running(value_word2)
+                                                    ? value_word0
+                                                    : 32'd0);
+                        end else begin
+                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index),
+                                        (timer_running(value_word2) &&
+                                         (timer_elapsed_value(value_word0, value_word1, value_word2, ms_counter) < value_word1))
+                                            ? value_word0
+                                            : (pending_stack_value[0] && !timer_input_high(value_word2))
+                                                ? ms_counter
+                                                : 32'd0);
+                        end
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        state <= ST_TIMER_WRITE_WORD1;
+                    end
+                end
+
+                ST_TIMER_WRITE_WORD1: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (!m_cyc_o) begin
+                        start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd4,
+                                    (current_opcode == OPCODE_TON_RESET ||
+                                     current_opcode == OPCODE_TOF_RESET ||
+                                     current_opcode == OPCODE_TP_RESET ||
+                                     (current_opcode == OPCODE_TON_START && !pending_stack_value[0]))
+                                        ? 32'd0
+                                        : current_immediate_u32);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        state <= ST_TIMER_WRITE_FLAGS;
+                    end
+                end
+
+                ST_TIMER_WRITE_FLAGS: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (!m_cyc_o) begin
+                        if (current_opcode == OPCODE_TON_RESET ||
+                            current_opcode == OPCODE_TOF_RESET ||
+                            current_opcode == OPCODE_TP_RESET ||
+                            (current_opcode == OPCODE_TON_START && !pending_stack_value[0])) begin
+                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8, 32'd0);
+                        end else if (current_opcode == OPCODE_TON_START) begin
+                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8,
+                                        timer_pack_flags(TIMER_MODE_TON,
+                                                         1'b1,
+                                                         1'b1,
+                                                         timer_done_stored(value_word2) ||
+                                                         (current_immediate_u32 == 32'd0) ||
+                                                         ((!timer_running(value_word2) && !timer_done_stored(value_word2))
+                                                             ? 1'b0
+                                                             : ((ms_counter - value_word0) >= current_immediate_u32))));
+                        end else if (current_opcode == OPCODE_TOF_START) begin
+                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8,
+                                        pending_stack_value[0]
+                                            ? timer_pack_flags(TIMER_MODE_TOF, 1'b1, 1'b0, 1'b1)
+                                            : timer_input_high(value_word2)
+                                                ? ((current_immediate_u32 == 32'd0)
+                                                    ? timer_pack_flags(TIMER_MODE_TOF, 1'b0, 1'b0, 1'b0)
+                                                    : timer_pack_flags(TIMER_MODE_TOF, 1'b0, 1'b1, 1'b1))
+                                                : (timer_running(value_word2) && ((ms_counter - value_word0) < value_word1))
+                                                    ? timer_pack_flags(TIMER_MODE_TOF, 1'b0, 1'b1, 1'b1)
+                                                    : timer_pack_flags(TIMER_MODE_TOF, 1'b0, 1'b0, 1'b0));
+                        end else begin
+                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8,
+                                        (timer_running(value_word2) &&
+                                         (timer_elapsed_value(value_word0, value_word1, value_word2, ms_counter) < value_word1))
+                                            ? timer_pack_flags(TIMER_MODE_TP, pending_stack_value[0], 1'b1, 1'b1)
+                                            : (pending_stack_value[0] && !timer_input_high(value_word2))
+                                                ? ((current_immediate_u32 == 32'd0)
+                                                    ? timer_pack_flags(TIMER_MODE_TP, 1'b1, 1'b0, 1'b1)
+                                                    : timer_pack_flags(TIMER_MODE_TP, 1'b1, 1'b1, 1'b1))
+                                                : pending_stack_value[0]
+                                                    ? timer_pack_flags(TIMER_MODE_TP, 1'b1, 1'b0, 1'b0)
+                                                    : timer_pack_flags(TIMER_MODE_TP, 1'b0, 1'b0, 1'b0));
+                        end
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        state <= ST_FETCH_OPCODE;
+                    end
+                end
+
+                ST_COUNTER_PREP_START: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (stack_depth == 3'd0) begin
+                        begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
+                    end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                        begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
+                    end else begin
+                        pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                        stack_depth <= stack_depth - 3'd1;
+                        state <= ST_COUNTER_READ_WORD0;
+                    end
+                end
+
+                ST_COUNTER_READ_WORD0: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if ((current_opcode == OPCODE_CTU_DONE ||
+                                  current_opcode == OPCODE_CTU_VALUE ||
+                                  current_opcode == OPCODE_CTD_DONE ||
+                                  current_opcode == OPCODE_CTD_VALUE) &&
+                                 stack_depth >= STACK_DEPTH_MAX) begin
+                        begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
+                    end else if (!m_cyc_o) begin
+                        start_read(timer_entry_addr(cb_timer_base, current_runtime_index));
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        value_word0 <= m_dat_i;
+                        state <= ST_COUNTER_READ_WORD1;
+                    end
+                end
+
+                ST_COUNTER_READ_WORD1: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (!m_cyc_o) begin
+                        start_read(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd4);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        value_word1 <= m_dat_i;
+                        state <= ST_COUNTER_READ_FLAGS;
+                    end
+                end
+
+                ST_COUNTER_READ_FLAGS: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (!m_cyc_o) begin
+                        start_read(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        value_word2 <= m_dat_i;
+                        if (current_opcode == OPCODE_CTU_DONE || current_opcode == OPCODE_CTD_DONE) begin
+                            stack_value[stack_value_bit_index(stack_depth) +: 16] <= {15'd0,
+                                counter_done_live(current_opcode, value_word0[15:0], value_word1[15:0])};
+                            stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_BOOL;
+                            stack_depth <= stack_depth + 3'd1;
+                            state <= ST_FETCH_OPCODE;
+                        end else if (current_opcode == OPCODE_CTU_VALUE || current_opcode == OPCODE_CTD_VALUE) begin
+                            stack_value[stack_value_bit_index(stack_depth) +: 16] <= value_word0[15:0];
+                            stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_INT16;
+                            stack_depth <= stack_depth + 3'd1;
+                            state <= ST_FETCH_OPCODE;
+                        end else begin
+                            state <= ST_COUNTER_WRITE_WORD0;
+                        end
+                    end
+                end
+
+                ST_COUNTER_WRITE_WORD0: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (!m_cyc_o) begin
+                        if (current_opcode == OPCODE_CTU_RESET || current_opcode == OPCODE_CTD_RESET) begin
+                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index),
+                                        sign_extend_i16(counter_reset_value(current_opcode, value_word1[15:0])));
+                        end else if (current_opcode == OPCODE_CTU_COUNT) begin
+                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index),
+                                        sign_extend_i16(counter_up_next_value(value_word0[15:0],
+                                                                             value_word2,
+                                                                             pending_stack_value[0])));
+                        end else begin
+                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index),
+                                        sign_extend_i16(counter_down_next_value(value_word0[15:0],
+                                                                               current_immediate_u32[15:0],
+                                                                               value_word2,
+                                                                               pending_stack_value[0])));
+                        end
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        state <= ST_COUNTER_WRITE_WORD1;
+                    end
+                end
+
+                ST_COUNTER_WRITE_WORD1: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (!m_cyc_o) begin
+                        start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd4,
+                                    (current_opcode == OPCODE_CTU_COUNT || current_opcode == OPCODE_CTD_COUNT)
+                                        ? sign_extend_i16(current_immediate_u32[15:0])
+                                        : value_word1);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        state <= ST_COUNTER_WRITE_FLAGS;
+                    end
+                end
+
+                ST_COUNTER_WRITE_FLAGS: begin
+                    if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
+                        begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
+                    end else if (!m_cyc_o) begin
+                        start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8,
+                                    counter_pack_flags(counter_mode_from_opcode(current_opcode),
+                                                       (current_opcode == OPCODE_CTU_COUNT || current_opcode == OPCODE_CTD_COUNT)
+                                                           ? pending_stack_value[0]
+                                                           : 1'b0));
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
                         state <= ST_FETCH_OPCODE;
                     end
                 end
@@ -583,7 +1995,7 @@ module wb_plc #(
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         value_word0 <= m_dat_i;
-                        if (m_dat_i[0] == accumulator) begin
+                        if (m_dat_i[0] == pending_stack_value[0]) begin
                             state <= ST_FETCH_OPCODE;
                         end else begin
                             state <= ST_WRITE_RUNTIME_LAST_WRITER;
@@ -607,7 +2019,7 @@ module wb_plc #(
 
                 ST_STORE_BOOL_WRITE_VALUE0: begin
                     if (!m_cyc_o) begin
-                        start_write(runtime_value_addr, {31'd0, accumulator});
+                        start_write(runtime_value_addr, {31'd0, pending_stack_value[0]});
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         state <= ST_STORE_BOOL_WRITE_VALUE1;
@@ -668,17 +2080,37 @@ module wb_plc #(
                         start_read(runtime_value_addr);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
-                        value_word0 <= m_dat_i;
-                        state <= ST_WRITE_RUNTIME_LAST_WRITER;
+                        if (current_opcode == OPCODE_LOAD_I16) begin
+                            if (stack_depth >= STACK_DEPTH_MAX) begin
+                                begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth) +: 16] <= m_dat_i[15:0];
+                                stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_INT16;
+                                stack_depth <= stack_depth + 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end else if (current_opcode == OPCODE_STORE_I16) begin
+                            value_word0 <= m_dat_i;
+                            if (m_dat_i[15:0] == pending_stack_value) begin
+                                state <= ST_FETCH_OPCODE;
+                            end else begin
+                                state <= ST_WRITE_RUNTIME_LAST_WRITER;
+                            end
+                        end else begin
+                            value_word0 <= m_dat_i;
+                            state <= ST_WRITE_RUNTIME_LAST_WRITER;
+                        end
                     end
                 end
 
                 ST_INT16_WRITE_VALUE0: begin
                     if (!m_cyc_o) begin
                         start_write(runtime_value_addr,
-                                    (current_opcode == OPCODE_INC_INT16)
-                                        ? $signed($signed(value_word0[15:0]) + 16'sd1)
-                                        : $signed($signed(value_word0[15:0]) - 16'sd1));
+                                    (current_opcode == OPCODE_STORE_I16)
+                                        ? {{16{pending_stack_value[15]}}, pending_stack_value}
+                                        : ((current_opcode == OPCODE_INC_INT16)
+                                            ? ($signed({{16{value_word0[15]}}, value_word0[15:0]}) + 32'sd1)
+                                            : ($signed({{16{value_word0[15]}}, value_word0[15:0]}) - 32'sd1)));
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         state <= ST_INT16_WRITE_VALUE1;

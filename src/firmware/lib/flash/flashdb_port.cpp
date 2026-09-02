@@ -288,17 +288,24 @@ bool flashdb_get_str(const char* key, char* out, size_t out_size) {
     return false;
   }
 
-  const char* value = fdb_kv_get(&g_kvdb, key);
-  if (value == nullptr) {
+  struct fdb_kv kv = {};
+  if (fdb_kv_get_obj(&g_kvdb, key, &kv) == nullptr) {
     out[0] = '\0';
     return false;
   }
 
-  size_t n = std::strlen(value);
-  if (n >= out_size) {
-    n = out_size - 1u;
+  if (kv.value_len >= out_size) {
+    out[0] = '\0';
+    return false;
   }
-  std::memcpy(out, value, n);
+
+  struct fdb_blob blob;
+  const size_t n = fdb_kv_get_blob(&g_kvdb, key, fdb_blob_make(&blob, out, kv.value_len));
+  if (n != kv.value_len) {
+    out[0] = '\0';
+    return false;
+  }
+
   out[n] = '\0';
   return true;
 }

@@ -33,6 +33,12 @@ static const PointState* point_state_storage_const() {
     return reinterpret_cast<const PointState*>(static_cast<uintptr_t>(kPointStateSdramBase));
 }
 
+static SDRAM_DATA PointDefinition g_slot_variable_scratch_definitions[PointCatalog::kMaxPoints];
+static SDRAM_DATA PointDefinition g_point_catalog_scratch_entries[PointCatalog::kMaxPoints];
+static SDRAM_DATA PointCommandState g_point_catalog_scratch_command_states[PointCatalog::kMaxPoints];
+static SDRAM_DATA PointCatalog::PlcPointMeta g_point_catalog_scratch_plc_meta[PointCatalog::kMaxPoints];
+static SDRAM_DATA PointState g_point_catalog_scratch_states[PointCatalog::kMaxPoints];
+
 static bool is_ascii_digit(char c) {
     return c >= '0' && c <= '9';
 }
@@ -114,6 +120,33 @@ static bool is_transient_slot_variable(const PointIdentity& id) {
     }
 
     return id.point_id[0] != '\0';
+}
+
+static bool is_slot_variable_point(const PointDefinition& definition,
+                                  const PointCatalog::PlcPointMeta& meta,
+                                  uint16_t slot_id) {
+    return meta.is_local &&
+           meta.has_slot &&
+           meta.slot_id == slot_id &&
+           meta.point_kind == PointCatalog::PlcPointKind::SlotOther &&
+           is_transient_slot_variable(definition.id);
+}
+
+static bool point_definitions_equal(const PointDefinition& lhs, const PointDefinition& rhs) {
+    return std::strcmp(lhs.id.device_id, rhs.id.device_id) == 0 &&
+           std::strcmp(lhs.id.feature, rhs.id.feature) == 0 &&
+           std::strcmp(lhs.id.point_id, rhs.id.point_id) == 0 &&
+           std::strcmp(lhs.display_name, rhs.display_name) == 0 &&
+           lhs.backend == rhs.backend &&
+           lhs.direction == rhs.direction &&
+           lhs.value_type == rhs.value_type &&
+           lhs.polling.refresh_ms == rhs.polling.refresh_ms &&
+           lhs.polling.timeout_ms == rhs.polling.timeout_ms &&
+           lhs.string_capacity == rhs.string_capacity &&
+           lhs.scale == rhs.scale &&
+           std::strcmp(lhs.unit, rhs.unit) == 0 &&
+           lhs.enum_def == rhs.enum_def &&
+           std::memcmp(&lhs.ref, &rhs.ref, sizeof(lhs.ref)) == 0;
 }
 
 static void copy_string(char* dst, size_t dst_size, const char* src) {
@@ -381,6 +414,10 @@ const PointCommandState* PointCatalog::commandStates() const {
     return command_states_;
 }
 
+PointDefinition* PointCatalog::slotVariableDefinitionScratch() {
+    return g_slot_variable_scratch_definitions;
+}
+
 const PointDefinition* PointCatalog::find(const PointIdentity& id) const {
     const size_t index = lookupIndex(id);
     return index < count_ ? &entries_[index] : nullptr;
@@ -495,6 +532,75 @@ bool PointCatalog::remove(const PointIdentity& id) {
     rebuildIndex();
     rebuildBrowseIndex();
     requestRuntimeFullSync();
+    return true;
+}
+
+bool PointCatalog::replaceSlotVariableDefinitions(uint16_t slot_id,
+                                                  const PointDefinition* definitions,
+                                                  size_t definition_count,
+                                                  bool& changed_out) {
+    changed_out = false;
+    if (definitions == nullptr || definition_count > kMaxPoints) {
+        return false;
+    }
+
+    std::memset(g_point_catalog_scratch_entries, 0, sizeof(g_point_catalog_scratch_entries));
+    std::memset(g_point_catalog_scratch_command_states, 0, sizeof(g_point_catalog_scratch_command_states));
+    std::memset(g_point_catalog_scratch_plc_meta, 0, sizeof(g_point_catalog_scratch_plc_meta));
+    std::memset(g_point_catalog_scratch_states, 0, sizeof(g_point_catalog_scratch_states));
+
+    size_t preserved_count = 0u;
+    size_t existing_slot_var_count = 0u;
+    for (size_t index = 0u; index < count_; ++index) {
+        if (is_slot_variable_point(entries_[index], plc_point_meta_[index], slot_id)) {
+            ++existing_slot_var_count;
+            continue;
+        }
+
+        g_point_catalog_scratch_entries[preserved_count] = entries_[index];
+        g_point_catalog_scratch_command_states[preserved_count] = command_states_[index];
+        g_point_catalog_scratch_plc_meta[preserved_count] = plc_point_meta_[index];
+        g_point_catalog_scratch_states[preserved_count] = point_state_storage()[index];
+        ++preserved_count;
+    }
+
+    if ((preserved_count + definition_count) > kMaxPoints) {
+        return false;
+    }
+
+    bool layout_changed = existing_slot_var_count != definition_count;
+    for (size_t definition_index = 0u; definition_index < definition_count; ++definition_index) {
+        const PointDefinition& definition = definitions[definition_index];
+        const size_t next_index = preserved_count + definition_index;
+        g_point_catalog_scratch_entries[next_index] = definition;
+        g_point_catalog_scratch_plc_meta[next_index] = classifyPlcPointMeta(definition);
+
+        const size_t existing_index = lookupIndex(definition.id);
+        if (existing_index < count_) {
+            g_point_catalog_scratch_states[next_index] = point_state_storage()[existing_index];
+            g_point_catalog_scratch_command_states[next_index] = command_states_[existing_index];
+            if (!layout_changed && !point_definitions_equal(entries_[existing_index], definition)) {
+                layout_changed = true;
+            }
+        } else {
+            layout_changed = true;
+        }
+    }
+
+    if (!layout_changed) {
+        changed_out = false;
+        return true;
+    }
+
+    std::memcpy(entries_, g_point_catalog_scratch_entries, sizeof(entries_));
+    std::memcpy(command_states_, g_point_catalog_scratch_command_states, sizeof(command_states_));
+    std::memcpy(plc_point_meta_, g_point_catalog_scratch_plc_meta, sizeof(plc_point_meta_));
+    std::memcpy(point_state_storage(), g_point_catalog_scratch_states, sizeof(g_point_catalog_scratch_states));
+    count_ = preserved_count + definition_count;
+    rebuildIndex();
+    rebuildBrowseIndex();
+    requestRuntimeFullSync();
+    changed_out = true;
     return true;
 }
 

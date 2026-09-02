@@ -9,21 +9,55 @@ It separates three levels clearly:
 
 - syntax already accepted by the current desktop assembler
 - object-file and loader contracts already enforced by firmware
-- planned declaration forms reserved for the next toolchain step
+- the frozen instruction subset targeted by `plc_vm step 2`
+- planned instruction families explicitly reserved for later phases
 
 The goal is to keep source syntax stable while allowing the firmware loader to
 resolve symbols to runtime point indices when a slot is loaded.
 
 ## Current Status
 
+Repository baseline today:
+
+- the merged project state is `PLC Ready with V0 basic ISA`
+- the current assembler and runtime subset is intentionally small and proven on
+  the existing firmware-first path
+
 Implemented today:
 
 - `CONST POINT_ID <symbol>, <deviceId.feature.pointId>`
 - `PARAM POINT_ID <symbol>`
 - `VAR <type> <name>`
+- `VAR PUBLIC <type> <name>`
+- `VAR PRIVATE <type> <name>`
+- `NOP`
 - `HALT`
+- `PUSH_TRUE`
+- `PUSH_FALSE`
+- `DUP`
+- `DROP`
+- `SWAP`
 - `LOAD_BOOL <symbol>`
 - `STORE_BOOL <symbol>`
+- `AND`
+- `OR`
+- `XOR`
+- `NOT`
+- `EQ`
+- `NE`
+- `PUSH_I16 imm16`
+- `LOAD_I16 <symbol>`
+- `STORE_I16 <symbol>`
+- `ADD`
+- `SUB`
+- `LT`
+- `LE`
+- `GT`
+- `GE`
+- `MIN`
+- `MAX`
+- `CLAMP`
+- `SEL`
 - `INC_INT <symbol>`
 - `DEC_INT <symbol>`
 - `DB <byte0>, <byte1>, ...`
@@ -35,10 +69,18 @@ Supported by the firmware loader in this step:
 - automatic mapping of slot-local variables to dynamic local points under
   `deviceId.plc.slotN.<varName>` at slot load time
 
-Not yet emitted by the current desktop assembler:
+Step 2 objective for this document:
 
-- typed arithmetic, branch, timer, or float instructions beyond the current
-  boolean subset
+- freeze one useful and HDL-friendly core ISA
+- define one unambiguous stack-based execution model
+- classify remaining instruction families as either `step 2 core` or
+  `reserved for later`
+
+Reserved for later phases unless explicitly promoted by a follow-up branch:
+
+- timer and event primitives
+- float execution
+- wide integer utilities that add hardware cost without immediate bring-up value
 
 ## Source File Structure
 
@@ -51,7 +93,7 @@ Example:
 
 ```text
 PARAM POINT_ID input
-CONST POINT_ID y, gb9fao5yk4f.modbus0.waveshare8ch.output4
+CONST POINT_ID y, gb9fao5yk4f.modbus0.waveshare0.output4
 VAR BOOL latch
 
 LOAD_BOOL input
@@ -84,6 +126,194 @@ The PLC runtime currently defines these scalar value types:
 V1 slot-local variables are intentionally restricted to scalar types. Strings are
 excluded.
 
+## Step 2 Execution Model
+
+The frozen execution model for `plc_vm step 2` is a typed stack machine.
+
+Rules:
+
+- there is one operand stack per slot
+- the top of stack is the only implicit operand source and destination
+- there is no separate accumulator in the frozen model
+- `LOAD_*` instructions push one typed value on the operand stack
+- `STORE_*` instructions consume one typed value from the operand stack and
+  stage the write for commit at scan end
+- unary operators consume one value and push one result
+- binary operators consume the top two values and push one result
+- `INC_INT` and `DEC_INT` remain special single-operand memory update
+  instructions for the current compact profile
+- a stack type mismatch, stack underflow, invalid opcode, or invalid point type
+  shall fault the active slot
+
+Step 2 keeps straight-line scan execution only:
+
+- execution starts at bytecode offset `0`
+- execution stops on `HALT` or on fault
+- there is no branch, call, or loop instruction in the frozen core subset
+
+## Step 2 Frozen Core ISA
+
+The recommended frozen core ISA for this branch is:
+
+### Declarations
+
+- `CONST POINT_ID`
+- `PARAM POINT_ID`
+- `VAR`
+
+### Control
+
+- `NOP`
+- `HALT`
+
+### Stack and literals
+
+- `PUSH_TRUE`
+- `PUSH_FALSE`
+- `PUSH_I16 imm16`
+- `DUP`
+- `DROP`
+- `SWAP`
+
+### Point access
+
+- `LOAD_BOOL <symbol>`
+- `STORE_BOOL <symbol>`
+- `LOAD_I16 <symbol>`
+- `STORE_I16 <symbol>`
+
+### Boolean and integer core
+
+- `AND`
+- `OR`
+- `XOR`
+- `NOT`
+- `EQ`
+- `NE`
+- `ADD`
+- `SUB`
+- `LT`
+- `LE`
+- `GT`
+- `GE`
+- `MIN`
+- `MAX`
+- `CLAMP`
+- `SEL`
+- `JMP rel16|label`
+- `JZ rel16|label`
+- `JNZ rel16|label`
+- `R_TRIG <symbol>`
+- `F_TRIG <symbol>`
+- `INC_INT <symbol>`
+- `DEC_INT <symbol>`
+
+Instruction families reserved but not part of the frozen step 2 core:
+
+- `LOAD_U16`, `STORE_U16`, `LOAD_U32`, `STORE_U32`, `LOAD_I32`, `STORE_I32`
+- `NEG`, `ABS`
+- `CALL`, `RET`
+- timer, counter, and edge primitives
+- float load/store, compare, arithmetic, and conversion families
+
+## Step 2 Core Opcode Contract
+
+This table is the frozen semantic contract for the core subset. Encodings may
+still be assigned or refined during implementation, but operand shape, stack
+effect, and type behavior should not drift.
+
+| Mnemonic | Operands | Stack effect | Type rules | Fault cases |
+| --- | --- | --- | --- | --- |
+| `NOP` | none | no change | none | invalid opcode only |
+| `HALT` | none | stop scan | none | none |
+| `PUSH_TRUE` | none | `... -> ..., bool` | pushes `true` | stack overflow |
+| `PUSH_FALSE` | none | `... -> ..., bool` | pushes `false` | stack overflow |
+| `PUSH_I16` | `imm16` | `... -> ..., i16` | sign-extended literal | stack overflow |
+| `DUP` | none | `..., a -> ..., a, a` | duplicates top value with same type | stack underflow, stack overflow |
+| `DROP` | none | `..., a -> ...` | removes top value | stack underflow |
+| `SWAP` | none | `..., a, b -> ..., b, a` | preserves both operand types | stack underflow |
+| `LOAD_BOOL` | `point symbol` | `... -> ..., bool` | source point must resolve to `BOOL` | unresolved symbol, type mismatch, read fault, stack overflow |
+| `STORE_BOOL` | `point symbol` | `..., bool -> ...` | target point must resolve to writable `BOOL` | unresolved symbol, type mismatch, write fault, stack underflow |
+| `LOAD_I16` | `point symbol` | `... -> ..., i16` | source point must resolve to `INT` | unresolved symbol, type mismatch, read fault, stack overflow |
+| `STORE_I16` | `point symbol` | `..., i16 -> ...` | target point must resolve to writable `INT` | unresolved symbol, type mismatch, write fault, stack underflow |
+| `AND` | none | `..., bool, bool -> ..., bool` | boolean only | stack underflow, type mismatch |
+| `OR` | none | `..., bool, bool -> ..., bool` | boolean only | stack underflow, type mismatch |
+| `XOR` | none | `..., bool, bool -> ..., bool` | boolean only | stack underflow, type mismatch |
+| `NOT` | none | `..., bool -> ..., bool` | boolean only | stack underflow, type mismatch |
+| `EQ` | none | `..., a, a -> ..., bool` | both operands must have the same scalar type | stack underflow, type mismatch |
+| `NE` | none | `..., a, a -> ..., bool` | both operands must have the same scalar type | stack underflow, type mismatch |
+| `ADD` | none | `..., i16, i16 -> ..., i16` | `INT` only in the frozen core | stack underflow, type mismatch, arithmetic overflow if trapped |
+| `SUB` | none | `..., i16, i16 -> ..., i16` | `INT` only in the frozen core | stack underflow, type mismatch, arithmetic overflow if trapped |
+| `LT` | none | `..., i16, i16 -> ..., bool` | signed `INT` compare | stack underflow, type mismatch |
+| `LE` | none | `..., i16, i16 -> ..., bool` | signed `INT` compare | stack underflow, type mismatch |
+| `GT` | none | `..., i16, i16 -> ..., bool` | signed `INT` compare | stack underflow, type mismatch |
+| `GE` | none | `..., i16, i16 -> ..., bool` | signed `INT` compare | stack underflow, type mismatch |
+| `MIN` | none | `..., i16, i16 -> ..., i16` | signed `INT` compare/select | stack underflow, type mismatch |
+| `MAX` | none | `..., i16, i16 -> ..., i16` | signed `INT` compare/select | stack underflow, type mismatch |
+| `CLAMP` | none | `..., value, min, max -> ..., i16` | signed `INT` only | stack underflow, type mismatch |
+| `SEL` | none | `..., falseValue, trueValue, bool -> ..., a` | selects between same-typed stack values using top boolean | stack underflow, type mismatch |
+| `JMP` | `rel16` or `label` | no stack use | target is relative to the next instruction | invalid target |
+| `JZ` | `rel16` or `label` | `..., bool -> ...` | pops a boolean and jumps when it is false | stack underflow, type mismatch, invalid target |
+| `JNZ` | `rel16` or `label` | `..., bool -> ...` | pops a boolean and jumps when it is true | stack underflow, type mismatch, invalid target |
+| `R_TRIG` | `point symbol` | `... -> ..., bool` | pushes true for one scan on a false-to-true transition of the source `BOOL` point | unresolved symbol, type mismatch, read fault, stack overflow |
+| `F_TRIG` | `point symbol` | `... -> ..., bool` | pushes true for one scan on a true-to-false transition of the source `BOOL` point | unresolved symbol, type mismatch, read fault, stack overflow |
+| `INC_INT` | `point symbol` | no stack use | point must resolve to writable `INT` | unresolved symbol, type mismatch, write fault |
+| `DEC_INT` | `point symbol` | no stack use | point must resolve to writable `INT` | unresolved symbol, type mismatch, write fault |
+| `DB` | raw bytes | implementation-defined | bring-up escape hatch only | bypasses source-level type guarantees |
+
+### Labels
+
+Stage 5 introduces local branch labels for control flow:
+
+```text
+enabled:
+LOAD_BOOL enable
+JNZ run
+HALT
+
+run:
+PUSH_TRUE
+STORE_BOOL y
+HALT
+```
+
+Rules:
+
+- label syntax is `<name>:`
+- labels are local to one source file
+- valid label characters are ASCII letters, digits, and `_`
+- `JMP`, `JZ`, and `JNZ` accept either a signed `rel16` literal or a label
+
+### R_TRIG
+
+Syntax:
+
+```text
+R_TRIG <symbol>
+```
+
+Behavior:
+
+- reads one `BOOL` point identified by `<symbol>`
+- keeps one previous sampled state per slot and per runtime point index
+- pushes `true` for exactly one scan when the source transitions from `false` to `true`
+- on the first scan after a slot load, it initializes the remembered state and pushes `false`
+
+### F_TRIG
+
+Syntax:
+
+```text
+F_TRIG <symbol>
+```
+
+Behavior:
+
+- reads one `BOOL` point identified by `<symbol>`
+- keeps one previous sampled state per slot and per runtime point index
+- pushes `true` for exactly one scan when the source transitions from `true` to `false`
+- on the first scan after a slot load, it initializes the remembered state and pushes `false`
+
 ## Declarations
 
 ### CONST POINT_ID
@@ -103,7 +333,7 @@ Purpose:
 Example:
 
 ```text
-CONST POINT_ID y, gb9fao5yk4f.modbus0.waveshare8ch.output4
+CONST POINT_ID y, gb9fao5yk4f.modbus0.waveshare0.output4
 ```
 
 Usage notes:
@@ -144,20 +374,23 @@ Reserved source syntax for slot-local exported variables:
 
 ```text
 VAR <type> <name>
+VAR PUBLIC <type> <name>
+VAR PRIVATE <type> <name>
 ```
 
 Examples:
 
 ```text
 VAR BOOL ready
-VAR INT counter
-VAR FLOAT filteredPv
+VAR PUBLIC INT counter
+VAR PRIVATE FLOAT filteredPv
 ```
 
 Purpose:
 
 - declares a slot-local named variable
 - the variable is materialized by the firmware loader as a dynamic local point
+- visibility defaults to `PUBLIC` when omitted
 - the created point identity is:
 
 ```text
@@ -174,7 +407,9 @@ Loader rules for `VAR`:
 
 - creation happens at slot load time, before relocation resolution
 - variables are local backend points
-- variables are created with direction `InOut`
+- `VAR PUBLIC` variables are created with direction `InOut`
+- `VAR PRIVATE` variables are created with direction `Input` for external browse/write purposes
+- the owning PLC program may still read and write its own `VAR PRIVATE` symbols internally
 - variables are zero-initialized
 - variables are not persisted as user catalog configuration
 - reloading a slot replaces that slot's previous dynamic variable set
@@ -254,8 +489,7 @@ Encoding:
 Behavior:
 
 - reads one boolean point identified by `<symbol>`
-- pushes or accumulates that boolean according to the current VM execution
-  model
+- pushes that boolean onto the operand stack
 
 Source operand rules:
 
@@ -291,8 +525,8 @@ Encoding:
 
 Behavior:
 
-- writes the current boolean accumulator or top-of-stack value to the target
-  boolean point
+- pops one boolean from the operand stack and stages a write to the target
+  point for commit at scan end
 
 Source operand rules:
 
@@ -387,12 +621,11 @@ Current V1 restriction:
 
 - the target point must resolve to runtime type `Int16`
 
-## HDL-Oriented Instruction Roadmap
+## Frozen Core And Recommended Expansion Order
 
-The long-term goal may be to migrate part of the PLC execution engine from the
-current firmware VM toward HDL-managed execution or acceleration. For that
-reason, the most useful instruction roadmap is not only semantic but also
-ranked by hardware implementation cost.
+The long-term goal remains to migrate PLC execution toward HDL-managed
+execution. For `plc_vm step 2`, the most useful roadmap is the one that balances
+hardware implementation cost and immediate programming value.
 
 The ranking below assumes a modest HDL engine first:
 
@@ -402,122 +635,1134 @@ The ranking below assumes a modest HDL engine first:
   or register interface
 - no speculative execution, no deep pipeline, no out-of-order behavior
 
+Current hardware constraint for implementation planning:
+
+- the current FPGA build is already close to BRAM saturation, with DP16KD usage
+  around `87%`
+- this matters not only for fit margin, but also for build iteration time,
+  because `nextpnr-ecp5` routing cost rises sharply near BRAM saturation
+- stage ordering should therefore minimize new dedicated memories until the core
+  execution contract is proven stable
+
+Practical consequences for `plc_vm step 2`:
+
+- prefer register-based or shallow LUTRAM-based operand stacks for the first
+  core profile
+- avoid increasing stack depth, timer tables, trace buffers, or per-slot scratch
+  RAM before the core ISA is validated
+- prefer opcodes that reuse one compact integer/boolean datapath over features
+  that require new state memories
+- defer timer families, float execution, and large diagnostics buffers unless a
+  measured bring-up need justifies the BRAM cost
+- when two designs are functionally equivalent, prefer the one that reduces
+  DP16KD growth even if it costs a little more control logic or cycles
+
 In that model, "simple" means:
 
 - few source operands
 - fixed-width encoding
 - no expensive divider, multiplier, or float unit
 - no wide comparator trees beyond basic integer compares
-- no hidden multi-cycle state beyond straightforward timers
+- no hidden multi-cycle state beyond explicit state machines
 
-### Tier 0: Already Implemented And HDL-Friendly
+### Stage 1: Foundation And First Useful Writes
 
-These instructions already exist and also happen to be the easiest base for a
-future HDL engine:
-
-- `HALT`
-- `LOAD_BOOL <symbol>`
-- `STORE_BOOL <symbol>`
-- `INC_INT <symbol>`
-- `DEC_INT <symbol>`
-- `DB ...` for bring-up only, not as a stable language feature
-
-Why they are simple in HDL:
-
-- one opcode plus at most one relocated point operand
-- no immediate ALU datapath except `+1` and `-1`
-- no branches, stack juggling, or type conversion
-
-### Tier 1: Lowest HDL Cost Expansion
-
-These should be the first future additions if the objective is HDL simplicity.
-
-Recommended instructions:
+Recommended implementation set:
 
 - `NOP`
-- `LOAD_U16 <symbol>`
-- `STORE_U16 <symbol>`
-- `LOAD_I16 <symbol>`
-- `STORE_I16 <symbol>`
-- `LOAD_U32 <symbol>`
-- `STORE_U32 <symbol>`
-- `LOAD_I32 <symbol>`
-- `STORE_I32 <symbol>`
+- `HALT`
 - `PUSH_TRUE`
 - `PUSH_FALSE`
-- `PUSH_U16 imm16`
-- `PUSH_I16 imm16`
-- `PUSH_U32 imm32`
-- `PUSH_I32 imm32`
 - `DUP`
 - `DROP`
 - `SWAP`
+- `LOAD_BOOL <symbol>`
+- `STORE_BOOL <symbol>`
+
+Why this stage goes first:
+
+- it freezes the stack contract early
+- it enables the first real end-to-end validation programs
+- it stays close to the already implemented boolean path
+
+Validation programs:
+
+Nominal program, expected result: one scan completes without fault and the
+commit phase drives `y = true`.
+
+```text
+CONST POINT_ID y, demo.sim.output0
+
+PUSH_TRUE
+STORE_BOOL y
+HALT
+```
+
+Fault program, expected result: the slot faults with stack underflow before any
+write is committed.
+
+```text
+CONST POINT_ID y, demo.sim.output0
+
+STORE_BOOL y
+HALT
+```
+
+Stack manipulation program, expected result: one scan completes without fault,
+`DUP` preserves one copy of the pushed boolean for `STORE_BOOL`, and `DROP`
+empties the stack before `HALT`.
+
+```text
+CONST POINT_ID y, demo.sim.output0
+
+PUSH_TRUE
+DUP
+STORE_BOOL y
+DROP
+HALT
+```
+
+False literal program, expected result: one scan completes without fault and
+the commit phase drives `y = false`.
+
+```text
+CONST POINT_ID y, demo.sim.output0
+
+PUSH_FALSE
+STORE_BOOL y
+HALT
+```
+
+Read then write program, expected result: one scan completes without fault and
+the target output mirrors the current boolean value of the source point.
+
+```text
+CONST POINT_ID x, demo.sim.input0
+CONST POINT_ID y, demo.sim.output0
+
+LOAD_BOOL x
+STORE_BOOL y
+HALT
+```
+
+Swap program, expected result: one scan completes without fault, `SWAP`
+exchanges the top two booleans, and `STORE_BOOL` consumes the swapped top value.
+
+```text
+CONST POINT_ID y, demo.sim.output0
+
+PUSH_TRUE
+PUSH_FALSE
+SWAP
+STORE_BOOL y
+DROP
+HALT
+```
+
+Implementation checklist:
+
+- Desktop assembler (`tools/BigSisterNodeNet.Plc`): accept `NOP`, `PUSH_TRUE`,
+  `PUSH_FALSE`, `DUP`, `DROP`, `SWAP`; add opcode emission; reject wrong
+  operand counts; keep `objectFileV1` relocation rules unchanged for
+  `LOAD_BOOL` and `STORE_BOOL`.
+- Object file contract: freeze opcode numbers and operand widths for the stage 1
+  instructions; ensure raw disassembly can reconstruct the emitted mnemonics.
+- Firmware loader (`PlcSlotLoaderV1`): validate that stage 1 images contain only
+  accepted stage 1 opcodes when the target execution profile is `core-step2`;
+  keep point relocation/type validation for `BOOL` operands.
+- Shared ABI contract ([src/firmware/include/plc_runtime_abi.h](src/firmware/include/plc_runtime_abi.h)): confirm boolean point descriptors and write-queue semantics remain sufficient for staged `STORE_BOOL` commits.
+- Execution engine (`src/plc/wb_plc.sv` or the firmware validation executor): add
+  a typed operand stack, top-of-stack register handling, underflow/overflow
+  faults, `NOP`, literal pushes, and simple stack shuffles.
+- Validation: assemble the nominal program, load it as `objectFileV1`, run one
+  scan, and verify that the target output becomes `true` only after the commit
+  phase.
+- Validation: assemble the fault program, run one scan, verify the slot stops
+  in `FAULT_STACK_UNDERFLOW`, and confirm that the target output is left
+  unchanged because no commit is performed.
+- Validation: assemble the stack manipulation program, run one scan, verify
+  that the target output becomes `true`, and confirm that no fault is raised by
+  the `DUP`/`DROP` sequence.
+- Validation: assemble the false literal program, run one scan, and verify that
+  the target output becomes `false` without raising a fault.
+- Validation: assemble the read then write program, run one scan, and verify
+  that `LOAD_BOOL` plus `STORE_BOOL` reproduces the source input state at the
+  target output.
+- Validation: assemble the swap program, run one scan, and verify that the
+  committed output matches the swapped top-of-stack value without fault.
+
+Batching note for next work after Stage 1 validation:
+
+- Stage 1 can be treated as closed once the nominal, underflow, `DUP/DROP`,
+  `PUSH_FALSE`, `LOAD_BOOL`, and `SWAP` checks all pass on hardware.
+- Because HDL build time dominates board-side testing, the next implementation
+  batch should group the full boolean ALU slice together: `AND`, `OR`, `XOR`,
+  `NOT`, `EQ`, and `NE`.
+- Keep the next batch inside one datapath family before moving on to integer
+  stack work, so one synthesis cycle buys a meaningful amount of user-visible
+  instruction coverage.
+
+### Stage 2: Boolean Logic That Solves Real Wiring Problems
+
+Current branch status:
+
+- assembler/disassembler, firmware loader opcode validation, and `wb_plc`
+  execution support are now implemented for this batch
+- hardware validation passed for `AND`, `OR`, `XOR`, `NOT`, `EQ`, and `NE`
+
+Recommended implementation set:
+
 - `AND`
 - `OR`
 - `XOR`
 - `NOT`
 - `EQ`
 - `NE`
+
+Why this stage is high value:
+
+- it already covers interlocks, masks, and simple relay-like logic
+- the hardware cost stays low because everything is boolean or equality-based
+
+Validation program:
+
+```text
+PARAM POINT_ID start
+PARAM POINT_ID enable
+CONST POINT_ID y, demo.sim.output0
+
+LOAD_BOOL start
+LOAD_BOOL enable
+AND
+STORE_BOOL y
+HALT
+```
+
+Validation programs:
+
+AND / OR program, expected result: one scan completes without fault, `and_out`
+receives `start AND enable`, and `or_out` receives `start OR enable`.
+
+```text
+PARAM POINT_ID start
+PARAM POINT_ID enable
+CONST POINT_ID and_out, demo.sim.output0
+CONST POINT_ID or_out, demo.sim.output1
+
+LOAD_BOOL start
+LOAD_BOOL enable
+AND
+STORE_BOOL and_out
+
+LOAD_BOOL start
+LOAD_BOOL enable
+OR
+STORE_BOOL or_out
+HALT
+```
+
+XOR / NOT program, expected result: one scan completes without fault,
+`xor_out` receives `left XOR right`, and `not_out` receives `NOT left`.
+
+```text
+PARAM POINT_ID left
+PARAM POINT_ID right
+CONST POINT_ID xor_out, demo.sim.output0
+CONST POINT_ID not_out, demo.sim.output1
+
+LOAD_BOOL left
+LOAD_BOOL right
+XOR
+STORE_BOOL xor_out
+
+LOAD_BOOL left
+NOT
+STORE_BOOL not_out
+HALT
+```
+
+EQ / NE program, expected result: one scan completes without fault, `eq_out`
+goes true only when both inputs are equal, and `ne_out` goes true only when
+they differ.
+
+```text
+PARAM POINT_ID a
+PARAM POINT_ID b
+CONST POINT_ID eq_out, demo.sim.output0
+CONST POINT_ID ne_out, demo.sim.output1
+
+LOAD_BOOL a
+LOAD_BOOL b
+EQ
+STORE_BOOL eq_out
+
+LOAD_BOOL a
+LOAD_BOOL b
+NE
+STORE_BOOL ne_out
+HALT
+```
+
+Compact hardware validation matrix:
+
+Use the same four input combinations for the three programs above.
+
+| In0 | In1 | `AND` | `OR` | `XOR` | `NOT In0` | `EQ` | `NE` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `false` | `false` | `false` | `false` | `false` | `true` | `true` | `false` |
+| `false` | `true` | `false` | `true` | `true` | `true` | `false` | `true` |
+| `true` | `false` | `false` | `true` | `true` | `false` | `false` | `true` |
+| `true` | `true` | `true` | `true` | `false` | `false` | `true` | `false` |
+
+Suggested board-side procedure:
+
+- load the AND / OR program and verify both outputs across the four input combinations
+- load the XOR / NOT program and verify both outputs across the same four combinations
+- load the EQ / NE program and verify the two outputs remain complementary for all four combinations
+- if a result is wrong, capture `faultCode`, `faultInfo`, and the committed output states before changing inputs again
+
+Implementation checklist:
+
+- Desktop assembler (`tools/BigSisterNodeNet.Plc`): add mnemonic parsing and
+  opcode emission for `AND`, `OR`, `XOR`, `NOT`, `EQ`, `NE`; enforce zero
+  explicit operands for these operators.
+- Object file contract: document stack-only operand behavior for stage 2
+  operators so no hidden accumulator encoding survives in tooling.
+- Firmware loader (`PlcSlotLoaderV1`): extend opcode acceptance table; keep
+  equality restricted to same-type operands in the frozen core profile.
+- Execution engine (`src/plc/wb_plc.sv` or the firmware validation executor):
+  implement binary boolean operators and unary `NOT`; emit deterministic faults
+  on type mismatch or stack underflow.
+- Runtime status/fault reporting: assign stable slot fault codes for invalid
+  boolean ALU use so loader and runtime failures are distinguishable.
+- Validation: run the AND / OR program and verify the full truth table for both
+  outputs across all four input combinations.
+- Validation: run the XOR / NOT program and verify `XOR` matches the expected
+  two-input truth table while `NOT` inverts the source input.
+- Validation: run the EQ / NE program and verify `EQ` and `NE` produce
+  complementary outputs for both equal and unequal input states.
+
+### Stage 3: Integer State And Counters
+
+Current branch status:
+
+- assembler/disassembler, firmware loader opcode validation, and `wb_plc`
+  execution support are now implemented for `PUSH_I16`, `LOAD_I16`,
+  `STORE_I16`, `ADD`, and `SUB`
+- hardware validation is still pending for the Stage 3 integer stack batch
+
+Recommended implementation set:
+
+- `PUSH_I16 imm16`
+- `LOAD_I16 <symbol>`
+- `STORE_I16 <symbol>`
 - `ADD`
 - `SUB`
-- `INC`
-- `DEC`
+- `INC_INT <symbol>`
+- `DEC_INT <symbol>`
 
-Why this tier is still cheap:
+Why this stage follows immediately:
 
-- operations are boolean or integer-only
-- arithmetic can reuse one adder/subtractor datapath
-- stack ops are local register or small RAM moves
-- equality logic is straightforward
+- counters and accumulators are among the first useful PLC patterns
+- the datapath still fits a compact integer ALU
+- it validates typed stack behavior beyond booleans
 
-### Tier 2: Still Reasonable In HDL, But Needs Better ALU Control
+Validation program:
 
-These instructions remain practical without dedicated heavy hardware, but they
-need clearer signedness rules and more comparator paths.
+```text
+PARAM POINT_ID inputA
+PARAM POINT_ID inputB
+VAR INT total
 
-Recommended instructions:
+LOAD_I16 inputA
+LOAD_I16 inputB
+ADD
+STORE_I16 total
+HALT
+```
+
+Note:
+
+- this example is valid only when the upload/build path supplies concrete point
+  bindings for `inputA` and `inputB`
+- in the current UI/toolchain, `PARAM POINT_ID` declarations are not free
+  placeholders; each one must be bound to a full point path before object-file
+  build
+- for a direct paste-and-compile test without parameter binding, replace the
+  two `PARAM POINT_ID` lines with concrete `CONST POINT_ID` declarations
+
+Self-contained validation program for environments with no external `INT`
+points:
+
+```text
+VAR INT total
+
+PUSH_I16 7
+PUSH_I16 5
+ADD
+STORE_I16 total
+
+LOAD_I16 total
+PUSH_I16 2
+SUB
+STORE_I16 total
+HALT
+```
+
+Expected result:
+
+- the first arithmetic sequence stores `12` into `total`
+- the second sequence reloads `total`, subtracts `2`, and stores `10`
+- this one program exercises `PUSH_I16`, `ADD`, `STORE_I16`, `LOAD_I16`, and
+  `SUB` without requiring any external mapped `INT` point
+
+Implementation checklist:
+
+- Desktop assembler (`tools/BigSisterNodeNet.Plc`): add `PUSH_I16`, `LOAD_I16`,
+  `STORE_I16`, `ADD`, and `SUB`; preserve existing `INC_INT` and `DEC_INT`
+  source syntax as direct point-targeted instructions.
+- Object file contract: freeze `imm16` encoding, signed interpretation, and the
+  exact encoding difference between stack ALU instructions and direct memory
+  update instructions.
+- Firmware loader (`PlcSlotLoaderV1`): validate `INT` point operands for
+  `LOAD_I16`, `STORE_I16`, `INC_INT`, and `DEC_INT`; reject `BOOL`, `ENUM`, or
+  `UINT16` bindings in the frozen core profile.
+- Shared ABI contract ([src/firmware/include/plc_runtime_abi.h](src/firmware/include/plc_runtime_abi.h)): confirm `Int16` load/store paths and queue publication are already sufficient for integer commits.
+- Execution engine (`src/plc/wb_plc.sv` or the firmware validation executor):
+  add typed integer stack entries, signed add/subtract behavior, and clear
+  overflow policy; keep `INC_INT` and `DEC_INT` as specialized read-modify-write
+  helpers if that stays cheaper than lowering them to `LOAD/ADD/STORE`.
+- Firmware-side runtime application ([src/firmware/lib/plc/PlcCore.cpp](src/firmware/lib/plc/PlcCore.cpp)): reuse `readRuntimeInt16()` and `commitRuntimeInt16()` as the behavioral oracle for bring-up validation.
+- Validation: run the sample addition program, then a second program using
+  `INC_INT` on a slot-local `VAR INT counter`, and verify the committed value
+  increments by exactly one per scan.
+
+### Stage 4: Ordered Compare And Selection Family
+
+Recommended implementation set:
 
 - `LT`
 - `LE`
 - `GT`
 - `GE`
-- `NEG`
-- `ABS`
 - `MIN`
 - `MAX`
 - `CLAMP`
 - `SEL`
-- `LOAD_ENUM <symbol>`
-- `STORE_ENUM <symbol>`
-- `SHL`
-- `SHR`
-- `SAR`
-- `TEST_BIT imm8`
-- `SET_BIT imm8`
-- `CLEAR_BIT imm8`
 
-Why this tier is moderate:
+Why this stage is worth doing before control flow:
 
-- signed and unsigned compare behavior must be specified exactly
-- shifts need either a barrel shifter or iterative multi-cycle logic
-- `MIN`/`MAX`/`CLAMP` combine compare plus select datapaths
+- threshold alarms and bounded arithmetic are immediately useful
+- compares unlock many real PLC decisions without yet needing branches
+- hardware cost is still moderate compared with timers or float
 
-### Tier 3: Control Flow, Very Valuable But More Structural In HDL
+Validation program:
 
-These instructions greatly improve language expressiveness, but they force the
-HDL engine to own `pc` updates, relative offsets, and branch conditions.
+```text
+PARAM POINT_ID pv
+CONST POINT_ID alarm, demo.sim.output1
 
-Recommended instructions:
+LOAD_I16 pv
+PUSH_I16 80
+GE
+STORE_BOOL alarm
+HALT
+```
+
+Implementation checklist:
+
+- Desktop assembler (`tools/BigSisterNodeNet.Plc`): add `LT`, `LE`, `GT`, `GE`,
+  `MIN`, `MAX`, `CLAMP`, and `SEL`; define mnemonic signatures now even if a
+  subset lands first.
+- Object file contract: freeze signedness rules for ordered comparisons and the
+  stack signature of `SEL` before HDL work starts.
+- Firmware loader (`PlcSlotLoaderV1`): enforce that ordered compare operands use
+  the same supported scalar type inside the active execution profile.
+- Execution engine (`src/plc/wb_plc.sv` or the firmware validation executor):
+  add comparator results as boolean stack values; implement `MIN/MAX/CLAMP` only
+  after compare behavior is proven stable.
+- Validation sequence: first validate `GE` with the sample threshold program,
+  then add dedicated micro-tests for `LT` boundary cases and `CLAMP` saturation
+  behavior.
+
+### Stage 5: Control Flow
+
+Recommended implementation set:
 
 - `JMP rel16`
 - `JZ rel16`
 - `JNZ rel16`
-- `JG rel16`
-- `JGE rel16`
-- `JL rel16`
-- `JLE rel16`
-- `CALL rel16`
-- `RET`
+- optionally `CALL rel16` and `RET` in a separate follow-up slice
+
+Why this stage is later:
+
+- it changes the VM structure, not just the ALU surface
+- it requires stable branch encoding, offset rules, and fault handling
+- many first validation programs can already run without it
+
+Validation program:
+
+```text
+PARAM POINT_ID enable
+CONST POINT_ID y, demo.sim.output0
+
+LOAD_BOOL enable
+JZ disabled
+PUSH_TRUE
+STORE_BOOL y
+HALT
+
+disabled:
+PUSH_FALSE
+STORE_BOOL y
+HALT
+```
+
+Implementation checklist:
+
+- Desktop assembler (`tools/BigSisterNodeNet.Plc`): add label parsing, relative
+  offset resolution, and relocation-independent branch encoding for `JMP`, `JZ`,
+  and `JNZ`.
+- Object file contract: freeze branch offset origin, signed range, and whether
+  offsets are byte-based or instruction-based.
+- Firmware loader (`PlcSlotLoaderV1`): validate branch targets remain inside the
+  code section after linking and reject malformed offsets before slot start.
+- Execution engine (`src/plc/wb_plc.sv` or the firmware validation executor):
+  update `pc` from relative offsets, pop branch conditions for `JZ/JNZ`, and add
+  deterministic faults for invalid target addresses.
+- Runtime diagnostics: expose branch-fault visibility in slot state so a bad
+  object file is distinguishable from a point-type failure.
+- Validation: run the sample program, verify both taken and non-taken paths, and
+  add one negative program with an out-of-range target that must fault before
+  partial outputs commit.
+
+### Stage 6: Edge Triggers
+
+Recommended implementation set:
+
+- `R_TRIG <symbol>`
+- `F_TRIG <symbol>`
+- keep timers for the next stage
+
+Execution contract:
+
+- the operand must resolve to a readable `BOOL` point
+- the instruction reads the point directly and pushes one `BOOL` result on the stack
+- `R_TRIG` emits `true` for one scan on a `false -> true` transition
+- `F_TRIG` emits `true` for one scan on a `true -> false` transition
+- the first scan after a slot load only initializes the remembered state and must not emit an edge pulse
+
+Validation program: rising edge pulse
+
+```text
+PARAM POINT_ID enable
+CONST POINT_ID pulse, demo.sim.output0
+
+R_TRIG enable
+STORE_BOOL pulse
+HALT
+```
+
+Validation sequence:
+
+- load the program while `enable=false`: output must stay `false`
+- switch `enable` to `true`: exactly one scan must write `pulse=true`
+- keep `enable=true`: next scans must return `pulse=false`
+- toggle back to `false` then to `true`: one new pulse must be emitted
+
+Validation program: falling edge pulse
+
+```text
+PARAM POINT_ID enable
+CONST POINT_ID pulse, demo.sim.output1
+
+F_TRIG enable
+STORE_BOOL pulse
+HALT
+```
+
+Validation sequence:
+
+- load the program while `enable=true`: output must stay `false` on the first scan
+- switch `enable` to `false`: exactly one scan must write `pulse=true`
+- keep `enable=false`: next scans must return `pulse=false`
+
+Validation program: count rising edges
+
+```text
+PARAM POINT_ID enable
+VAR PUBLIC INT edgeCount
+
+R_TRIG enable
+JZ done
+INC_INT edgeCount
+
+done:
+HALT
+```
+
+Expected behavior:
+
+- `edgeCount` increments once per low-to-high transition of `enable`
+- repeated scans with stable `enable=true` must not increment again
+- this program is useful to catch accidental level-sensitive behavior
+
+Fault program: wrong operand type
+
+```text
+PARAM POINT_ID threshold
+CONST POINT_ID pulse, demo.sim.output0
+
+R_TRIG threshold
+STORE_BOOL pulse
+HALT
+```
+
+Validation notes:
+
+- bind `threshold` to an `INT` point
+- the loader may accept the relocation, but execution must fault with a type mismatch before any output write commits
+
+### Stage 7: Timers, Starting With TON
+
+Recommended implementation set:
+
+- `TON_START timer_idx16, preset_ms32`
+- `TON_DONE timer_idx16`
+- `TON_RESET timer_idx16`
+- defer `TOF`, `TP`, and elapsed/remaining introspection until this minimal TON contract is stable
+
+Why TON first:
+
+- it is the smallest useful timer block for real I/O behavior
+- it reuses the per-slot timer area that already exists in the slot layout
+- it avoids reopening the ISA shape too broadly while still forcing timer state semantics to become explicit
+
+Execution contract:
+
+- `TON_START` pops one `BOOL` enable value from the stack
+- if enable is `false`, the addressed timer instance is cleared and `done=false`
+- if enable is `true`, the timer starts or continues running toward `preset_ms32`
+- once elapsed time reaches the preset, `done` stays `true` while enable remains `true`
+- `TON_DONE` pushes the current `BOOL` done state for the addressed timer
+- `TON_RESET` clears the addressed timer unconditionally
+- timer state is owned by the slot and must be reset on slot load so a freshly loaded program never inherits old timing state
+- `timer_idx16` must remain below the slot timer count or execution must fault deterministically
+
+Minimal timer state per instance:
+
+- running flag
+- done flag
+- start timestamp in milliseconds
+- preset in milliseconds
+
+Validation program: delayed output
+
+```text
+PARAM POINT_ID enable
+CONST POINT_ID y, demo.sim.output0
+
+LOAD_BOOL enable
+TON_START 0, 1000
+TON_DONE 0
+STORE_BOOL y
+HALT
+```
+
+Expected behavior:
+
+- with `enable=false`, `y` stays `false`
+- when `enable` becomes `true`, `y` stays `false` for about 1000 ms
+- after the delay expires, `y` becomes `true`
+- when `enable` returns to `false`, `y` returns to `false` and the timer resets
+
+Validation program: delayed latch with public observation
+
+```text
+PARAM POINT_ID enable
+VAR PUBLIC BOOL tonDone
+
+LOAD_BOOL enable
+TON_START 0, 750
+TON_DONE 0
+STORE_BOOL tonDone
+HALT
+```
+
+Expected behavior:
+
+- `tonDone` is easy to observe in the UI without relying on a short external pulse
+- repeated scans before 750 ms must keep `tonDone=false`
+- once the delay expires with `enable=true`, `tonDone=true`
+- dropping `enable=false` clears `tonDone` again
+
+Validation program: reset path
+
+```text
+PARAM POINT_ID enable
+PARAM POINT_ID reset
+VAR PUBLIC BOOL tonDone
+
+LOAD_BOOL enable
+TON_START 0, 1500
+
+LOAD_BOOL reset
+JZ publish
+TON_RESET 0
+
+publish:
+TON_DONE 0
+STORE_BOOL tonDone
+HALT
+```
+
+Expected behavior:
+
+- `enable=true` starts the timer
+- `reset=true` clears it immediately, even if the preset was almost reached
+- after reset, `TON_DONE 0` must read `false` until a new full timing interval completes
+
+Fault program: timer index out of range
+
+```text
+PUSH_TRUE
+TON_START 99, 1000
+HALT
+```
+
+Validation notes:
+
+- if the slot exposes fewer than 100 timers, execution must fault deterministically
+- the program must not corrupt neighboring timer state or commit partial outputs before faulting
+
+### Stage 8: Timer Introspection, TOF, And TP
+
+Recommended implementation set:
+
+- `TON_ELAPSED timer_idx16`
+- `TON_REMAINING timer_idx16`
+- `TOF_START`, `TOF_DONE`, `TOF_RESET`
+- `TP_START`, `TP_DONE`, `TP_RESET`
+
+Execution contract:
+
+- `TON_ELAPSED` pushes the current elapsed time in milliseconds for the addressed `TON` instance
+- `TON_REMAINING` pushes the current remaining time in milliseconds for the addressed `TON` instance
+- both introspection values use the current `INT16` stack type, so values are saturated to `32767 ms` until a wider integer stack type exists
+- `TOF_START` pops one `BOOL` enable value; while enable is `true`, `TOF_DONE` is immediately `true`; when enable falls to `false`, the timer keeps `done=true` until the preset expires
+- `TP_START` pops one `BOOL` enable value and emits a pulse on a low-to-high transition; the pulse remains active for the preset duration and does not retrigger until the input returns low
+- `TOF_DONE`, `TP_DONE`, and all `*_RESET` mnemonics use the same timer index width and fault behavior as the Stage 7 `TON` instructions
+
+Minimal per-timer state:
+
+- anchor timestamp in milliseconds
+- preset in milliseconds
+- running/done/input-latched flags
+- timer mode (`TON`, `TOF`, or `TP`)
+
+Validation program: observe TON elapsed and remaining
+
+```text
+PARAM POINT_ID enable
+VAR PUBLIC INT tonElapsed
+VAR PUBLIC INT tonRemaining
+VAR PUBLIC BOOL tonDone
+
+LOAD_BOOL enable
+TON_START 0, 5000
+
+TON_ELAPSED 0
+STORE_I16 tonElapsed
+
+TON_REMAINING 0
+STORE_I16 tonRemaining
+
+TON_DONE 0
+STORE_BOOL tonDone
+HALT
+```
+
+Expected behavior:
+
+- `tonElapsed` rises from `0` toward `5000`
+- `tonRemaining` falls from `5000` toward `0`
+- once done, `tonElapsed` stays clamped at the preset and `tonRemaining` stays `0`
+
+Validation program: visible TOF output hold
+
+```text
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare0.input1
+CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare0.output4
+
+LOAD_BOOL in1
+TOF_START 0, 3000
+TOF_DONE 0
+STORE_BOOL out4
+HALT
+```
+
+Expected behavior:
+
+- `out4` turns on immediately when `input1=true`
+- when `input1` returns to `false`, `out4` stays on for about `3000 ms` before turning off
+
+Validation program: visible TP pulse
+
+```text
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare0.input1
+CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare0.output4
+VAR PUBLIC BOOL tpDone
+
+LOAD_BOOL in1
+TP_START 0, 1500
+
+TP_DONE 0
+STORE_BOOL tpDone
+
+LOAD_BOOL tpDone
+STORE_BOOL out4
+HALT
+```
+
+Expected behavior:
+
+- each rising edge of `input1` produces one pulse of about `1500 ms`
+- keeping `input1=true` must not retrigger the pulse continuously
+- returning `input1=false` re-arms the pulse for the next rising edge
+
+### ISA Status After Stage 8
+
+The currently implemented PLC VM subset is now large enough to build and test
+real slot programs directly on hardware.
+
+Implemented instruction families:
+
+- foundation and stack: `NOP`, `HALT`, `PUSH_TRUE`, `PUSH_FALSE`, `DUP`, `DROP`, `SWAP`
+- boolean logic: `AND`, `OR`, `XOR`, `NOT`, `EQ`, `NE`
+- boolean point access: `LOAD_BOOL`, `STORE_BOOL`
+- integer point and literal access: `PUSH_I16`, `LOAD_I16`, `STORE_I16`
+- integer arithmetic and selection: `ADD`, `SUB`, `LT`, `LE`, `GT`, `GE`, `MIN`, `MAX`, `CLAMP`, `SEL`
+- integer point mutation: `INC_INT`, `DEC_INT`
+- control flow: `JMP`, `JZ`, `JNZ`
+- event/stateful primitives: `R_TRIG`, `F_TRIG`, `TON_START`, `TON_DONE`, `TON_RESET`, `TON_ELAPSED`, `TON_REMAINING`, `TOF_START`, `TOF_DONE`, `TOF_RESET`, `TP_START`, `TP_DONE`, `TP_RESET`
+
+Implementation status summary:
+
+- stages 1 through 8 are now implemented across HDL, loader validation, assembler, and disassembler
+- edge state is stored in per-slot scratch SDRAM instead of FPGA fabric state arrays
+- timer state is stored in the existing per-slot timer region
+- PLC upload/commit flow has already needed runtime hardening, including non-blocking NodeNet TX handling and deferred auto-load after `plcUploadCommitRes`
+
+Current practical scope:
+
+- this subset is already sufficient for direct I/O mirroring, latching, edge-triggered behavior, conditional branching, delayed actions, and simple blink/state machines
+- the VM is no longer blocked on ISA breadth for first industrial tests; the next work should favor the highest-value missing stateful primitives and continued robustness work
+
+Known work that still remains around the current subset:
+
+- keep reinforcing upload, load, and runtime fault paths whenever field tests expose a weak spot
+- keep timer behavior under observation on hardware, especially around long-running enable/reset cycles and scan-to-scan stability
+- keep validating that stateful features stay in SDRAM-owned slot memory rather than drifting back into LUT/FF-heavy implementations
+
+### Recommended Next Stages
+
+The next stages should add user value without reopening large architectural surfaces too early.
+
+### Stage 9: IEC-Style Counters
+
+Recommended implementation set:
+
+- `CTU_COUNT counter_idx16, preset_i16`
+- `CTU_DONE counter_idx16`
+- `CTU_VALUE counter_idx16`
+- `CTU_RESET counter_idx16`
+- `CTD_COUNT counter_idx16, preset_i16`
+- `CTD_DONE counter_idx16`
+- `CTD_VALUE counter_idx16`
+- `CTD_RESET counter_idx16`
+- defer `CTUD` until single-direction counters are stable on hardware
+
+Why this stage is next:
+
+- counters are the next most useful stateful IEC primitive after timers and edge detection
+- they can reuse the same architectural pattern: explicit slot-owned state with narrow HDL primitives
+- they unlock many practical machine use cases without requiring floats or deep control flow
+
+Execution contract:
+
+- `CTU_COUNT` pops one `BOOL` count-enable value from the stack and increments the addressed counter once on each low-to-high transition seen by that counter instance
+- `CTD_COUNT` pops one `BOOL` count-enable value from the stack and decrements the addressed counter once on each low-to-high transition seen by that counter instance
+- `preset_i16` is written into the counter instance whenever `*_COUNT` executes so `*_DONE` and `*_VALUE` always observe the latest configured preset for that counter
+- `CTU_DONE` pushes `true` when `current_value >= preset`, otherwise `false`
+- `CTD_DONE` pushes `true` when `current_value <= 0`, otherwise `false`
+- `CTU_VALUE` and `CTD_VALUE` push the current counter value as `INT16`
+- `CTU_RESET` and `CTD_RESET` clear the counter value and latched input state; `CTU_RESET` returns the value to `0`, and `CTD_RESET` returns the value to the current stored preset
+- all counter instructions use the same `timer_idx16`-style addressing discipline as the timer family and must fault on out-of-range instance indices
+- current Stage 9 implementation reuses the existing per-slot timer instance region as a shared state pool for both timers and counters, so a slot must not reuse the same instance index for both families
+- values use the current `INT16` stack type, so saturation or clamping must be defined explicitly rather than relying on silent wraparound
+
+Minimal per-counter state:
+
+- current value as signed `INT16`
+- preset as signed `INT16`
+- last input high flag for edge qualification
+- done flag if that stays cheaper than recomputing from value and preset
+- counter mode (`CTU` or `CTD`) if a shared storage layout is used
+
+Validation program: count rising edges into a public value
+
+```text
+CONST POINT_ID in1, gb9fao5yk4f.modbus0.waveshare0.input1
+VAR PUBLIC INT pulseCount
+VAR PUBLIC BOOL pulseDone
+
+LOAD_BOOL in1
+CTU_COUNT 0, 3
+
+CTU_VALUE 0
+STORE_I16 pulseCount
+
+CTU_DONE 0
+STORE_BOOL pulseDone
+HALT
+```
+
+Expected behavior:
+
+- `pulseCount` increments only once per low-to-high transition of `input1`
+- keeping `input1=true` across many scans must not keep incrementing the count
+- `pulseDone` becomes `true` on the third rising edge and stays `true` until reset
+
+Validation program: drive an output every third pulse
+
+```text
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare0.input1
+CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare0.output4
+
+LOAD_BOOL in1
+CTU_COUNT 0, 3
+
+CTU_DONE 0
+STORE_BOOL out4
+HALT
+```
+
+Expected behavior:
+
+- `output4` stays `false` for the first two rising edges
+- `output4` becomes `true` on the third rising edge and remains `true` until reset
+- this gives a simple machine-cycle threshold test without extra arithmetic
+
+Validation program: count down to zero
+
+```text
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare0.input1
+CONST POINT_ID out5, gb9fao5yk4f.modbus0.waveshare0.output5
+VAR PUBLIC INT remaining
+
+LOAD_BOOL in1
+CTD_COUNT 1, 5
+
+CTD_VALUE 1
+STORE_I16 remaining
+
+CTD_DONE 1
+STORE_BOOL out5
+HALT
+```
+
+Expected behavior:
+
+- `remaining` moves from the chosen initial value toward `0` one event at a time
+- `output5` becomes `true` only when the counter reaches zero or below
+- repeated scans with `input1=true` held high must not consume multiple counts
+
+Validation focus:
+
+- count only once per intended event, whether edge qualification lives inside the counter opcode or is composed with `R_TRIG`
+- enforce reset semantics before optimizing convenience features
+- define clamping behavior for underflow and overflow before enabling wide field tests
+- avoid hidden coupling between timer state and counter state layouts
+
+### Stage 10: Targeted Runtime And ISA Hardening
+
+Recommended implementation set:
+
+- finish any missing fault-path determinism found during Stage 8 and 9 field tests
+- add more hardware-facing validation programs to this spec for upload, reset, restart, and fault recovery
+- only then consider widening arithmetic or diagnostics
+
+Why this is its own stage:
+
+- the VM is now useful enough that most remaining risk comes from lifecycle behavior, not missing mnemonics
+- the recent field failures were caused by load/reload/runtime interactions rather than by boolean or arithmetic semantics
+- once a slot owns state across scans, every reset, fault, and reload path becomes part of the ISA contract in practice
+
+Stage 10 scope:
+
+- keep the Stage 9 instruction surface stable
+- tighten runtime behavior around upload, deferred auto-load, restart, and fault stop/recovery
+- make failure behavior as testable and repeatable as normal execution behavior
+
+Hardening contract:
+
+- the same malformed or unsupported program must produce the same fault code on repeated runs
+- a fault in one slot must stop that slot cleanly without corrupting other slots or shared runtime tables
+- partial execution of a stateful instruction must not leave a slot in an ambiguous half-updated state after restart or reload
+- after deferred auto-load, the slot must return to the same paused/running state it had before the upload began
+- clearing a fault or loading a replacement program must not require a power cycle to recover normal execution
+- runtime-owned SDRAM structures must remain self-consistent even when a slot faults during stateful timer or counter operations
+
+Primary fault classes to lock down:
+
+- invalid opcode or truncated instruction stream
+- stack underflow and stack overflow
+- type mismatch on stack or point access
+- point index out of range
+- timer or counter instance index out of range
+- runtime write rejection on non-writable points
+- reload while the slot previously owned stateful timer/counter instances
+
+Implementation focus:
+
+- prefer deterministic stop-and-report over attempting clever in-place recovery during the same scan
+- preserve slot isolation even if that means a slightly more conservative fault path
+- treat loader validation and runtime fault handling as one surface: reject what can be rejected before execution, fault cleanly for what must be detected at execution time
+- document every intentional simplification, such as shared timer/counter instance pools, so test programs can exercise those boundaries explicitly
+
+Why this stage follows timers:
+
+- the current system has already shown that practical robustness work appears exactly when real hardware programs become non-trivial
+- hardening after each feature wave is cheaper than trying to debug several new stateful families at once
+
+Validation matrix:
+
+- upload a valid replacement over a previously running slot and verify the slot resumes in the same running state
+- upload a valid replacement over a previously stopped slot and verify the slot remains stopped after auto-load
+- trigger a deterministic runtime fault and verify the same fault code and stop behavior over repeated runs
+- recover from that fault by loading a valid program and verify normal execution resumes without board reset
+- verify that timer/counter state from an old program does not leak into a newly loaded program using different indices
+- verify that an out-of-range timer/counter reference faults the slot and leaves other slots running
+
+Validation program: deterministic counter index fault
+
+```text
+CONST POINT_ID in1, gb9fao5yk4f.modbus0.waveshare0.input1
+
+LOAD_BOOL in1
+CTU_COUNT 1024, 3
+HALT
+```
+
+Expected behavior:
+
+- execution must stop with a deterministic point-or-instance out-of-range fault
+- repeating the same load/run sequence must produce the same fault code and the same slot stop state
+- other slots must continue to scan normally
+
+Validation program: fault recovery after replacement upload
+
+```text
+CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare0.output4
+
+PUSH_TRUE
+STORE_BOOL out4
+HALT
+```
+
+Expected behavior:
+
+- after a deliberate Stage 10 fault test, loading this trivial replacement must restore normal execution without a board reboot
+- `output4` must become `true`
+- the previous fault code should be clearable by the normal runtime recovery path rather than only by power cycling
+
+Validation program: reset stability across repeated scans
+
+```text
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare0.input1
+CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare0.output4
+VAR PUBLIC INT count
+
+LOAD_BOOL in1
+CTU_COUNT 0, 2
+
+LOAD_BOOL in1
+JZ no_reset
+CTU_RESET 0
+no_reset:
+
+CTU_VALUE 0
+STORE_I16 count
+
+CTU_DONE 0
+STORE_BOOL out4
+HALT
+```
+
+Expected behavior:
+
+- with `input1=false`, the counter remains stable scan to scan
+- with `input1=true`, the reset path behaves deterministically and does not leave the counter in a partially updated state
+- repeated toggling must not accumulate ghost counts or require a restart to restore correct behavior
+
+Validation program: reload boundary between timer and counter indices
+
+```text
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare0.input1
+CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare0.output4
+
+LOAD_BOOL in1
+TON_START 0, 1000
+TON_DONE 0
+STORE_BOOL out4
+HALT
+```
+
+Then replace it with:
+
+```text
+CONST POINT_ID in1,  gb9fao5yk4f.modbus0.waveshare0.input1
+CONST POINT_ID out4, gb9fao5yk4f.modbus0.waveshare0.output4
+
+LOAD_BOOL in1
+CTU_COUNT 1, 2
+CTU_DONE 1
+STORE_BOOL out4
+HALT
+```
+
+Expected behavior:
+
+- the second program must start from a clean state for counter index `1`
+- the timer state previously used by index `0` must not affect the counter behavior at index `1`
+- replacing a stateful program with another stateful program must remain stable across repeated uploads
+
+Stage 10 completion criteria:
+
+- at least one negative test exists for each major VM fault class already reachable from the current ISA
+- upload, auto-load, restart, and fault recovery have documented validation programs in this spec
+- the user can recover from an intentionally faulting program by loading a valid replacement without needing an FPGA reflash or power cycle
+- all known lifecycle-related simplifications and limits are written down next to the validation guidance that exercises them
+
+Candidate follow-on after Stage 10:
+
+- wider diagnostics such as `TRACE` or `ASSERT`
+- heavier arithmetic such as `MUL`, `DIV`, and modulo
+- float support if a concrete process-control need justifies the cost
+
+### Deferred Beyond Step 2 Core
+
+Keep these out of the frozen core unless there is a direct hardware need:
+
+- timer primitives beyond the first minimal `TON` slice, such as `TOF_*`, `TP_*`, `TON_ELAPSED`, and `TON_REMAINING`
+- multiply, divide, modulo, and wide shifts
+- float load/store, compare, arithmetic, and conversion
+
+Why they are deferred:
+
+- timers need explicit per-slot state and time semantics
+- multiply and divide expand the datapath cost for limited early value
+- float support is valuable, but it is the heaviest execution family to verify
 - `LOOP rel16`
 
 Why this tier is more structural:
@@ -1190,7 +2435,7 @@ For the next toolchain step, keep source conservative:
 
 ```text
 PARAM POINT_ID input
-CONST POINT_ID y, gb9fao5yk4f.modbus0.waveshare8ch.output4
+CONST POINT_ID y, gb9fao5yk4f.modbus0.waveshare0.output4
 VAR BOOL latch
 
 LOAD_BOOL input

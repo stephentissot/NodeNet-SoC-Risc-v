@@ -17,6 +17,10 @@ enum PlcObjectSymbolKindV1 : uint8_t {
     kPlcSymbolSlotVar = 2u,
 };
 
+enum PlcObjectSymbolFlagsV1 : uint8_t {
+    kPlcSymbolFlagSlotVarPrivate = 1u << 0,
+};
+
 enum PlcObjectRelocationKindV1 : uint8_t {
     kPlcRelocationPointIndexU16Le = 0u,
     kPlcRelocationPointIndexU32Le = 1u,
@@ -232,6 +236,7 @@ public:
              relocation_index < object_image.relocation_count;
              ++relocation_index) {
             const PlcObjectRelocationRecordV1& relocation = object_image.relocations[relocation_index];
+            const PlcObjectSymbolRecordV1& source_symbol = object_image.symbols[relocation.symbol_index];
             result.failing_relocation_index = relocation_index;
 
             if (relocation.symbol_index >= object_image.symbol_count) {
@@ -263,7 +268,10 @@ public:
             request.expected_type = static_cast<PointValueType>(symbol.expected_type);
             request.access = static_cast<PlcRuntimeLinkAccessV1>(symbol.access);
 
-            const PlcRuntimePublisherV1::LinkResult link_result = publisher.resolveLinkRequest(catalog, request);
+            const PlcRuntimePublisherV1::LinkResult link_result =
+                source_symbol.symbol_kind == kPlcSymbolSlotVar
+                    ? resolveSlotVariableLink(publisher, catalog, symbol)
+                    : publisher.resolveLinkRequest(catalog, request);
             result.resolve_status = link_result.status;
             if (link_result.status != kPlcRuntimeLinkResolved) {
                 result.status = kPlcObjectLinkResolveFailed;
@@ -283,6 +291,34 @@ public:
     }
 
 private:
+    static PlcRuntimePublisherV1::LinkResult resolveSlotVariableLink(const PlcRuntimePublisherV1& publisher,
+                                                                     const PointCatalog& catalog,
+                                                                     const PlcObjectSymbolRecordV1& symbol)
+    {
+        const size_t catalog_index = catalog.findIndex(symbol.point_id);
+        if (catalog_index >= catalog.size()) {
+            return {kPlcRuntimeLinkNotFound, PlcRuntimePublisherV1::kInvalidPointIndex, kPlcRuntimeTypeInvalid, 0u};
+        }
+
+        const PointDefinition& definition = catalog.entries()[catalog_index];
+        if (static_cast<uint8_t>(definition.value_type) != symbol.expected_type) {
+            return {kPlcRuntimeLinkTypeMismatch,
+                    PlcRuntimePublisherV1::kInvalidPointIndex,
+                    kPlcRuntimeTypeInvalid,
+                    0u};
+        }
+
+        const uint16_t runtime_index = publisher.runtimeIndexForCatalogIndex(catalog_index);
+        if (runtime_index == PlcRuntimePublisherV1::kInvalidPointIndex) {
+            return {kPlcRuntimeLinkUnsupportedPointType,
+                    PlcRuntimePublisherV1::kInvalidPointIndex,
+                    kPlcRuntimeTypeInvalid,
+                    0u};
+        }
+
+        return {kPlcRuntimeLinkResolved, runtime_index, kPlcRuntimeTypeInvalid, 0u};
+    }
+
     static bool resolveSymbolRecord(const PointCatalog& catalog,
                                     uint16_t slot_id,
                                     const PlcObjectSymbolRecordV1& source,

@@ -89,6 +89,7 @@ namespace BigSisterNodeNet.Plc
                 {
                     Name = ReadFixedAscii(objectFileBytes, baseOffset, PlcObjectFileBuilder.SymbolNameSize),
                     Kind = (PlcObjectSymbolKind)objectFileBytes[baseOffset + PlcObjectFileBuilder.SymbolNameSize],
+                    Flags = (PlcAssemblySymbolFlags)objectFileBytes[baseOffset + PlcObjectFileBuilder.SymbolNameSize + 1],
                     PointPath = BuildPointPath(
                         ReadFixedAscii(objectFileBytes, baseOffset + 18, PlcObjectFileBuilder.DeviceIdSize),
                         ReadFixedAscii(objectFileBytes, baseOffset + 34, PlcObjectFileBuilder.FeatureSize),
@@ -122,6 +123,7 @@ namespace BigSisterNodeNet.Plc
                 if (symbol.Kind == PlcObjectSymbolKind.SlotVar)
                 {
                     builder.Append("VAR ")
+                           .Append(FormatSlotVariableVisibility(symbol.Flags))
                            .Append(FormatValueType(symbol.ExpectedType))
                            .Append(' ')
                            .Append(symbol.Name)
@@ -176,13 +178,258 @@ namespace BigSisterNodeNet.Plc
                 var opcode = codeBytes[pc];
                 switch (opcode)
                 {
+                    case PlcMachineCodeAssembler.NopOpcode:
+                        builder.AppendLine("NOP");
+                        pc += 1;
+                        break;
+
                     case PlcMachineCodeAssembler.HaltOpcode:
                         builder.AppendLine("HALT");
                         pc += 1;
                         break;
 
+                    case PlcMachineCodeAssembler.PushTrueOpcode:
+                        builder.AppendLine("PUSH_TRUE");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.PushFalseOpcode:
+                        builder.AppendLine("PUSH_FALSE");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.DupOpcode:
+                        builder.AppendLine("DUP");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.DropOpcode:
+                        builder.AppendLine("DROP");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.SwapOpcode:
+                        builder.AppendLine("SWAP");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.AndOpcode:
+                        builder.AppendLine("AND");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.OrOpcode:
+                        builder.AppendLine("OR");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.XorOpcode:
+                        builder.AppendLine("XOR");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.NotOpcode:
+                        builder.AppendLine("NOT");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.EqOpcode:
+                        builder.AppendLine("EQ");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.NeOpcode:
+                        builder.AppendLine("NE");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.AddOpcode:
+                        builder.AppendLine("ADD");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.SubOpcode:
+                        builder.AppendLine("SUB");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.LessThanOpcode:
+                        builder.AppendLine("LT");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.LessOrEqualOpcode:
+                        builder.AppendLine("LE");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.GreaterThanOpcode:
+                        builder.AppendLine("GT");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.GreaterOrEqualOpcode:
+                        builder.AppendLine("GE");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.MinOpcode:
+                        builder.AppendLine("MIN");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.MaxOpcode:
+                        builder.AppendLine("MAX");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.ClampOpcode:
+                        builder.AppendLine("CLAMP");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.SelectOpcode:
+                        builder.AppendLine("SEL");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.JumpOpcode:
+                        builder.Append("JMP ")
+                               .Append(FormatBranchOperand(codeBytes, pc + 1))
+                               .AppendLine();
+                        pc += 3;
+                        break;
+
+                    case PlcMachineCodeAssembler.JumpIfZeroOpcode:
+                        builder.Append("JZ ")
+                               .Append(FormatBranchOperand(codeBytes, pc + 1))
+                               .AppendLine();
+                        pc += 3;
+                        break;
+
+                    case PlcMachineCodeAssembler.JumpIfNotZeroOpcode:
+                        builder.Append("JNZ ")
+                               .Append(FormatBranchOperand(codeBytes, pc + 1))
+                               .AppendLine();
+                        pc += 3;
+                        break;
+
+                    case PlcMachineCodeAssembler.RisingEdgeTriggerOpcode:
+                    case PlcMachineCodeAssembler.FallingEdgeTriggerOpcode:
+                        if ((pc + 2) >= codeBytes.Length)
+                        {
+                            throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
+                        }
+
+                        var edgeOperandOffset = (uint)(pc + 1);
+                        var edgeOperandValue = ReadUInt16(codeBytes, pc + 1);
+                        string edgeOperandText;
+                        if (relocationByOffset.TryGetValue(edgeOperandOffset, out var edgeRelocation))
+                        {
+                            edgeOperandText = operandFormatter != null
+                                ? operandFormatter(edgeRelocation.SymbolIndex)
+                                : $"sym{edgeRelocation.SymbolIndex}";
+                        }
+                        else
+                        {
+                            edgeOperandText = operandFormatter != null
+                                ? operandFormatter(edgeOperandValue)
+                                : edgeOperandValue.ToString();
+                        }
+
+                        builder.Append(FormatOpcode(opcode))
+                               .Append(' ')
+                               .AppendLine(edgeOperandText);
+                        pc += 3;
+                        break;
+
+                    case PlcMachineCodeAssembler.TimerOnStartOpcode:
+                        if ((pc + 6) >= codeBytes.Length)
+                        {
+                            throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
+                        }
+
+                        builder.Append("TON_START ")
+                               .Append(ReadUInt16(codeBytes, pc + 1))
+                               .Append(", ")
+                               .Append(ReadUInt32(codeBytes, pc + 3).ToString(System.Globalization.CultureInfo.InvariantCulture))
+                               .AppendLine();
+                        pc += 7;
+                        break;
+
+                    case PlcMachineCodeAssembler.TimerOnDoneOpcode:
+                    case PlcMachineCodeAssembler.TimerOnResetOpcode:
+                    case PlcMachineCodeAssembler.TimerOnElapsedOpcode:
+                    case PlcMachineCodeAssembler.TimerOnRemainingOpcode:
+                    case PlcMachineCodeAssembler.TimerOffDoneOpcode:
+                    case PlcMachineCodeAssembler.TimerOffResetOpcode:
+                    case PlcMachineCodeAssembler.TimerPulseDoneOpcode:
+                    case PlcMachineCodeAssembler.TimerPulseResetOpcode:
+                    case PlcMachineCodeAssembler.CounterUpDoneOpcode:
+                    case PlcMachineCodeAssembler.CounterUpValueOpcode:
+                    case PlcMachineCodeAssembler.CounterUpResetOpcode:
+                    case PlcMachineCodeAssembler.CounterDownDoneOpcode:
+                    case PlcMachineCodeAssembler.CounterDownValueOpcode:
+                    case PlcMachineCodeAssembler.CounterDownResetOpcode:
+                        if ((pc + 2) >= codeBytes.Length)
+                        {
+                            throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
+                        }
+
+                        builder.Append(FormatOpcode(opcode))
+                               .Append(' ')
+                               .Append(ReadUInt16(codeBytes, pc + 1).ToString(System.Globalization.CultureInfo.InvariantCulture))
+                               .AppendLine();
+                        pc += 3;
+                        break;
+
+                          case PlcMachineCodeAssembler.CounterUpCountOpcode:
+                          case PlcMachineCodeAssembler.CounterDownCountOpcode:
+                           if ((pc + 4) >= codeBytes.Length)
+                           {
+                            throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
+                           }
+
+                           builder.Append(FormatOpcode(opcode))
+                               .Append(' ')
+                               .Append(ReadUInt16(codeBytes, pc + 1).ToString(System.Globalization.CultureInfo.InvariantCulture))
+                               .Append(", ")
+                               .Append(FormatInt16Literal(ReadUInt16(codeBytes, pc + 3)))
+                               .AppendLine();
+                           pc += 5;
+                           break;
+
+                          case PlcMachineCodeAssembler.TimerOffStartOpcode:
+                          case PlcMachineCodeAssembler.TimerPulseStartOpcode:
+                           if ((pc + 6) >= codeBytes.Length)
+                           {
+                            throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
+                           }
+
+                           builder.Append(FormatOpcode(opcode))
+                               .Append(' ')
+                               .Append(ReadUInt16(codeBytes, pc + 1))
+                               .Append(", ")
+                               .Append(ReadUInt32(codeBytes, pc + 3).ToString(System.Globalization.CultureInfo.InvariantCulture))
+                               .AppendLine();
+                           pc += 7;
+                           break;
+
+                    case PlcMachineCodeAssembler.PushInt16Opcode:
+                        if ((pc + 2) >= codeBytes.Length)
+                        {
+                            throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
+                        }
+
+                        builder.Append("PUSH_I16 ")
+                               .AppendLine(FormatInt16Literal(ReadUInt16(codeBytes, pc + 1)));
+                        pc += 3;
+                        break;
+
                     case PlcMachineCodeAssembler.LoadPointBoolOpcode:
                     case PlcMachineCodeAssembler.StorePointBoolOpcode:
+                    case PlcMachineCodeAssembler.LoadPointInt16Opcode:
+                    case PlcMachineCodeAssembler.StorePointInt16Opcode:
                     case PlcMachineCodeAssembler.IncrementPointIntOpcode:
                     case PlcMachineCodeAssembler.DecrementPointIntOpcode:
                         if ((pc + 2) >= codeBytes.Length)
@@ -242,6 +489,13 @@ namespace BigSisterNodeNet.Plc
             return builder.ToString().TrimEnd();
         }
 
+        private static string FormatSlotVariableVisibility(PlcAssemblySymbolFlags flags)
+        {
+            return (flags & PlcAssemblySymbolFlags.SlotVarPrivate) != 0
+                ? "PRIVATE "
+                : string.Empty;
+        }
+
         private static string ResolveObjectSymbolName(IList<PlcAssemblySymbol> symbols, ushort symbolIndex)
         {
             return symbolIndex < symbols.Count ? symbols[symbolIndex].Name : $"sym{symbolIndex}";
@@ -249,28 +503,193 @@ namespace BigSisterNodeNet.Plc
 
         private static bool IsInstructionOpcode(byte value)
         {
-            return value == PlcMachineCodeAssembler.HaltOpcode ||
+             return value == PlcMachineCodeAssembler.NopOpcode ||
+                 value == PlcMachineCodeAssembler.HaltOpcode ||
+                 value == PlcMachineCodeAssembler.PushTrueOpcode ||
+                 value == PlcMachineCodeAssembler.PushFalseOpcode ||
+                 value == PlcMachineCodeAssembler.DupOpcode ||
+                 value == PlcMachineCodeAssembler.DropOpcode ||
+                 value == PlcMachineCodeAssembler.SwapOpcode ||
+                                 value == PlcMachineCodeAssembler.AndOpcode ||
+                                 value == PlcMachineCodeAssembler.OrOpcode ||
+                                 value == PlcMachineCodeAssembler.XorOpcode ||
+                                 value == PlcMachineCodeAssembler.NotOpcode ||
+                                 value == PlcMachineCodeAssembler.EqOpcode ||
+                                 value == PlcMachineCodeAssembler.NeOpcode ||
+                                 value == PlcMachineCodeAssembler.PushInt16Opcode ||
                    value == PlcMachineCodeAssembler.LoadPointBoolOpcode ||
                    value == PlcMachineCodeAssembler.StorePointBoolOpcode ||
+                                     value == PlcMachineCodeAssembler.LoadPointInt16Opcode ||
+                                     value == PlcMachineCodeAssembler.StorePointInt16Opcode ||
                    value == PlcMachineCodeAssembler.IncrementPointIntOpcode ||
-                   value == PlcMachineCodeAssembler.DecrementPointIntOpcode;
+                                     value == PlcMachineCodeAssembler.DecrementPointIntOpcode ||
+                                     value == PlcMachineCodeAssembler.AddOpcode ||
+                                     value == PlcMachineCodeAssembler.SubOpcode ||
+                                     value == PlcMachineCodeAssembler.LessThanOpcode ||
+                                     value == PlcMachineCodeAssembler.LessOrEqualOpcode ||
+                                     value == PlcMachineCodeAssembler.GreaterThanOpcode ||
+                                     value == PlcMachineCodeAssembler.GreaterOrEqualOpcode ||
+                                     value == PlcMachineCodeAssembler.MinOpcode ||
+                                     value == PlcMachineCodeAssembler.MaxOpcode ||
+                                     value == PlcMachineCodeAssembler.ClampOpcode ||
+                                     value == PlcMachineCodeAssembler.SelectOpcode ||
+                                     value == PlcMachineCodeAssembler.JumpOpcode ||
+                                     value == PlcMachineCodeAssembler.JumpIfZeroOpcode ||
+                                     value == PlcMachineCodeAssembler.JumpIfNotZeroOpcode ||
+                                     value == PlcMachineCodeAssembler.RisingEdgeTriggerOpcode ||
+                                     value == PlcMachineCodeAssembler.FallingEdgeTriggerOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOnStartOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOnDoneOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOnResetOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOnElapsedOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOnRemainingOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOffStartOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOffDoneOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerOffResetOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerPulseStartOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerPulseDoneOpcode ||
+                                     value == PlcMachineCodeAssembler.TimerPulseResetOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterUpCountOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterUpDoneOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterUpValueOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterUpResetOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterDownCountOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterDownDoneOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterDownValueOpcode ||
+                                     value == PlcMachineCodeAssembler.CounterDownResetOpcode;
         }
 
         private static string FormatOpcode(byte opcode)
         {
             switch (opcode)
             {
+                case PlcMachineCodeAssembler.NopOpcode:
+                    return "NOP";
+                case PlcMachineCodeAssembler.HaltOpcode:
+                    return "HALT";
+                case PlcMachineCodeAssembler.PushTrueOpcode:
+                    return "PUSH_TRUE";
+                case PlcMachineCodeAssembler.PushFalseOpcode:
+                    return "PUSH_FALSE";
+                case PlcMachineCodeAssembler.DupOpcode:
+                    return "DUP";
+                case PlcMachineCodeAssembler.DropOpcode:
+                    return "DROP";
+                case PlcMachineCodeAssembler.SwapOpcode:
+                    return "SWAP";
+                case PlcMachineCodeAssembler.AndOpcode:
+                    return "AND";
+                case PlcMachineCodeAssembler.OrOpcode:
+                    return "OR";
+                case PlcMachineCodeAssembler.XorOpcode:
+                    return "XOR";
+                case PlcMachineCodeAssembler.NotOpcode:
+                    return "NOT";
+                case PlcMachineCodeAssembler.EqOpcode:
+                    return "EQ";
+                case PlcMachineCodeAssembler.NeOpcode:
+                    return "NE";
+                case PlcMachineCodeAssembler.PushInt16Opcode:
+                    return "PUSH_I16";
                 case PlcMachineCodeAssembler.LoadPointBoolOpcode:
                     return "LOAD_BOOL";
                 case PlcMachineCodeAssembler.StorePointBoolOpcode:
                     return "STORE_BOOL";
+                case PlcMachineCodeAssembler.LoadPointInt16Opcode:
+                    return "LOAD_I16";
+                case PlcMachineCodeAssembler.StorePointInt16Opcode:
+                    return "STORE_I16";
                 case PlcMachineCodeAssembler.IncrementPointIntOpcode:
                     return "INC_INT";
                 case PlcMachineCodeAssembler.DecrementPointIntOpcode:
                     return "DEC_INT";
+                case PlcMachineCodeAssembler.AddOpcode:
+                    return "ADD";
+                case PlcMachineCodeAssembler.SubOpcode:
+                    return "SUB";
+                case PlcMachineCodeAssembler.LessThanOpcode:
+                    return "LT";
+                case PlcMachineCodeAssembler.LessOrEqualOpcode:
+                    return "LE";
+                case PlcMachineCodeAssembler.GreaterThanOpcode:
+                    return "GT";
+                case PlcMachineCodeAssembler.GreaterOrEqualOpcode:
+                    return "GE";
+                case PlcMachineCodeAssembler.MinOpcode:
+                    return "MIN";
+                case PlcMachineCodeAssembler.MaxOpcode:
+                    return "MAX";
+                case PlcMachineCodeAssembler.ClampOpcode:
+                    return "CLAMP";
+                case PlcMachineCodeAssembler.SelectOpcode:
+                    return "SEL";
+                case PlcMachineCodeAssembler.JumpOpcode:
+                    return "JMP";
+                case PlcMachineCodeAssembler.JumpIfZeroOpcode:
+                    return "JZ";
+                case PlcMachineCodeAssembler.JumpIfNotZeroOpcode:
+                    return "JNZ";
+                case PlcMachineCodeAssembler.RisingEdgeTriggerOpcode:
+                    return "R_TRIG";
+                case PlcMachineCodeAssembler.FallingEdgeTriggerOpcode:
+                    return "F_TRIG";
+                case PlcMachineCodeAssembler.TimerOnStartOpcode:
+                    return "TON_START";
+                case PlcMachineCodeAssembler.TimerOnDoneOpcode:
+                    return "TON_DONE";
+                case PlcMachineCodeAssembler.TimerOnResetOpcode:
+                    return "TON_RESET";
+                case PlcMachineCodeAssembler.TimerOnElapsedOpcode:
+                    return "TON_ELAPSED";
+                case PlcMachineCodeAssembler.TimerOnRemainingOpcode:
+                    return "TON_REMAINING";
+                case PlcMachineCodeAssembler.TimerOffStartOpcode:
+                    return "TOF_START";
+                case PlcMachineCodeAssembler.TimerOffDoneOpcode:
+                    return "TOF_DONE";
+                case PlcMachineCodeAssembler.TimerOffResetOpcode:
+                    return "TOF_RESET";
+                case PlcMachineCodeAssembler.TimerPulseStartOpcode:
+                    return "TP_START";
+                case PlcMachineCodeAssembler.TimerPulseDoneOpcode:
+                    return "TP_DONE";
+                case PlcMachineCodeAssembler.TimerPulseResetOpcode:
+                    return "TP_RESET";
+                case PlcMachineCodeAssembler.CounterUpCountOpcode:
+                    return "CTU_COUNT";
+                case PlcMachineCodeAssembler.CounterUpDoneOpcode:
+                    return "CTU_DONE";
+                case PlcMachineCodeAssembler.CounterUpValueOpcode:
+                    return "CTU_VALUE";
+                case PlcMachineCodeAssembler.CounterUpResetOpcode:
+                    return "CTU_RESET";
+                case PlcMachineCodeAssembler.CounterDownCountOpcode:
+                    return "CTD_COUNT";
+                case PlcMachineCodeAssembler.CounterDownDoneOpcode:
+                    return "CTD_DONE";
+                case PlcMachineCodeAssembler.CounterDownValueOpcode:
+                    return "CTD_VALUE";
+                case PlcMachineCodeAssembler.CounterDownResetOpcode:
+                    return "CTD_RESET";
                 default:
                     return "DB";
             }
+        }
+
+        private static string FormatBranchOperand(byte[] codeBytes, int operandOffset)
+        {
+            if ((operandOffset + 1) >= codeBytes.Length)
+            {
+                return "0";
+            }
+
+            var offset = unchecked((short)ReadUInt16(codeBytes, operandOffset));
+            return offset.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private static string FormatInt16Literal(ushort rawValue)
+        {
+            return ((short)rawValue).ToString();
         }
 
         private static string FormatValueType(byte rawType)

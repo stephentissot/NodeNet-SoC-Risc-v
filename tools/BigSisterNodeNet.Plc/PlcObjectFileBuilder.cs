@@ -31,6 +31,13 @@ namespace BigSisterNodeNet.Plc
         ReadWrite = 2,
     }
 
+    [Flags]
+    public enum PlcAssemblySymbolFlags : byte
+    {
+        None = 0,
+        SlotVarPrivate = 1 << 0,
+    }
+
     public sealed class PlcObjectFileOptions
     {
         public ushort AbiVersion { get; set; } = 1;
@@ -49,6 +56,7 @@ namespace BigSisterNodeNet.Plc
         public string PointPath { get; set; }
         public byte ExpectedType { get; set; } = byte.MaxValue;
         public PlcRuntimeLinkAccess Access { get; set; }
+        public PlcAssemblySymbolFlags Flags { get; set; }
     }
 
     public sealed class PlcAssemblyRelocation
@@ -129,7 +137,7 @@ namespace BigSisterNodeNet.Plc
                 {
                     WriteFixedAscii(writer, symbol.Name, SymbolNameSize);
                     writer.Write((byte)symbol.Kind);
-                    writer.Write((byte)0);
+                    writer.Write((byte)symbol.Flags);
 
                     if (symbol.Kind == PlcObjectSymbolKind.SlotVar)
                     {

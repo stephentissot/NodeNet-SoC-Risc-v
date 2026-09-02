@@ -834,6 +834,10 @@ static bool json_variant_is_integer(JsonVariantConst value) {
     return value.is<int>() || value.is<unsigned int>() || value.is<long>() || value.is<unsigned long>();
 }
 
+static bool json_variant_is_number(JsonVariantConst value) {
+    return json_variant_is_integer(value) || value.is<float>() || value.is<double>();
+}
+
 static bool plc_control_block_loaded(const PlcProgramControlBlockV1& control_block, uint16_t slot_id) {
     return control_block.magic == kPlcProgramControlBlockMagicV1 &&
            control_block.slot_id == slot_id &&
@@ -898,6 +902,22 @@ static uint32_t plc_engine_scan_interval_cycles()
 static void plc_engine_set_enabled(bool enabled)
 {
     *plc_reg_ptr(0x00u) = enabled ? 0x1u : 0x0u;
+}
+
+static uint32_t plc_slot_run_mask_snapshot()
+{
+    uint32_t mask = 0u;
+    for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1 && slot_id < 32u; ++slot_id) {
+        const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+            static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+        if (!plc_control_block_loaded(*control_block, slot_id)) {
+            continue;
+        }
+        if (!plc_slot_paused(*control_block)) {
+            mask |= (1u << slot_id);
+        }
+    }
+    return mask;
 }
 
 static void plc_engine_clear_fault_latch()
@@ -1520,6 +1540,7 @@ void NodeNetCore::loop()
     }
 
     processOutputQueue();
+    processPendingPlcAutoLoad();
 }
 
 void NodeNetCore::savePreferences()
@@ -1530,6 +1551,8 @@ void NodeNetCore::savePreferences()
         }
         return;
     }
+
+    snapshotPlcPersistentRuntimeState();
 
     JsonDocument prefsDoc;
     toJson(prefsDoc);
@@ -1604,6 +1627,36 @@ void NodeNetCore::loadPreferences()
 
     fromJson(prefsDoc);
 
+}
+
+void NodeNetCore::snapshotPlcPersistentRuntimeState()
+{
+    _persistedPlcEngineEnabled = plc_engine_enabled();
+    _persistedPlcSlotRunMask = plc_slot_run_mask_snapshot();
+}
+
+void NodeNetCore::applyPersistedPlcRuntimeState()
+{
+    for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1 && slot_id < 32u; ++slot_id) {
+        volatile PlcProgramControlBlockV1* control_block = reinterpret_cast<volatile PlcProgramControlBlockV1*>(
+            static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+        const bool loaded = control_block->magic == kPlcProgramControlBlockMagicV1 &&
+                            control_block->slot_id == slot_id &&
+                            control_block->bytecode_size != 0u &&
+                            control_block->bytecode_base != 0u;
+        if (!loaded) {
+            continue;
+        }
+
+        const uint32_t slot_mask = (1u << slot_id);
+        if ((_persistedPlcSlotRunMask & slot_mask) != 0u) {
+            control_block->control &= ~kPlcSlotControlPausedV1;
+        } else {
+            control_block->control |= kPlcSlotControlPausedV1;
+        }
+    }
+
+    plc_engine_set_enabled(_persistedPlcEngineEnabled);
 }
 
 bool NodeNetCore::isInitialized()
@@ -1902,7 +1955,7 @@ void NodeNetCore::processInputQueue()
             if (!updateProperty(request)) {
                 _logger->Warning("UpdateProperty rejected src=%u property=%s",
                                  msg.srcAddr,
-                                 request["property"] | "<null>");
+                                 request["propertyName"] | "<null>");
             }
             response["noResponse"] = true;
             break;
@@ -1934,10 +1987,17 @@ void NodeNetCore::processOutputQueue()
         _logger->Warning("NodeNetCore output queue overflow");
     }
 
-    QueuedMessage msg;
-    if (dequeueOutputMessage(msg)) {
-        _nodeNet->Send(msg.destAddr, msg.data, msg.len);
+    if (_outputQueue.tail == _outputQueue.head) {
+        return;
     }
+
+    const QueuedMessage& msg = _outputQueue.entries[_outputQueue.tail];
+    if (!_nodeNet->TxHasSpace(msg.len)) {
+        return;
+    }
+
+    _nodeNet->Send(msg.destAddr, msg.data, msg.len);
+    _outputQueue.tail = static_cast<uint8_t>((_outputQueue.tail + 1u) % kOutputQueueCapacity);
 }
 
 bool NodeNetCore::updateProperty(const JsonDocument& request)
@@ -2126,6 +2186,9 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
         if (plc_meta.point_kind == PointCatalog::PlcPointKind::EngineEnabled) {
             plc_engine_set_enabled(requested);
             ok = (plc_engine_enabled() == requested);
+            if (ok) {
+                savePreferences();
+            }
         } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::EngineClearFault) {
             if (requested) {
                 plc_engine_clear_fault_latch();
@@ -2147,20 +2210,122 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
     if (!plc_meta.has_slot || plc_meta.slot_id >= kPlcSlotCountV1) {
         return false;
     }
+
+    const uint32_t now_ms = millis();
+    PointCommandState command_state = {};
+    if (const PointCommandState* current = _pointCatalog.findCommandState(definition.id)) {
+        command_state = *current;
+    }
+    command_state.last_command_ts_ms = now_ms;
+    command_state.pending = false;
+
+    if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotOther) {
+        if (definition.direction != PointDirection::Output && definition.direction != PointDirection::InOut) {
+            command_state.command_quality = PointCommandQuality::Rejected;
+            (void)updatePointCommandState(definition.id, command_state);
+            return false;
+        }
+
+        PointState next_state = _pointCatalog.states()[point_index];
+        bool accepted = false;
+
+        switch (definition.value_type) {
+        case PointValueType::Bool:
+            if (value.is<bool>()) {
+                const bool parsed = value.as<bool>();
+                command_state.last_commanded_value.b = parsed;
+                next_state.value.b = parsed;
+                accepted = true;
+            }
+            break;
+
+        case PointValueType::Uint16:
+            if (json_variant_is_integer(value)) {
+                const uint16_t parsed = value.as<uint16_t>();
+                command_state.last_commanded_value.u16 = parsed;
+                next_state.value.u16 = parsed;
+                accepted = true;
+            }
+            break;
+
+        case PointValueType::Int16:
+            if (json_variant_is_integer(value)) {
+                const int16_t parsed = value.as<int16_t>();
+                command_state.last_commanded_value.i16 = parsed;
+                next_state.value.i16 = parsed;
+                accepted = true;
+            }
+            break;
+
+        case PointValueType::Uint32:
+            if (json_variant_is_integer(value)) {
+                const uint32_t parsed = value.as<uint32_t>();
+                command_state.last_commanded_value.u32 = parsed;
+                next_state.value.u32 = parsed;
+                accepted = true;
+            }
+            break;
+
+        case PointValueType::Int32:
+            if (json_variant_is_integer(value)) {
+                const int32_t parsed = value.as<int32_t>();
+                command_state.last_commanded_value.i32 = parsed;
+                next_state.value.i32 = parsed;
+                accepted = true;
+            }
+            break;
+
+        case PointValueType::Float:
+            if (json_variant_is_number(value)) {
+                const float parsed = value.as<float>();
+                command_state.last_commanded_value.f32 = parsed;
+                next_state.value.f32 = parsed;
+                accepted = true;
+            }
+            break;
+
+        case PointValueType::Enum:
+            if (json_variant_is_integer(value)) {
+                const int32_t parsed = value.as<int32_t>();
+                command_state.last_commanded_value.enum_value = parsed;
+                next_state.value.enum_value = parsed;
+                accepted = true;
+            }
+            break;
+
+        case PointValueType::String:
+        default:
+            break;
+        }
+
+        if (!accepted) {
+            command_state.command_quality = PointCommandQuality::Rejected;
+            (void)updatePointCommandState(definition.id, command_state);
+            return false;
+        }
+
+        next_state.quality = PointQuality::Good;
+        next_state.last_update_ms = now_ms;
+        next_state.last_good_update_ms = now_ms;
+        (void)updatePointState(definition.id, next_state);
+
+        command_state.command_quality = PointCommandQuality::Acked;
+        command_state.last_ack_ts_ms = now_ms;
+        (void)updatePointCommandState(definition.id, command_state);
+
+        if (_plcRuntimePublisher != nullptr) {
+            (void)const_cast<PlcRuntimePublisherV1*>(_plcRuntimePublisher)->publish(_pointCatalog, now_ms);
+        }
+        return true;
+    }
+
     if (!value.is<bool>()) {
         return false;
     }
 
     const uint16_t slot_id = plc_meta.slot_id;
     const bool requested = value.as<bool>();
-    uint32_t now_ms = millis();
-    PointCommandState command_state = {};
-    if (const PointCommandState* current = _pointCatalog.findCommandState(definition.id)) {
-        command_state = *current;
-    }
     command_state.last_commanded_value.b = requested;
-    command_state.last_command_ts_ms = now_ms;
-    command_state.pending = false;
 
     volatile PlcProgramControlBlockV1* control_block = reinterpret_cast<volatile PlcProgramControlBlockV1*>(
         static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
@@ -2177,6 +2342,7 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
                 control_block->status = kPlcSlotStatusLoadedV1;
             }
             ok = true;
+            savePreferences();
         }
     } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotStop) {
         if (requested && loaded) {
@@ -2185,6 +2351,7 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
                 control_block->status = kPlcSlotStatusLoadedV1;
             }
             ok = true;
+            savePreferences();
         }
     } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotReset) {
         if (requested && loaded) {
@@ -3073,6 +3240,16 @@ void NodeNetCore::fillPlcUploadStatus(JsonDocument& response, bool include_heade
     response["bytesReceived"] = _plcUploadSession.bytes_received;
     response["expectedOffset"] = _plcUploadSession.expected_offset;
     response["lastErrorStatus"] = _plcUploadSession.last_error_status;
+    response["lastAutoLoadValid"] = _lastPlcAutoLoadDiagnostics.valid;
+    if (_lastPlcAutoLoadDiagnostics.valid) {
+        response["lastAutoLoadSlotId"] = _lastPlcAutoLoadDiagnostics.slot_id;
+        response["lastAutoLoadStatus"] = _lastPlcAutoLoadDiagnostics.load_status;
+        response["lastAutoLoadParseStatus"] = _lastPlcAutoLoadDiagnostics.parse_status;
+        response["lastAutoLoadLinkStatus"] = _lastPlcAutoLoadDiagnostics.link_status;
+        response["lastAutoLoadResolveStatus"] = _lastPlcAutoLoadDiagnostics.resolve_status;
+        response["lastAutoLoadFailingSymbolIndex"] = _lastPlcAutoLoadDiagnostics.failing_symbol_index;
+        response["lastAutoLoadFailingRelocationIndex"] = _lastPlcAutoLoadDiagnostics.failing_relocation_index;
+    }
 }
 
 bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonDocument& response)
@@ -3118,10 +3295,29 @@ bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonD
         response["error"] = "unsupportedArtifactType";
         return true;
     }
+
+    volatile PlcProgramControlBlockV1* control_block = reinterpret_cast<volatile PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+    const bool loaded = control_block->magic == kPlcProgramControlBlockMagicV1 &&
+                        control_block->slot_id == slot_id &&
+                        control_block->bytecode_size != 0u &&
+                        control_block->bytecode_base != 0u;
+    const bool slot_running = loaded &&
+                              (control_block->control & kPlcSlotControlPausedV1) == 0u;
+    if (loaded) {
+        control_block->control |= kPlcSlotControlPausedV1;
+        if ((control_block->status & kPlcSlotStatusFaultedV1) == 0u) {
+            control_block->status = kPlcSlotStatusLoadedV1;
+        }
+        publishBuiltinPlcPointStates(true);
+    }
+
     std::memset(plc_upload_volatile_staging_ptr(), 0xFF, static_cast<size_t>(staging_capacity));
 
     resetPlcUploadSession();
+    _lastPlcAutoLoadDiagnostics = {};
     _plcUploadSession.active = true;
+    _plcUploadSession.restore_slot_running = slot_running;
     _plcUploadSession.slot_id = slot_id;
     _plcUploadSession.upload_id = _nextPlcUploadId++;
     _plcUploadSession.total_size = total_size;
@@ -3205,19 +3401,20 @@ bool NodeNetCore::handlePlcUploadCommitRequest(const JsonDocument& request, Json
     }
 
     const uint8_t* upload_object_bytes = plc_upload_volatile_staging_ptr();
-    if (_plcUploadSession.persist_to_flash) {
+    uint8_t* deferred_object_bytes = nullptr;
+    if (_plcUploadSession.persist_to_flash || _plcUploadSession.auto_load) {
         if (_plcUploadSession.slot_id >= kPlcSlotCountV1 ||
             _plcUploadSession.total_size > PlcSlotLoaderV1::slotObjectSnapshotCapacity()) {
             response["ok"] = false;
-            response["error"] = "flashPersistFailed";
+            response["error"] = _plcUploadSession.persist_to_flash ? "flashPersistFailed" : "loadStagingFailed";
             fillPlcUploadStatus(response, false);
             return true;
         }
 
-        uint8_t* scratch_object_bytes = reinterpret_cast<uint8_t*>(
+        deferred_object_bytes = reinterpret_cast<uint8_t*>(
             static_cast<uintptr_t>(PlcSlotLoaderV1::slotObjectSnapshotDataAddress(_plcUploadSession.slot_id)));
-        std::memcpy(scratch_object_bytes, upload_object_bytes, _plcUploadSession.total_size);
-        upload_object_bytes = scratch_object_bytes;
+        std::memcpy(deferred_object_bytes, upload_object_bytes, _plcUploadSession.total_size);
+        upload_object_bytes = deferred_object_bytes;
     }
 
     if (_plcUploadSession.persist_to_flash &&
@@ -3233,31 +3430,96 @@ bool NodeNetCore::handlePlcUploadCommitRequest(const JsonDocument& request, Json
         return true;
     }
 
-    PlcSlotLoadResultV1 load_result = {};
     if (_plcUploadSession.auto_load) {
-        load_result = PlcSlotLoaderV1::loadObjectFileIntoSlot(*_plcRuntimePublisher,
-                                                              _pointCatalog,
-                                                              _plcUploadSession.slot_id,
-                                                              upload_object_bytes,
-                                                              _plcUploadSession.total_size);
-        if (load_result.status != kPlcSlotLoadOk) {
-            response["ok"] = false;
-            response["error"] = "loadFailed";
-            response["loadStatus"] = static_cast<uint8_t>(load_result.status);
-            fillPlcUploadStatus(response, false);
-            return true;
-        }
-        publishBuiltinPlcPointStates(true);
+        _pendingPlcAutoLoad = {};
+        _pendingPlcAutoLoad.active = true;
+        _pendingPlcAutoLoad.slot_id = _plcUploadSession.slot_id;
+        _pendingPlcAutoLoad.object_base = static_cast<uint32_t>(
+            PlcSlotLoaderV1::slotObjectSnapshotDataAddress(_plcUploadSession.slot_id));
+        _pendingPlcAutoLoad.object_size = _plcUploadSession.total_size;
+        _pendingPlcAutoLoad.restore_engine_enabled = plc_engine_enabled();
+        _pendingPlcAutoLoad.restore_slot_running = _plcUploadSession.restore_slot_running;
     }
 
     response["ok"] = true;
     response["slotId"] = _plcUploadSession.slot_id;
-    response["loadStatus"] = static_cast<uint8_t>(load_result.status);
+    response["loadStatus"] = static_cast<uint8_t>(kPlcSlotLoadOk);
     response["persistToFlash"] = _plcUploadSession.persist_to_flash;
     response["rebootPersistent"] = _plcUploadSession.persist_to_flash;
+    response["autoLoadPending"] = _plcUploadSession.auto_load;
     fillPlcUploadStatus(response, false);
     resetPlcUploadSession();
     return true;
+}
+
+void NodeNetCore::processPendingPlcAutoLoad()
+{
+    if (!_pendingPlcAutoLoad.active || _plcRuntimePublisher == nullptr) {
+        return;
+    }
+
+    if (_pendingPlcAutoLoad.restore_engine_enabled && plc_engine_enabled()) {
+        plc_engine_set_enabled(false);
+    }
+
+    if (plc_engine_busy()) {
+        return;
+    }
+
+    const uint16_t slot_id = _pendingPlcAutoLoad.slot_id;
+    const uint32_t object_base = _pendingPlcAutoLoad.object_base;
+    const uint32_t object_size = _pendingPlcAutoLoad.object_size;
+    const bool restore_engine_enabled = _pendingPlcAutoLoad.restore_engine_enabled;
+    const bool restore_slot_running = _pendingPlcAutoLoad.restore_slot_running;
+    _pendingPlcAutoLoad = {};
+
+    const uint8_t* object_bytes = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(object_base));
+    const PlcSlotLoadResultV1 load_result = PlcSlotLoaderV1::loadObjectFileIntoSlot(*_plcRuntimePublisher,
+                                                                                     _pointCatalog,
+                                                                                     slot_id,
+                                                                                     object_bytes,
+                                                                                     object_size);
+    _lastPlcAutoLoadDiagnostics.valid = true;
+    _lastPlcAutoLoadDiagnostics.slot_id = slot_id;
+    _lastPlcAutoLoadDiagnostics.load_status = static_cast<uint8_t>(load_result.status);
+    _lastPlcAutoLoadDiagnostics.parse_status = static_cast<uint8_t>(load_result.parse_status);
+    _lastPlcAutoLoadDiagnostics.link_status = static_cast<uint8_t>(load_result.link_result.status);
+    _lastPlcAutoLoadDiagnostics.resolve_status = static_cast<uint8_t>(load_result.link_result.resolve_status);
+    _lastPlcAutoLoadDiagnostics.failing_symbol_index = load_result.link_result.failing_symbol_index;
+    _lastPlcAutoLoadDiagnostics.failing_relocation_index = load_result.link_result.failing_relocation_index;
+    if (load_result.status != kPlcSlotLoadOk) {
+        if (_logger != nullptr) {
+            _logger->Warning("Deferred PLC auto-load failed slot=%u status=%u parse=%u link=%u resolve=%u symbol=%u relocation=%u",
+                             static_cast<unsigned>(slot_id),
+                             static_cast<unsigned>(load_result.status),
+                             static_cast<unsigned>(load_result.parse_status),
+                             static_cast<unsigned>(load_result.link_result.status),
+                             static_cast<unsigned>(load_result.link_result.resolve_status),
+                             static_cast<unsigned>(load_result.link_result.failing_symbol_index),
+                             static_cast<unsigned>(load_result.link_result.failing_relocation_index));
+        }
+        if (restore_engine_enabled) {
+            plc_engine_set_enabled(true);
+        }
+        return;
+    }
+
+    volatile PlcProgramControlBlockV1* control_block = reinterpret_cast<volatile PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+    if (control_block->magic == kPlcProgramControlBlockMagicV1 &&
+        control_block->slot_id == slot_id) {
+        if (restore_slot_running) {
+            control_block->control &= ~kPlcSlotControlPausedV1;
+        } else {
+            control_block->control |= kPlcSlotControlPausedV1;
+        }
+        control_block->status = kPlcSlotStatusLoadedV1;
+    }
+
+    if (restore_engine_enabled) {
+        plc_engine_set_enabled(true);
+    }
+    publishBuiltinPlcPointStates(true);
 }
 
 bool NodeNetCore::handlePlcUploadDataMessage(const QueuedMessage& msg)
@@ -3665,6 +3927,8 @@ uint16_t NodeNetCore::restorePersistedPlcSlots()
     }
 
     oled::showBootProgress("Restore PLC slots", kBootRestoreProgressEnd);
+
+    applyPersistedPlcRuntimeState();
 
     publishBuiltinPlcPointStates(true);
     return restored_count;

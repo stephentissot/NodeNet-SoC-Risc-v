@@ -23,6 +23,7 @@ BOOT_OBJ = $(BUILD)/$(basename $(notdir $(BOOT_SRC))).o
 
 PYTHON ?= python
 IMG_TOOL = tools/pack_firmware.py
+BOOT_WORD_HEX_TOOL = tools/boot_hex_to_words.py
 APP_LOAD_ADDR ?= 0x20000000
 APP_ENTRY_ADDR ?= 0x20000000
 APP_TARGET ?= nodenet_riscv_app
@@ -140,6 +141,7 @@ FW_IMG = $(BUILD)/$(TARGET).img
 BOOT_TARGET = boot_stage0
 BOOT_ELF = $(BUILD)/$(BOOT_TARGET).elf
 BOOT_HEX = $(BUILD)/$(BOOT_TARGET).hex
+BOOT_WORD_HEX = $(BUILD)/$(BOOT_TARGET)_words.hex
 APP_ELF = $(BUILD)/$(APP_TARGET).elf
 APP_BIN = $(BUILD)/$(APP_TARGET).bin
 APP_IMG = $(BUILD)/$(APP_TARGET).img
@@ -259,7 +261,10 @@ $(BOOT_ELF): $(BOOT_START_OBJ) $(BOOT_OBJ) $(BOOT_FLASH_OBJ) $(BUILD)/u8g2_hal.o
 $(BOOT_HEX): $(BOOT_ELF)
 	$(CROSS)objcopy -O verilog $< $@
 
-bootloader-build: $(BOOT_HEX)
+$(BOOT_WORD_HEX): $(BOOT_HEX) $(BOOT_WORD_HEX_TOOL)
+	$(PYTHON) $(BOOT_WORD_HEX_TOOL) $< $@
+
+bootloader-build: $(BOOT_WORD_HEX)
 	@set -- $$($(CROSS)size $(BOOT_ELF) | tail -n 1); \
 	text=$$1; data=$$2; bss=$$3; \
 	echo "[BOOT] ELF text/data/bss: $$text/$$data/$$bss bytes"; \

@@ -210,7 +210,7 @@
 												   VerticalAlignment="Center"
 												   Visibility="{Binding IsReadOnlyValue, Converter={StaticResource BoolToVisibilityConverter}}"/>
 										<TextBox Text="{Binding EditableTextValue, UpdateSourceTrigger=PropertyChanged}"
-											 Foreground="{DynamicResource MaterialDesign.Brush.Foreground}"
+												 Foreground="Black"
 											 LostFocus="PointStateValueTextBox_LostFocus">
 											<TextBox.Style>
 												<Style TargetType="TextBox">

@@ -502,7 +502,10 @@ private:
     static uint8_t mapFlags(const PointDefinition& definition)
     {
         uint8_t flags = kPlcRuntimeFlagReadable;
-        if (definition.direction == PointDirection::Output || definition.direction == PointDirection::InOut) {
+        const bool runtime_internal_writable = isDynamicSlotVariablePoint(definition);
+        if (runtime_internal_writable ||
+            definition.direction == PointDirection::Output ||
+            definition.direction == PointDirection::InOut) {
             flags |= kPlcRuntimeFlagWritable;
         }
         if (definition.direction == PointDirection::Input) {

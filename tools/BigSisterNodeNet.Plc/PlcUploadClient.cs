@@ -20,6 +20,7 @@ namespace BigSisterNodeNet.Plc
         public uint UploadId { get; set; }
         public IDictionary<string, object> BeginResponse { get; set; }
         public IDictionary<string, object> CommitResponse { get; set; }
+        public IDictionary<string, object> UploadStatusResponse { get; set; }
     }
 
     public sealed class PlcDownloadResult
@@ -105,6 +106,21 @@ namespace BigSisterNodeNet.Plc
                 ["from"] = options.LocalAddress,
                 ["to"] = options.RemoteAddress,
                 ["uploadId"] = uploadId,
+            };
+        }
+
+        public IDictionary<string, object> CreateStatusRequest(PlcUploadOptions options)
+        {
+            if (options == null)
+            {
+                throw new ArgumentNullException(nameof(options));
+            }
+
+            return new Dictionary<string, object>
+            {
+                ["cmd"] = "plcUploadStatusReq",
+                ["from"] = options.LocalAddress,
+                ["to"] = options.RemoteAddress,
             };
         }
 
@@ -211,11 +227,12 @@ namespace BigSisterNodeNet.Plc
                 var loadStatus = response.TryGetValue("loadStatus", out var loadStatusValue) && loadStatusValue != null
                     ? Convert.ToString(loadStatusValue)
                     : string.Empty;
+                var loadStatusText = DescribeLoadStatus(loadStatus);
                 var message = string.IsNullOrWhiteSpace(error)
                     ? "Device returned a rejected response."
                     : string.IsNullOrWhiteSpace(loadStatus)
                         ? $"Device returned error '{error}'."
-                        : $"Device returned error '{error}' (loadStatus={loadStatus}).";
+                        : $"Device returned error '{error}' ({loadStatusText}).";
                 throw new PlcDeviceErrorException(message, error, loadStatus, response);
             }
 
@@ -271,6 +288,220 @@ namespace BigSisterNodeNet.Plc
             }
 
             return Convert.FromBase64String(text);
+        }
+
+        public static string BuildUiStatusMessage(ushort slotId,
+                                                  IDictionary<string, object> commitResponse,
+                                                  IDictionary<string, object> uploadStatusResponse)
+        {
+            var rebootPersistent = ReadResponseBoolean(commitResponse, "rebootPersistent");
+            var persistenceText = rebootPersistent ? "Persisté pour reboot." : "Chargé en runtime uniquement.";
+            var autoLoadPending = ReadResponseBoolean(commitResponse, "autoLoadPending");
+
+            if (!autoLoadPending)
+            {
+                return $"Upload terminé sur le slot {slotId}. {persistenceText}";
+            }
+
+            if (uploadStatusResponse == null)
+            {
+                return $"Upload terminé sur le slot {slotId}. Auto-load différé en attente. {persistenceText}";
+            }
+
+            if (!ReadResponseBoolean(uploadStatusResponse, "lastAutoLoadValid"))
+            {
+                return $"Upload terminé sur le slot {slotId}. Auto-load différé en cours. {persistenceText}";
+            }
+
+            var autoLoadSlotId = ReadResponseUInt16(uploadStatusResponse, "lastAutoLoadSlotId");
+            if (autoLoadSlotId != slotId)
+            {
+                return $"Upload terminé sur le slot {slotId}. Auto-load différé en cours. {persistenceText}";
+            }
+
+            var autoLoadStatus = ReadResponseString(uploadStatusResponse, "lastAutoLoadStatus");
+            if (string.Equals(autoLoadStatus, "0", StringComparison.Ordinal))
+            {
+                return $"Upload terminé sur le slot {slotId}. Auto-load différé réussi. {persistenceText}";
+            }
+
+            return $"Upload terminé sur le slot {slotId}, mais l'auto-load différé a échoué: {DescribeAutoLoadFailure(uploadStatusResponse)} {persistenceText}";
+        }
+
+        public static string DescribeAutoLoadFailure(IDictionary<string, object> response)
+        {
+            if (response == null)
+            {
+                return "diagnostic indisponible.";
+            }
+
+            var loadStatus = DescribeLoadStatus(ReadResponseString(response, "lastAutoLoadStatus"));
+            var parseStatus = DescribeParseStatus(ReadResponseString(response, "lastAutoLoadParseStatus"));
+            var linkStatus = DescribeLinkStatus(ReadResponseString(response, "lastAutoLoadLinkStatus"));
+            var resolveStatus = DescribeResolveStatus(ReadResponseString(response, "lastAutoLoadResolveStatus"));
+            var failingSymbol = ReadResponseString(response, "lastAutoLoadFailingSymbolIndex");
+            var failingRelocation = ReadResponseString(response, "lastAutoLoadFailingRelocationIndex");
+
+            var details = new StringBuilder();
+            details.Append(loadStatus);
+
+            if (!string.IsNullOrWhiteSpace(resolveStatus) && !string.Equals(resolveStatus, "resolveStatus=0 (résolu)", StringComparison.Ordinal))
+            {
+                details.Append($", {resolveStatus}");
+            }
+            else if (!string.IsNullOrWhiteSpace(linkStatus) && !string.Equals(linkStatus, "linkStatus=0 (ok)", StringComparison.Ordinal))
+            {
+                details.Append($", {linkStatus}");
+            }
+            else if (!string.IsNullOrWhiteSpace(parseStatus) && !string.Equals(parseStatus, "parseStatus=0 (ok)", StringComparison.Ordinal))
+            {
+                details.Append($", {parseStatus}");
+            }
+
+            if (TryParseUInt16(failingSymbol, out var symbolIndex) && symbolIndex != ushort.MaxValue)
+            {
+                details.Append($", symbole #{symbolIndex}");
+            }
+
+            if (TryParseUInt16(failingRelocation, out var relocationIndex) && relocationIndex != ushort.MaxValue)
+            {
+                details.Append($", relocation #{relocationIndex}");
+            }
+
+            return details.ToString() + ".";
+        }
+
+        public static string DescribeLoadStatus(string rawValue)
+        {
+            return DescribeStatus(rawValue, "loadStatus", value =>
+            {
+                switch (value)
+                {
+                    case 0: return "ok";
+                    case 1: return "argument invalide";
+                    case 2: return "région indisponible";
+                    case 3: return "slot hors plage";
+                    case 4: return "bytecode trop grand";
+                    case 5: return "parse objet échoué";
+                    case 6: return "échec de link/load";
+                    case 7: return "ABI incompatible";
+                    case 8: return "checksum invalide";
+                    case 9: return "lecture flash échouée";
+                    case 10: return "paramètres trop volumineux";
+                    case 11: return "opcode non supporté";
+                    default: return null;
+                }
+            });
+        }
+
+        public static string DescribeParseStatus(string rawValue)
+        {
+            return DescribeStatus(rawValue, "parseStatus", value =>
+            {
+                switch (value)
+                {
+                    case 0: return "ok";
+                    case 1: return "argument invalide";
+                    case 2: return "header hors plage";
+                    case 3: return "magic invalide";
+                    case 4: return "version non supportée";
+                    case 5: return "code hors plage";
+                    case 6: return "entry offset hors plage";
+                    case 7: return "table des symboles hors plage";
+                    case 8: return "table des relocations hors plage";
+                    default: return null;
+                }
+            });
+        }
+
+        public static string DescribeLinkStatus(string rawValue)
+        {
+            return DescribeStatus(rawValue, "linkStatus", value =>
+            {
+                switch (value)
+                {
+                    case 0: return "ok";
+                    case 1: return "argument invalide";
+                    case 2: return "buffer de sortie trop petit";
+                    case 3: return "entry offset hors plage";
+                    case 4: return "index symbole hors plage";
+                    case 5: return "relocation hors plage";
+                    case 6: return "relocation non supportée";
+                    case 7: return "résolution symbole échouée";
+                    default: return null;
+                }
+            });
+        }
+
+        public static string DescribeResolveStatus(string rawValue)
+        {
+            return DescribeStatus(rawValue, "resolveStatus", value =>
+            {
+                switch (value)
+                {
+                    case 0: return "résolu";
+                    case 1: return "point introuvable";
+                    case 2: return "type runtime non supporté";
+                    case 3: return "mismatch de type";
+                    case 4: return "accès refusé";
+                    default: return null;
+                }
+            });
+        }
+
+        private static string DescribeStatus(string rawValue, string fieldName, Func<int, string> describe)
+        {
+            if (string.IsNullOrWhiteSpace(rawValue))
+            {
+                return string.Empty;
+            }
+
+            if (!int.TryParse(rawValue, out var value))
+            {
+                return $"{fieldName}={rawValue}";
+            }
+
+            var description = describe(value);
+            return string.IsNullOrWhiteSpace(description)
+                ? $"{fieldName}={value}"
+                : $"{fieldName}={value} ({description})";
+        }
+
+        private static bool ReadResponseBoolean(IDictionary<string, object> response, string key)
+        {
+            return response != null &&
+                   response.TryGetValue(key, out var value) &&
+                   value != null &&
+                   Convert.ToBoolean(value);
+        }
+
+        private static string ReadResponseString(IDictionary<string, object> response, string key)
+        {
+            return response != null && response.TryGetValue(key, out var value) && value != null
+                ? Convert.ToString(value)
+                : string.Empty;
+        }
+
+        private static ushort ReadResponseUInt16(IDictionary<string, object> response, string key)
+        {
+            if (response == null || !response.TryGetValue(key, out var value) || value == null)
+            {
+                return 0;
+            }
+
+            try
+            {
+                return Convert.ToUInt16(value);
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static bool TryParseUInt16(string text, out ushort value)
+        {
+            return ushort.TryParse(text, out value);
         }
 
         private static void WriteUInt16(byte[] buffer, int offset, ushort value)
