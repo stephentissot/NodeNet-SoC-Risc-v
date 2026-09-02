@@ -50,11 +50,7 @@ int main(void)
         nodeNetCore.attachPlcRuntimePublisher(&plcRuntimePublisher);
         oled::showBootProgress("Publish runtime map", 65u);
         (void)plcRuntimePublisher.publish(nodeNetCore.pointCatalog(), boot_now_ms);
-        oled::showBootProgress("Restore PLC slots", 70u);
-        const uint16_t restored_slots = nodeNetCore.restorePersistedPlcSlots();
-        const PlcRuntimeHeaderV1 plcRuntimeHeader = plcRuntimePublisher.headerSnapshot();
-        (void)plcRuntimeHeader;
-        (void)restored_slots;
+        nodeNetCore.restorePersistedPlcSlots();
         oled::showBootProgress("Startup complete", 100u);
     } else {
         oled::showBootProgress("PLC ABI unavailable", 100u);
