@@ -6,8 +6,6 @@ module wb_plc #(
     parameter [31:0] CONTROL_REGION_BASE = 32'h2017_0000,
     parameter [31:0] RUNTIME_DESCRIPTOR_BASE = 32'h2010_0100,
     parameter [31:0] SHARED_POINT_STATE_BASE = 32'h207E_0000,
-    parameter [31:0] RUNTIME_VALUE_BASE = 32'h2011_0000,
-    parameter [31:0] RUNTIME_STATUS_BASE = 32'h2012_0000,
     parameter [31:0] RUNTIME_WRITE_QUEUE_BASE = 32'h2017_1000,
     parameter integer SLOT_COUNT = 16,
     parameter integer SLOT_MANIFEST_BYTES = 72,
@@ -165,7 +163,6 @@ module wb_plc #(
     localparam [6:0] ST_DECODE = 7'd14;
     localparam [6:0] ST_READ_DESC0 = 7'd15;
     localparam [6:0] ST_READ_DESC1 = 7'd16;
-    localparam [6:0] ST_READ_DESC2 = 7'd17;
     localparam [6:0] ST_LOAD_BOOL_VALUE = 7'd18;
     localparam [6:0] ST_STORE_BOOL_READ_VALUE = 7'd19;
     localparam [6:0] ST_STORE_BOOL_WRITE_VALUE0 = 7'd20;
@@ -254,7 +251,6 @@ module wb_plc #(
     reg [15:0] current_runtime_index;
     reg [7:0]  desc_value_type;
     reg [7:0]  desc_flags;
-    reg [31:0] desc_value_offset;
     reg [31:0] runtime_value_addr;
     reg [31:0] runtime_status_addr;
     reg [31:0] slot_scratch_base;
@@ -720,7 +716,6 @@ module wb_plc #(
             current_runtime_index <= 16'd0;
             desc_value_type <= 8'd0;
             desc_flags <= 8'd0;
-            desc_value_offset <= 32'd0;
             runtime_value_addr <= 32'd0;
             runtime_status_addr <= 32'd0;
             slot_scratch_base <= 32'd0;
@@ -1534,7 +1529,6 @@ module wb_plc #(
                         start_read(RUNTIME_DESCRIPTOR_BASE + (current_runtime_index * 32'd20) + 32'd4);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
-                        desc_value_offset <= m_dat_i;
                         if (current_opcode == OPCODE_LOAD_BOOL) begin
                             runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
                             if (desc_value_type != RUNTIME_TYPE_BOOL ||
@@ -1604,6 +1598,8 @@ module wb_plc #(
                             end else begin
                                 state <= ST_INT16_READ_VALUE;
                             end
+                        end else begin
+                            begin_fault(FAULT_INVALID_OPCODE, current_opcode);
                         end
                     end
                 end

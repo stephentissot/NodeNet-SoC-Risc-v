@@ -22,7 +22,6 @@ static constexpr uint32_t kPlcRuntimeWriteQueueWindowSize = 0x00001000u;
 static constexpr uint32_t kPlcSharedPointStateBase = SDRAM_POINT_STATE_BASE;
 static constexpr uint32_t kPlcSharedPointStateStride = static_cast<uint32_t>(sizeof(PointState));
 static constexpr uint32_t kPlcSharedPointStateValueOffset = static_cast<uint32_t>(offsetof(PointState, value));
-static constexpr uint32_t kPlcSharedPointStateStringValueOffset = static_cast<uint32_t>(offsetof(PointState, string_value));
 static constexpr uint32_t kPlcSharedPointStateQualityOffset = static_cast<uint32_t>(offsetof(PointState, quality));
 static constexpr uint32_t kPlcSharedPointStateLastUpdateOffset = static_cast<uint32_t>(offsetof(PointState, last_update_ms));
 static constexpr uint32_t kPlcSharedPointStateLastGoodUpdateOffset = static_cast<uint32_t>(offsetof(PointState, last_good_update_ms));
@@ -134,36 +133,6 @@ class PlcRuntimePublisherV1 {
 public:
     static constexpr uint16_t kInvalidPointIndex = 0xFFFFu;
     static constexpr size_t kInvalidCatalogIndex = PointCatalog::kMaxPoints;
-
-    static constexpr uint32_t sharedPointStateBase()
-    {
-        return kPlcSharedPointStateBase;
-    }
-
-    static constexpr uint32_t sharedPointStateStride()
-    {
-        return kPlcSharedPointStateStride;
-    }
-
-    static constexpr uint32_t sharedPointStateValueOffset()
-    {
-        return kPlcSharedPointStateValueOffset;
-    }
-
-    static constexpr uint32_t sharedPointStateQualityOffset()
-    {
-        return kPlcSharedPointStateQualityOffset;
-    }
-
-    static constexpr uint32_t sharedPointStateLastUpdateOffset()
-    {
-        return kPlcSharedPointStateLastUpdateOffset;
-    }
-
-    static constexpr uint32_t sharedPointStateLastGoodUpdateOffset()
-    {
-        return kPlcSharedPointStateLastGoodUpdateOffset;
-    }
 
     static constexpr uint32_t sharedPointStateRecordOffset(size_t catalog_index)
     {
