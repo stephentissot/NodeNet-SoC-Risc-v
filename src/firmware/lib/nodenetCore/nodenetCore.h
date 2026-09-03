@@ -161,10 +161,6 @@ class NodeNetCore
         bool _pendingPlcRuntimeMapRestoreEngine = false;
         bool _persistedPlcEngineEnabled = false;
         uint32_t _persistedPlcSlotRunMask = 0u;
-        bool _plcBuiltinEngineSyncValid = false;
-        uint32_t _plcBuiltinEngineSyncSignature = 0u;
-        bool _plcBuiltinSlotSyncValid[kPlcSlotCountV1] = {};
-        uint32_t _plcBuiltinSlotSyncSignature[kPlcSlotCountV1] = {};
         MessageQueue<kInputQueueCapacity> _inputQueue;
         MessageQueue<kOutputQueueCapacity> _outputQueue;
         volatile bool _inputQueueOverflow = false;
@@ -348,15 +344,11 @@ class NodeNetCore
         // Refreshes built-in node points that come from local configuration state.
         void publishBuiltinPointStates();
 
-        // Refreshes built-in PLC points that come from slot status and runtime diagnostics.
-        void publishBuiltinPlcPointStates(bool include_all_slots);
-        uint32_t plcBuiltinEngineSyncSignature() const;
-        uint32_t plcBuiltinSlotSyncSignature(uint16_t slot_id) const;
-        void syncPlcBuiltinEnginePointStatesIfChanged();
-        void syncPlcBuiltinSlotPointStatesIfChanged(uint16_t slot_id);
-        void syncPlcBuiltinEnginePointStates();
-        void syncPlcBuiltinSlotPointStates(uint16_t slot_id);
-        void syncPlcBuiltinRuntimeState();
+        bool buildVirtualPlcPointState(const PointDefinition& definition,
+                           const PointCatalog::PlcPointMeta& plc_meta,
+                           uint32_t now_ms,
+                           PointState& state) const;
+
         void clearPlcSlotRuntimeDiagnostics();
         void refreshLoadedMirrorProgramRuntimeMapsIfNeeded();
         bool refreshMirrorProgramRuntimeMap(uint16_t slot_id, uint32_t runtime_store_epoch);

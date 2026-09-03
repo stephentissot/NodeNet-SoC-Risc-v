@@ -1791,10 +1791,47 @@ Stage 10 completion criteria:
 - the user can recover from an intentionally faulting program by loading a valid replacement without needing an FPGA reflash or power cycle
 - all known lifecycle-related simplifications and limits are written down next to the validation guidance that exercises them
 
+### Stage 12: Bit Extraction And Compact Output Mapping
+
+Recommended implementation set:
+
+- `TEST_BIT_U32 bit_imm5`
+- `U32_AND`
+- `SHR_U32 bitcount_imm5`
+- `SHL_U32 bitcount_imm5`
+
+Why this stage is useful:
+
+- it unlocks compact integer-to-binary output mapping without needing huge branch tables
+- it keeps the ISA HDL-friendly by favoring narrow, deterministic primitives over wide control flow
+- it covers common industrial patterns such as counters, alarm masks, packed status words, and bitfield decoding
+
+Minimum practical goal:
+
+- the smallest useful subset for immediate field use is `TEST_BIT_U32 bit_imm5`
+- with that one opcode, a slot can expose the low 8 bits of a `UINT32` counter onto `output1..output8`
+- `U32_AND` and shifts remain valuable follow-ons for broader masking and packing logic
+
+Execution contract:
+
+- `TEST_BIT_U32 bit_imm5` consumes one `UINT32` from the stack and pushes one `BOOL` that reflects the selected bit
+- `U32_AND` consumes the top two `UINT32` values and pushes one `UINT32` result
+- `SHR_U32 bitcount_imm5` consumes one `UINT32` and pushes the logical right-shifted `UINT32` result
+- `SHL_U32 bitcount_imm5` consumes one `UINT32` and pushes the left-shifted `UINT32` result
+- bit indices above `31` and shift counts above `31` must fault deterministically rather than masking silently
+
+Validation targets:
+
+- increment a `UINT32` counter on `R_TRIG input1`
+- wrap the counter from `255` back to `0`
+- drive `output1` from bit `0` through `output8` from bit `7`
+- verify that a stable high input does not retrigger the count and does not corrupt the exposed bit pattern
+
 Candidate follow-on after Stage 10:
 
 - wider diagnostics such as `TRACE` or `ASSERT`
 - heavier arithmetic such as `MUL`, `DIV`, and modulo
+- bit utilities such as `TEST_BIT_U32`, `U32_AND`, and narrow shifts for packed status decoding
 - float support if a concrete process-control need justifies the cost
 
 ### Deferred Beyond Step 2 Core
