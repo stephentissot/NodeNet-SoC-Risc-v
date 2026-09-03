@@ -22,8 +22,8 @@ enum PlcObjectSymbolFlagsV1 : uint8_t {
 };
 
 enum PlcObjectRelocationKindV1 : uint8_t {
-    kPlcRelocationPointIndexU16Le = 0u,
-    kPlcRelocationPointIndexU32Le = 1u,
+    kPlcRelocationPointStateIndexU16Le = 0u,
+    kPlcRelocationPointStateValueOffsetU32Le = 1u,
 };
 
 enum PlcObjectLinkStatusV1 : uint8_t {
@@ -174,10 +174,6 @@ public:
             result.status = kPlcObjectParseRelocationTableOutOfRange;
             return result;
         }
-        if (header->runtime_header_addr != kPlcRuntimeHeaderAddr) {
-            result.status = kPlcObjectParseBadVersion;
-            return result;
-        }
         const uint32_t payload_checksum = checksum32(object_file_bytes + code_offset,
                                                      static_cast<size_t>(header->total_size) - code_offset);
         if (payload_checksum != header->object_checksum) {
@@ -280,7 +276,9 @@ public:
 
             applyRelocation(linked_code_out + relocation.code_offset,
                             relocation.relocation_kind,
-                            link_result.runtime_point_index);
+                            relocation.relocation_kind == kPlcRelocationPointStateIndexU16Le
+                                ? static_cast<uint32_t>(link_result.point_state_index)
+                                : link_result.point_state_value_offset);
             ++result.resolved_relocation_count;
         }
 
@@ -297,26 +295,36 @@ private:
     {
         const size_t catalog_index = catalog.findIndex(symbol.point_id);
         if (catalog_index >= catalog.size()) {
-            return {kPlcRuntimeLinkNotFound, PlcRuntimePublisherV1::kInvalidPointIndex, kPlcRuntimeTypeInvalid, 0u};
+            return {kPlcRuntimeLinkNotFound,
+                PlcRuntimePublisherV1::kInvalidPointStateIndex,
+                0u,
+                kPlcRuntimeTypeInvalid,
+                0u};
         }
 
         const PointDefinition& definition = catalog.entries()[catalog_index];
         if (static_cast<uint8_t>(definition.value_type) != symbol.expected_type) {
             return {kPlcRuntimeLinkTypeMismatch,
-                    PlcRuntimePublisherV1::kInvalidPointIndex,
+                PlcRuntimePublisherV1::kInvalidPointStateIndex,
+                0u,
                     kPlcRuntimeTypeInvalid,
                     0u};
         }
 
-        const uint16_t runtime_index = publisher.runtimeIndexForCatalogIndex(catalog_index);
-        if (runtime_index == PlcRuntimePublisherV1::kInvalidPointIndex) {
+        const uint16_t point_state_index = publisher.pointStateIndexForCatalogIndex(catalog_index);
+        if (point_state_index == PlcRuntimePublisherV1::kInvalidPointStateIndex) {
             return {kPlcRuntimeLinkUnsupportedPointType,
-                    PlcRuntimePublisherV1::kInvalidPointIndex,
+                PlcRuntimePublisherV1::kInvalidPointStateIndex,
+                0u,
                     kPlcRuntimeTypeInvalid,
                     0u};
         }
 
-        return {kPlcRuntimeLinkResolved, runtime_index, kPlcRuntimeTypeInvalid, 0u};
+        return {kPlcRuntimeLinkResolved,
+            point_state_index,
+            publisher.pointStateValueOffsetForCatalogIndex(catalog_index),
+            kPlcRuntimeTypeInvalid,
+            0u};
     }
 
     static bool resolveSymbolRecord(const PointCatalog& catalog,
@@ -409,27 +417,27 @@ private:
     static size_t relocationPatchSize(uint8_t relocation_kind)
     {
         switch (relocation_kind) {
-        case kPlcRelocationPointIndexU16Le:
+        case kPlcRelocationPointStateIndexU16Le:
             return 2u;
-        case kPlcRelocationPointIndexU32Le:
+        case kPlcRelocationPointStateValueOffsetU32Le:
             return 4u;
         default:
             return 0u;
         }
     }
 
-    static void applyRelocation(uint8_t* dst, uint8_t relocation_kind, uint16_t runtime_point_index)
+    static void applyRelocation(uint8_t* dst, uint8_t relocation_kind, uint32_t patch_value)
     {
         switch (relocation_kind) {
-        case kPlcRelocationPointIndexU16Le:
-            dst[0] = static_cast<uint8_t>(runtime_point_index & 0xFFu);
-            dst[1] = static_cast<uint8_t>((runtime_point_index >> 8) & 0xFFu);
+        case kPlcRelocationPointStateIndexU16Le:
+            dst[0] = static_cast<uint8_t>(patch_value & 0xFFu);
+            dst[1] = static_cast<uint8_t>((patch_value >> 8) & 0xFFu);
             break;
-        case kPlcRelocationPointIndexU32Le:
-            dst[0] = static_cast<uint8_t>(runtime_point_index & 0xFFu);
-            dst[1] = static_cast<uint8_t>((runtime_point_index >> 8) & 0xFFu);
-            dst[2] = 0u;
-            dst[3] = 0u;
+        case kPlcRelocationPointStateValueOffsetU32Le:
+            dst[0] = static_cast<uint8_t>(patch_value & 0xFFu);
+            dst[1] = static_cast<uint8_t>((patch_value >> 8) & 0xFFu);
+            dst[2] = static_cast<uint8_t>((patch_value >> 16) & 0xFFu);
+            dst[3] = static_cast<uint8_t>((patch_value >> 24) & 0xFFu);
             break;
         default:
             break;

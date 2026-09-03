@@ -38,6 +38,12 @@ namespace BigSisterNodeNet.Plc
         SlotVarPrivate = 1 << 0,
     }
 
+    public enum PlcObjectRelocationKind : byte
+    {
+        PointStateIndexU16Le = 0,
+        PointStateValueOffsetU32Le = 1,
+    }
+
     public sealed class PlcObjectFileOptions
     {
         public ushort AbiVersion { get; set; } = 1;
@@ -45,7 +51,7 @@ namespace BigSisterNodeNet.Plc
         public uint EntryOffset { get; set; } = 0;
         public uint MaxInstructionsPerScan { get; set; } = 200;
         public uint MaxScanTimeUs { get; set; } = 10000;
-        public uint RuntimeHeaderAddress { get; set; } = 0x20100000u;
+        public uint RuntimeHeaderAddress { get; set; } = 0u;
         public IDictionary<string, string> PointBindings { get; set; } = new Dictionary<string, string>(StringComparer.Ordinal);
     }
 

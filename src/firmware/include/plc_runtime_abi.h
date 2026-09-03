@@ -12,23 +12,13 @@ static constexpr uint32_t kPlcRuntimeAbiV1Magic = 0x31564D50u;
 static constexpr uint16_t kPlcRuntimeAbiV1Version = 1u;
 static constexpr uint32_t kPlcRuntimeHeaderAddr = SDRAM_BASE + 0x00100000u;
 static constexpr uint32_t kPlcRuntimeDescriptorBase = SDRAM_BASE + 0x00100100u;
-static constexpr uint32_t kPlcRuntimeValueBase = SDRAM_BASE + 0x00110000u;
-static constexpr uint32_t kPlcRuntimeStatusBase = SDRAM_BASE + 0x00120000u;
-static constexpr uint32_t kPlcRuntimeWriteQueueBase = SDRAM_BASE + 0x00171000u;
 static constexpr uint32_t kPlcRuntimeDescriptorWindowSize = 0x00010000u;
-static constexpr uint32_t kPlcRuntimeValueWindowSize = 0x00010000u;
-static constexpr uint32_t kPlcRuntimeStatusWindowSize = 0x00010000u;
-static constexpr uint32_t kPlcRuntimeWriteQueueWindowSize = 0x00001000u;
 static constexpr uint32_t kPlcSharedPointStateBase = SDRAM_POINT_STATE_BASE;
 static constexpr uint32_t kPlcSharedPointStateStride = static_cast<uint32_t>(sizeof(PointState));
 static constexpr uint32_t kPlcSharedPointStateValueOffset = static_cast<uint32_t>(offsetof(PointState, value));
 static constexpr uint32_t kPlcSharedPointStateQualityOffset = static_cast<uint32_t>(offsetof(PointState, quality));
 static constexpr uint32_t kPlcSharedPointStateLastUpdateOffset = static_cast<uint32_t>(offsetof(PointState, last_update_ms));
 static constexpr uint32_t kPlcSharedPointStateLastGoodUpdateOffset = static_cast<uint32_t>(offsetof(PointState, last_good_update_ms));
-
-enum PlcRuntimeHeaderFlagsV1 : uint16_t {
-    kPlcRuntimeHeaderFlagWriteQueue = 1u << 0,
-};
 
 enum PlcRuntimeValueTypeV1 : uint8_t {
     kPlcRuntimeTypeInvalid = 0u,
@@ -74,25 +64,13 @@ enum PlcRuntimeLinkStatusV1 : uint8_t {
 
 #pragma pack(push, 1)
 struct PlcPointDescriptorV1 {
-    uint16_t point_index;
+    uint16_t point_state_index;
     uint8_t value_type;
     uint8_t flags;
-    uint32_t value_offset;
-    uint32_t status_offset;
+    uint32_t point_state_value_offset;
+    uint32_t point_state_quality_offset;
     uint32_t reserved0;
     uint32_t reserved1;
-};
-
-struct PlcPointValueV1 {
-    uint32_t raw0;
-    uint32_t raw1;
-};
-
-struct PlcPointStatusV1 {
-    uint32_t quality;
-    uint32_t last_update_ms;
-    uint32_t last_writer;
-    uint32_t flags;
 };
 
 struct PlcRuntimeHeaderV1 {
@@ -101,25 +79,14 @@ struct PlcRuntimeHeaderV1 {
     uint16_t flags;
     uint32_t descriptor_count;
     uint32_t descriptor_base;
-    uint32_t value_base;
-    uint32_t status_base;
+    uint32_t point_state_base;
+    uint32_t point_state_stride;
     uint32_t store_epoch;
-};
-
-struct PlcRuntimeWriteQueueV1 {
-    uint32_t head;
-    uint32_t tail;
-    uint32_t overflow_count;
-    uint32_t indices[PointCatalog::kMaxPoints];
 };
 #pragma pack(pop)
 
 static_assert(sizeof(PlcPointDescriptorV1) == 20u, "Unexpected descriptor size");
-static_assert(sizeof(PlcPointValueV1) == 8u, "Unexpected value size");
-static_assert(sizeof(PlcPointStatusV1) == 16u, "Unexpected status size");
 static_assert(sizeof(PlcRuntimeHeaderV1) == 28u, "Unexpected header size");
-static_assert(sizeof(PlcRuntimeWriteQueueV1) <= kPlcRuntimeWriteQueueWindowSize,
-              "Runtime write queue exceeds reserved SDRAM window");
 static_assert(kPlcSharedPointStateStride == sizeof(PointState), "PointState stride mismatch");
 static_assert(kPlcSharedPointStateValueOffset == 0u, "PointState value must stay at offset 0");
 static_assert((kPlcSharedPointStateQualityOffset & 0x3u) == 0u,
@@ -131,8 +98,7 @@ static_assert((kPlcSharedPointStateLastGoodUpdateOffset & 0x3u) == 0u,
 
 class PlcRuntimePublisherV1 {
 public:
-    static constexpr uint16_t kInvalidPointIndex = 0xFFFFu;
-    static constexpr size_t kInvalidCatalogIndex = PointCatalog::kMaxPoints;
+    static constexpr uint16_t kInvalidPointStateIndex = 0xFFFFu;
 
     static constexpr uint32_t sharedPointStateRecordOffset(size_t catalog_index)
     {
@@ -142,7 +108,7 @@ public:
     struct ResolveResult {
         bool found;
         bool published;
-        uint16_t runtime_point_index;
+        uint16_t point_state_index;
     };
 
     struct LinkRequest {
@@ -153,7 +119,8 @@ public:
 
     struct LinkResult {
         PlcRuntimeLinkStatusV1 status;
-        uint16_t runtime_point_index;
+        uint16_t point_state_index;
+        uint32_t point_state_value_offset;
         uint8_t runtime_value_type;
         uint8_t descriptor_flags;
     };
@@ -163,15 +130,12 @@ public:
     bool begin()
     {
         ready_ = regionAvailable();
-        if (!ready_) {
-            return false;
-        }
-
-        for (size_t i = 0; i < PointCatalog::kMaxPoints; ++i) {
-            catalog_to_runtime_[i] = kInvalidPointIndex;
-        }
-        resetWriteQueue();
-        return true;
+        header_written_ = false;
+        published_count_ = 0u;
+        skipped_count_ = 0u;
+        definition_hash_ = 0u;
+        store_epoch_ = 0u;
+        return ready_;
     }
 
     bool ready() const
@@ -199,94 +163,75 @@ public:
         return header_written_;
     }
 
-    uint16_t runtimeIndexForCatalogIndex(size_t catalog_index) const
+    uint16_t pointStateIndexForCatalogIndex(size_t catalog_index) const
     {
-        if (catalog_index >= PointCatalog::kMaxPoints) {
-            return kInvalidPointIndex;
+        if (!ready_ || catalog_index >= PointCatalog::kMaxPoints) {
+            return kInvalidPointStateIndex;
         }
-        return catalog_to_runtime_[catalog_index];
+        return static_cast<uint16_t>(catalog_index);
     }
 
-    uint16_t runtimeIndexForIdentity(const PointCatalog& catalog, const PointIdentity& id) const
+    uint16_t pointStateIndexForIdentity(const PointCatalog& catalog, const PointIdentity& id) const
     {
         const size_t catalog_index = catalog.findIndex(id);
         if (catalog_index >= catalog.size()) {
-            return kInvalidPointIndex;
+            return kInvalidPointStateIndex;
         }
-        return runtimeIndexForCatalogIndex(catalog_index);
+        return pointStateIndexForCatalogIndex(catalog_index);
     }
 
-    size_t catalogIndexForRuntimeIndex(uint16_t runtime_index) const
+    uint32_t pointStateValueOffsetForCatalogIndex(size_t catalog_index) const
     {
-        if (runtime_index >= PointCatalog::kMaxPoints) {
-            return kInvalidCatalogIndex;
+        if (!ready_ || catalog_index >= PointCatalog::kMaxPoints) {
+            return 0u;
         }
-        return runtime_to_catalog_[runtime_index];
-    }
-
-    uint32_t runtimeWriteQueueOverflowCount() const
-    {
-        return ready_ ? writeQueuePtr()->overflow_count : 0u;
-    }
-
-    bool popRuntimeWriteIndex(uint16_t& runtime_index_out) const
-    {
-        if (!ready_) {
-            return false;
-        }
-
-        volatile PlcRuntimeWriteQueueV1* queue = writeQueuePtr();
-        const uint32_t head = queue->head;
-        const uint32_t tail = queue->tail;
-        if (head == tail) {
-            return false;
-        }
-
-        runtime_index_out = static_cast<uint16_t>(queue->indices[head % PointCatalog::kMaxPoints] & 0xFFFFu);
-        queue->head = (head + 1u) % PointCatalog::kMaxPoints;
-        return true;
+        return sharedPointStateRecordOffset(catalog_index);
     }
 
     ResolveResult resolvePoint(const PointCatalog& catalog, const PointIdentity& id) const
     {
         const size_t catalog_index = catalog.findIndex(id);
         if (catalog_index >= catalog.size()) {
-            return {false, false, kInvalidPointIndex};
+            return {false, false, kInvalidPointStateIndex};
         }
 
-        const uint16_t runtime_index = runtimeIndexForCatalogIndex(catalog_index);
-        return {true, runtime_index != kInvalidPointIndex, runtime_index};
+        const uint16_t point_state_index = pointStateIndexForCatalogIndex(catalog_index);
+        return {true, point_state_index != kInvalidPointStateIndex, point_state_index};
     }
 
     LinkResult resolveLinkRequest(const PointCatalog& catalog, const LinkRequest& request) const
     {
         const size_t catalog_index = catalog.findIndex(request.point_id);
         if (catalog_index >= catalog.size()) {
-            return {kPlcRuntimeLinkNotFound, kInvalidPointIndex, kPlcRuntimeTypeInvalid, 0u};
+            return {kPlcRuntimeLinkNotFound, kInvalidPointStateIndex, 0u, kPlcRuntimeTypeInvalid, 0u};
         }
 
         const PointDefinition& definition = catalog.entries()[catalog_index];
         const uint8_t actual_type = mapValueType(definition.value_type);
         if (actual_type == kPlcRuntimeTypeInvalid) {
-            return {kPlcRuntimeLinkUnsupportedPointType, kInvalidPointIndex, kPlcRuntimeTypeInvalid, 0u};
+            return {kPlcRuntimeLinkUnsupportedPointType, kInvalidPointStateIndex, 0u, kPlcRuntimeTypeInvalid, 0u};
         }
 
         const uint8_t expected_type = mapValueType(request.expected_type);
         if (expected_type == kPlcRuntimeTypeInvalid || expected_type != actual_type) {
-            return {kPlcRuntimeLinkTypeMismatch, kInvalidPointIndex, actual_type, mapFlags(definition)};
+            return {kPlcRuntimeLinkTypeMismatch, kInvalidPointStateIndex, 0u, actual_type, mapFlags(definition)};
         }
 
         const uint8_t flags = mapFlags(definition);
         if (!accessAllowed(flags, request.access)) {
-            return {kPlcRuntimeLinkAccessDenied, kInvalidPointIndex, actual_type, flags};
+            return {kPlcRuntimeLinkAccessDenied, kInvalidPointStateIndex, 0u, actual_type, flags};
         }
 
-        const uint16_t runtime_index = runtimeIndexForCatalogIndex(catalog_index);
-        if (runtime_index == kInvalidPointIndex) {
-            return {kPlcRuntimeLinkUnsupportedPointType, kInvalidPointIndex, actual_type, flags};
+        const uint16_t point_state_index = pointStateIndexForCatalogIndex(catalog_index);
+        if (point_state_index == kInvalidPointStateIndex) {
+            return {kPlcRuntimeLinkUnsupportedPointType, kInvalidPointStateIndex, 0u, actual_type, flags};
         }
 
-        return {kPlcRuntimeLinkResolved, runtime_index, actual_type, flags};
+        return {kPlcRuntimeLinkResolved,
+                point_state_index,
+                pointStateValueOffsetForCatalogIndex(catalog_index),
+                actual_type,
+                flags};
     }
 
     PlcRuntimeHeaderV1 headerSnapshot() const
@@ -294,11 +239,11 @@ public:
         PlcRuntimeHeaderV1 header = {};
         header.magic = kPlcRuntimeAbiV1Magic;
         header.version = kPlcRuntimeAbiV1Version;
-        header.flags = kPlcRuntimeHeaderFlagWriteQueue;
+        header.flags = 0u;
         header.descriptor_count = published_count_;
         header.descriptor_base = kPlcRuntimeDescriptorBase;
-        header.value_base = kPlcRuntimeValueBase;
-        header.status_base = kPlcRuntimeStatusBase;
+        header.point_state_base = kPlcSharedPointStateBase;
+        header.point_state_stride = kPlcSharedPointStateStride;
         header.store_epoch = store_epoch_;
         return header;
     }
@@ -309,23 +254,16 @@ public:
             return false;
         }
 
-        PointCatalog& mutable_catalog = const_cast<PointCatalog&>(catalog);
-        const uint32_t current_definition_hash = hashCatalogDefinitions(catalog);
-        if (!header_written_ ||
-            mutable_catalog.runtimeFullSyncRequired() ||
-            current_definition_hash != definition_hash_ ||
-            !descriptorMappingComplete(catalog)) {
+        const uint32_t next_hash = hashCatalogDefinitions(catalog);
+        if (!header_written_ || next_hash != definition_hash_) {
             rebuildDescriptors(catalog);
-            definition_hash_ = current_definition_hash;
-            ++store_epoch_;
-            writeHeader();
+            definition_hash_ = next_hash;
+            store_epoch_ += 1u;
             header_written_ = true;
-            syncValuesAndStatus(catalog, now_ms);
-            mutable_catalog.acknowledgeRuntimeFullSync();
-            return true;
         }
 
-        syncDirtyValuesAndStatus(mutable_catalog, now_ms);
+        (void)now_ms;
+        writeHeader();
         return true;
     }
 
@@ -339,8 +277,6 @@ private:
     bool header_written_ = false;
     uint16_t published_count_ = 0u;
     uint16_t skipped_count_ = 0u;
-    uint16_t catalog_to_runtime_[PointCatalog::kMaxPoints] = {};
-    size_t runtime_to_catalog_[PointCatalog::kMaxPoints] = {};
     uint32_t definition_hash_ = 0u;
     uint32_t store_epoch_ = 0u;
     static volatile PlcRuntimeHeaderV1* headerPtr()
@@ -353,42 +289,11 @@ private:
         return reinterpret_cast<volatile PlcPointDescriptorV1*>(static_cast<uintptr_t>(kPlcRuntimeDescriptorBase));
     }
 
-    static volatile PlcPointValueV1* valuePtr()
-    {
-        return reinterpret_cast<volatile PlcPointValueV1*>(static_cast<uintptr_t>(kPlcRuntimeValueBase));
-    }
-
-    static volatile PlcPointStatusV1* statusPtr()
-    {
-        return reinterpret_cast<volatile PlcPointStatusV1*>(static_cast<uintptr_t>(kPlcRuntimeStatusBase));
-    }
-
-    static volatile PlcRuntimeWriteQueueV1* writeQueuePtr()
-    {
-        return reinterpret_cast<volatile PlcRuntimeWriteQueueV1*>(static_cast<uintptr_t>(kPlcRuntimeWriteQueueBase));
-    }
-
     static bool regionAvailable()
     {
-        const uintptr_t sdram_end = reinterpret_cast<uintptr_t>(&_sdram_end);
         const uintptr_t sdram_limit = static_cast<uintptr_t>(SDRAM_BASE + SDRAM_SIZE);
-        const uintptr_t status_limit = static_cast<uintptr_t>(kPlcRuntimeStatusBase + kPlcRuntimeStatusWindowSize);
-        return sdram_end <= static_cast<uintptr_t>(kPlcRuntimeHeaderAddr) &&
-               static_cast<uintptr_t>(kPlcRuntimeDescriptorBase + kPlcRuntimeDescriptorWindowSize) <= sdram_limit &&
-               static_cast<uintptr_t>(kPlcRuntimeValueBase + kPlcRuntimeValueWindowSize) <= sdram_limit &&
-               status_limit <= sdram_limit &&
-               static_cast<uintptr_t>(kPlcRuntimeWriteQueueBase + kPlcRuntimeWriteQueueWindowSize) <= sdram_limit;
-    }
-
-    static void resetWriteQueue()
-    {
-        volatile PlcRuntimeWriteQueueV1* queue = writeQueuePtr();
-        queue->head = 0u;
-        queue->tail = 0u;
-        queue->overflow_count = 0u;
-        for (size_t index = 0u; index < PointCatalog::kMaxPoints; ++index) {
-            queue->indices[index] = kInvalidPointIndex;
-        }
+        return static_cast<uintptr_t>(kPlcSharedPointStateBase +
+                                      (kPlcSharedPointStateStride * PointCatalog::kMaxPoints)) <= sdram_limit;
     }
 
     static uint32_t fnv1aAppend(uint32_t hash, const void* data, size_t len)
@@ -426,22 +331,6 @@ private:
     static bool isSupported(PointValueType value_type)
     {
         return mapValueType(value_type) != kPlcRuntimeTypeInvalid;
-    }
-
-    bool descriptorMappingComplete(const PointCatalog& catalog) const
-    {
-        const PointDefinition* definitions = catalog.entries();
-        for (size_t index = 0u; index < catalog.size(); ++index) {
-            if (!shouldPublishDefinition(definitions[index])) {
-                continue;
-            }
-
-            if (catalog_to_runtime_[index] == kInvalidPointIndex) {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     static bool stringsEqual(const char* lhs, const char* rhs)
@@ -483,10 +372,15 @@ private:
             "state",
             "runEnabled",
             "status",
+            "pc",
             "cycleCounter",
             "faultCode",
             "faultInfo",
             "bytecodeSize",
+            "loadEpoch",
+            "objectSize",
+            "objectChecksum",
+            "linkedChecksum",
             "source",
             "programType",
             "paramsSummary",
@@ -576,82 +470,15 @@ private:
         return flags;
     }
 
-    static bool usesSharedPointState(PointValueType value_type)
-    {
-        switch (value_type) {
-        case PointValueType::Bool:
-        case PointValueType::Uint16:
-        case PointValueType::Int16:
-        case PointValueType::Uint32:
-        case PointValueType::Int32:
-        case PointValueType::Enum:
-            return true;
-        default:
-            return false;
-        }
-    }
-
-    static uint32_t mapLastWriter(const PointDefinition& definition)
-    {
-        switch (definition.backend) {
-        case PointBackend::Modbus:
-            return kPlcRuntimeWriterFieldbus;
-        case PointBackend::NodeNet:
-            return kPlcRuntimeWriterNodeNet;
-        case PointBackend::Local:
-        default:
-            return kPlcRuntimeWriterCpu;
-        }
-    }
-
-    static uint32_t encodeValueRaw0(PointValueType value_type, const PointState& state)
-    {
-        switch (value_type) {
-        case PointValueType::Bool:
-            return state.value.b ? 1u : 0u;
-        case PointValueType::Uint16:
-            return static_cast<uint32_t>(state.value.u16);
-        case PointValueType::Int16:
-            return static_cast<uint32_t>(static_cast<int32_t>(state.value.i16));
-        case PointValueType::Uint32:
-            return state.value.u32;
-        case PointValueType::Int32:
-            return static_cast<uint32_t>(state.value.i32);
-        case PointValueType::Float: {
-            uint32_t raw = 0u;
-            std::memcpy(&raw, &state.value.f32, sizeof(raw));
-            return raw;
-        }
-        case PointValueType::Enum:
-            return static_cast<uint32_t>(state.value.enum_value);
-        default:
-            return 0u;
-        }
-    }
-
     static void writeDescriptor(volatile PlcPointDescriptorV1& dst, const PlcPointDescriptorV1& src)
     {
-        dst.point_index = src.point_index;
+        dst.point_state_index = src.point_state_index;
         dst.value_type = src.value_type;
         dst.flags = src.flags;
-        dst.value_offset = src.value_offset;
-        dst.status_offset = src.status_offset;
+        dst.point_state_value_offset = src.point_state_value_offset;
+        dst.point_state_quality_offset = src.point_state_quality_offset;
         dst.reserved0 = src.reserved0;
         dst.reserved1 = src.reserved1;
-    }
-
-    static void writeValue(volatile PlcPointValueV1& dst, const PlcPointValueV1& src)
-    {
-        dst.raw0 = src.raw0;
-        dst.raw1 = src.raw1;
-    }
-
-    static void writeStatus(volatile PlcPointStatusV1& dst, const PlcPointStatusV1& src)
-    {
-        dst.quality = src.quality;
-        dst.last_update_ms = src.last_update_ms;
-        dst.last_writer = src.last_writer;
-        dst.flags = src.flags;
     }
 
     static void writeHeaderFields(volatile PlcRuntimeHeaderV1& dst, const PlcRuntimeHeaderV1& src)
@@ -661,8 +488,8 @@ private:
         dst.flags = src.flags;
         dst.descriptor_count = src.descriptor_count;
         dst.descriptor_base = src.descriptor_base;
-        dst.value_base = src.value_base;
-        dst.status_base = src.status_base;
+        dst.point_state_base = src.point_state_base;
+        dst.point_state_stride = src.point_state_stride;
         dst.store_epoch = src.store_epoch;
     }
 
@@ -673,10 +500,6 @@ private:
         const size_t count = catalog.size();
         for (size_t i = 0; i < count; ++i) {
             const PointDefinition& definition = definitions[i];
-            if (!shouldPublishDefinition(definition)) {
-                continue;
-            }
-
             hash = fnv1aAppend(hash, definition.id.device_id, sizeof(definition.id.device_id));
             hash = fnv1aAppend(hash, definition.id.feature, sizeof(definition.id.feature));
             hash = fnv1aAppend(hash, definition.id.point_id, sizeof(definition.id.point_id));
@@ -691,99 +514,25 @@ private:
     {
         volatile PlcPointDescriptorV1* descriptors = descriptorPtr();
         const PointDefinition* definitions = catalog.entries();
-        published_count_ = 0u;
+        published_count_ = static_cast<uint16_t>(catalog.size());
         skipped_count_ = 0u;
 
         for (size_t i = 0; i < PointCatalog::kMaxPoints; ++i) {
-            catalog_to_runtime_[i] = kInvalidPointIndex;
-            runtime_to_catalog_[i] = kInvalidCatalogIndex;
+            PlcPointDescriptorV1 empty = {};
+            writeDescriptor(descriptors[i], empty);
         }
-        resetWriteQueue();
 
         for (size_t i = 0; i < catalog.size(); ++i) {
             const PointDefinition& definition = definitions[i];
-            if (!shouldPublishDefinition(definition)) {
-                ++skipped_count_;
-                continue;
-            }
-
             PlcPointDescriptorV1 descriptor = {};
-            descriptor.point_index = published_count_;
+            descriptor.point_state_index = static_cast<uint16_t>(i);
             descriptor.value_type = mapValueType(definition.value_type);
             descriptor.flags = mapFlags(definition);
-            descriptor.value_offset = sharedPointStateRecordOffset(i);
-            descriptor.status_offset = usesSharedPointState(definition.value_type)
-                                           ? 0u
-                                           : (published_count_ * static_cast<uint32_t>(sizeof(PlcPointStatusV1)));
+            descriptor.point_state_value_offset = sharedPointStateRecordOffset(i);
+            descriptor.point_state_quality_offset = sharedPointStateRecordOffset(i) + kPlcSharedPointStateQualityOffset;
 
-            writeDescriptor(descriptors[published_count_], descriptor);
-            catalog_to_runtime_[i] = published_count_;
-            runtime_to_catalog_[published_count_] = i;
-            ++published_count_;
+            writeDescriptor(descriptors[i], descriptor);
         }
-    }
-
-    void syncValuesAndStatus(const PointCatalog& catalog, uint32_t now_ms)
-    {
-        const PointDefinition* definitions = catalog.entries();
-        const PointState* states = catalog.states();
-
-        for (size_t i = 0; i < catalog.size(); ++i) {
-            const uint16_t runtime_index = catalog_to_runtime_[i];
-            if (runtime_index == kInvalidPointIndex || runtime_index >= published_count_) {
-                continue;
-            }
-
-            if (usesSharedPointState(definitions[i].value_type)) {
-                continue;
-            }
-
-            syncPointValueAndStatus(definitions[i], states[i], runtime_index, now_ms);
-        }
-    }
-
-    void syncDirtyValuesAndStatus(PointCatalog& catalog, uint32_t now_ms)
-    {
-        size_t catalog_index = 0u;
-        while (catalog.popDirtyStateIndex(catalog_index)) {
-            if (catalog_index >= catalog.size()) {
-                continue;
-            }
-
-            const uint16_t runtime_index = catalog_to_runtime_[catalog_index];
-            if (runtime_index == kInvalidPointIndex || runtime_index >= published_count_) {
-                continue;
-            }
-
-            const PointDefinition& definition = catalog.entries()[catalog_index];
-            if (usesSharedPointState(definition.value_type)) {
-                continue;
-            }
-
-            const PointState& state = catalog.states()[catalog_index];
-            syncPointValueAndStatus(definition, state, runtime_index, now_ms);
-        }
-    }
-
-    void syncPointValueAndStatus(const PointDefinition& definition,
-                                 const PointState& state,
-                                 uint16_t runtime_index,
-                                 uint32_t now_ms)
-    {
-        volatile PlcPointValueV1* values = valuePtr();
-        volatile PlcPointStatusV1* statuses = statusPtr();
-
-        PlcPointValueV1 value = {};
-        value.raw0 = encodeValueRaw0(definition.value_type, state);
-        value.raw1 = 0u;
-        writeValue(values[runtime_index], value);
-
-        PlcPointStatusV1 status = {};
-        status.quality = static_cast<uint32_t>(state.quality);
-        status.last_update_ms = state.last_update_ms != 0u ? state.last_update_ms : now_ms;
-        status.last_writer = mapLastWriter(definition);
-        status.flags = 0u;
-        writeStatus(statuses[runtime_index], status);
     }
 
     void writeHeader()
@@ -791,11 +540,11 @@ private:
         PlcRuntimeHeaderV1 header = {};
         header.magic = kPlcRuntimeAbiV1Magic;
         header.version = kPlcRuntimeAbiV1Version;
-        header.flags = kPlcRuntimeHeaderFlagWriteQueue;
+        header.flags = 0u;
         header.descriptor_count = published_count_;
         header.descriptor_base = kPlcRuntimeDescriptorBase;
-        header.value_base = kPlcRuntimeValueBase;
-        header.status_base = kPlcRuntimeStatusBase;
+        header.point_state_base = kPlcSharedPointStateBase;
+        header.point_state_stride = kPlcSharedPointStateStride;
         header.store_epoch = store_epoch_;
         writeHeaderFields(*headerPtr(), header);
     }

@@ -325,7 +325,8 @@ namespace BigSisterNodeNet.Plc
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Bool,
-                                                 PlcRuntimeLinkAccess.Read);
+                                                 PlcRuntimeLinkAccess.Read,
+                                                 PlcObjectRelocationKind.PointStateValueOffsetU32Le);
                             break;
 
                         case "STORE_BOOL":
@@ -339,7 +340,8 @@ namespace BigSisterNodeNet.Plc
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Bool,
-                                                 PlcRuntimeLinkAccess.Write);
+                                                 PlcRuntimeLinkAccess.Write,
+                                                 PlcObjectRelocationKind.PointStateValueOffsetU32Le);
                             break;
 
                         case "LOAD_I16":
@@ -351,7 +353,8 @@ namespace BigSisterNodeNet.Plc
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Int16,
-                                                 PlcRuntimeLinkAccess.Read);
+                                                 PlcRuntimeLinkAccess.Read,
+                                                 PlcObjectRelocationKind.PointStateValueOffsetU32Le);
                             break;
 
                         case "LOAD_U32":
@@ -363,7 +366,8 @@ namespace BigSisterNodeNet.Plc
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Uint32,
-                                                 PlcRuntimeLinkAccess.Read);
+                                                 PlcRuntimeLinkAccess.Read,
+                                                 PlcObjectRelocationKind.PointStateValueOffsetU32Le);
                             break;
 
                         case "LOAD_I32":
@@ -375,7 +379,8 @@ namespace BigSisterNodeNet.Plc
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Int32,
-                                                 PlcRuntimeLinkAccess.Read);
+                                                 PlcRuntimeLinkAccess.Read,
+                                                 PlcObjectRelocationKind.PointStateValueOffsetU32Le);
                             break;
 
                         case "LOAD_F32":
@@ -387,7 +392,8 @@ namespace BigSisterNodeNet.Plc
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Float,
-                                                 PlcRuntimeLinkAccess.Read);
+                                                 PlcRuntimeLinkAccess.Read,
+                                                 PlcObjectRelocationKind.PointStateValueOffsetU32Le);
                             break;
 
                         case "STORE_I16":
@@ -399,7 +405,8 @@ namespace BigSisterNodeNet.Plc
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Int16,
-                                                 PlcRuntimeLinkAccess.Write);
+                                                 PlcRuntimeLinkAccess.Write,
+                                                 PlcObjectRelocationKind.PointStateValueOffsetU32Le);
                             break;
 
                         case "STORE_U32":
@@ -411,7 +418,8 @@ namespace BigSisterNodeNet.Plc
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Uint32,
-                                                 PlcRuntimeLinkAccess.Write);
+                                                 PlcRuntimeLinkAccess.Write,
+                                                 PlcObjectRelocationKind.PointStateValueOffsetU32Le);
                             break;
 
                         case "STORE_I32":
@@ -423,7 +431,8 @@ namespace BigSisterNodeNet.Plc
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Int32,
-                                                 PlcRuntimeLinkAccess.Write);
+                                                 PlcRuntimeLinkAccess.Write,
+                                                 PlcObjectRelocationKind.PointStateValueOffsetU32Le);
                             break;
 
                         case "STORE_F32":
@@ -435,7 +444,8 @@ namespace BigSisterNodeNet.Plc
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Float,
-                                                 PlcRuntimeLinkAccess.Write);
+                                                 PlcRuntimeLinkAccess.Write,
+                                                 PlcObjectRelocationKind.PointStateValueOffsetU32Le);
                             break;
 
                         case "ADD":
@@ -545,7 +555,8 @@ namespace BigSisterNodeNet.Plc
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Bool,
-                                                 PlcRuntimeLinkAccess.Read);
+                                                 PlcRuntimeLinkAccess.Read,
+                                                 PlcObjectRelocationKind.PointStateIndexU16Le);
                             break;
 
                         case "F_TRIG":
@@ -557,7 +568,8 @@ namespace BigSisterNodeNet.Plc
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Bool,
-                                                 PlcRuntimeLinkAccess.Read);
+                                                 PlcRuntimeLinkAccess.Read,
+                                                 PlcObjectRelocationKind.PointStateIndexU16Le);
                             break;
 
                         case "TON_START":
@@ -689,7 +701,8 @@ namespace BigSisterNodeNet.Plc
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Int16,
-                                                 PlcRuntimeLinkAccess.ReadWrite);
+                                                 PlcRuntimeLinkAccess.ReadWrite,
+                                                 PlcObjectRelocationKind.PointStateValueOffsetU32Le);
                             break;
 
                         case "DEC_INT":
@@ -702,7 +715,8 @@ namespace BigSisterNodeNet.Plc
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Int16,
-                                                 PlcRuntimeLinkAccess.ReadWrite);
+                                                 PlcRuntimeLinkAccess.ReadWrite,
+                                                 PlcObjectRelocationKind.PointStateValueOffsetU32Le);
                             break;
 
                         case "DB":
@@ -798,20 +812,6 @@ namespace BigSisterNodeNet.Plc
                 case "VAR":
                     return 0;
                 case "PUSH_I16":
-                case "LOAD_U32":
-                case "STORE_U32":
-                case "LOAD_I32":
-                case "STORE_I32":
-                case "LOAD_F32":
-                case "STORE_F32":
-                case "LOAD_BOOL":
-                case "LOAD_POINT_BOOL":
-                case "LB":
-                case "STORE_BOOL":
-                case "STORE_POINT_BOOL":
-                case "SB":
-                case "LOAD_I16":
-                case "STORE_I16":
                 case "JMP":
                 case "JZ":
                 case "JNZ":
@@ -831,11 +831,26 @@ namespace BigSisterNodeNet.Plc
                 case "CTD_DONE":
                 case "CTD_VALUE":
                 case "CTD_RESET":
+                    return 3;
+                case "LOAD_U32":
+                case "STORE_U32":
+                case "LOAD_I32":
+                case "STORE_I32":
+                case "LOAD_F32":
+                case "STORE_F32":
+                case "LOAD_BOOL":
+                case "LOAD_POINT_BOOL":
+                case "LB":
+                case "STORE_BOOL":
+                case "STORE_POINT_BOOL":
+                case "SB":
+                case "LOAD_I16":
+                case "STORE_I16":
                 case "INC_INT":
                 case "INC":
                 case "DEC_INT":
                 case "DEC":
-                    return 3;
+                    return 5;
                 case "PUSH_U32":
                 case "PUSH_I32":
                 case "PUSH_F32":
@@ -1072,7 +1087,8 @@ namespace BigSisterNodeNet.Plc
                                                  PlcAssemblyResult result,
                                                  IDictionary<string, ushort> symbolIndexByName,
                                                  PlcValueType expectedType,
-                                                 PlcRuntimeLinkAccess access)
+                                                 PlcRuntimeLinkAccess access,
+                                                 PlcObjectRelocationKind relocationKind)
         {
             if (!symbolIndexByName.TryGetValue(symbolName, out var symbolIndex))
             {
@@ -1087,9 +1103,16 @@ namespace BigSisterNodeNet.Plc
             {
                 CodeOffset = (uint)output.Count,
                 SymbolIndex = symbolIndex,
-                RelocationKind = 0,
+                RelocationKind = (byte)relocationKind,
             });
-            WriteUInt16(output, 0);
+            if (relocationKind == PlcObjectRelocationKind.PointStateIndexU16Le)
+            {
+                WriteUInt16(output, 0);
+            }
+            else
+            {
+                WriteUInt32(output, 0u);
+            }
         }
 
         private static void ApplySymbolUsageType(PlcAssemblySymbol symbol, PlcValueType expectedType, int lineNumber)

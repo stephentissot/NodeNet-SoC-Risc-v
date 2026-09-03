@@ -13,6 +13,7 @@
 #include "NodeNetCommands.h"
 #include "PlcCore.h"
 #include "PointCatalog.h"
+#include "plc_loader_v1.h"
 #include "flash.h"
 #include "flashdb_port.h"
 
@@ -155,9 +156,15 @@ class NodeNetCore
         PointCatalog _pointCatalog;
         bool _pointCatalogAutosaveEnabled = true;
         bool _pointCatalogDirty = false;
-        uint32_t _lastPlcBuiltinPointPublishMs = 0u;
+        uint32_t _lastObservedPlcRuntimeStoreEpoch = 0u;
+        bool _pendingPlcRuntimeMapRefresh = false;
+        bool _pendingPlcRuntimeMapRestoreEngine = false;
         bool _persistedPlcEngineEnabled = false;
         uint32_t _persistedPlcSlotRunMask = 0u;
+        bool _plcBuiltinEngineSyncValid = false;
+        uint32_t _plcBuiltinEngineSyncSignature = 0u;
+        bool _plcBuiltinSlotSyncValid[kPlcSlotCountV1] = {};
+        uint32_t _plcBuiltinSlotSyncSignature[kPlcSlotCountV1] = {};
         MessageQueue<kInputQueueCapacity> _inputQueue;
         MessageQueue<kOutputQueueCapacity> _outputQueue;
         volatile bool _inputQueueOverflow = false;
@@ -343,5 +350,15 @@ class NodeNetCore
 
         // Refreshes built-in PLC points that come from slot status and runtime diagnostics.
         void publishBuiltinPlcPointStates(bool include_all_slots);
+        uint32_t plcBuiltinEngineSyncSignature() const;
+        uint32_t plcBuiltinSlotSyncSignature(uint16_t slot_id) const;
+        void syncPlcBuiltinEnginePointStatesIfChanged();
+        void syncPlcBuiltinSlotPointStatesIfChanged(uint16_t slot_id);
+        void syncPlcBuiltinEnginePointStates();
+        void syncPlcBuiltinSlotPointStates(uint16_t slot_id);
+        void syncPlcBuiltinRuntimeState();
+        void clearPlcSlotRuntimeDiagnostics();
+        void refreshLoadedMirrorProgramRuntimeMapsIfNeeded();
+        bool refreshMirrorProgramRuntimeMap(uint16_t slot_id, uint32_t runtime_store_epoch);
 
 };

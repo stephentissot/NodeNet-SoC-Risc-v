@@ -246,7 +246,7 @@ public:
         const uintptr_t control_block_limit = static_cast<uintptr_t>(slotControlBlockRegionBase() +
                                                                     (static_cast<uint32_t>(kPlcSlotCountV1) * sizeof(PlcProgramControlBlockV1)));
         return static_cast<uintptr_t>(kPlcSlotBytecodeRegionBaseV1) >=
-                   static_cast<uintptr_t>(kPlcRuntimeStatusBase + kPlcRuntimeStatusWindowSize) &&
+                   static_cast<uintptr_t>(kPlcRuntimeDescriptorBase + kPlcRuntimeDescriptorWindowSize) &&
                static_cast<uintptr_t>(kPlcSlotBytecodeRegionBaseV1 + kPlcSlotBytecodeRegionSizeV1) <= sdram_limit &&
                static_cast<uintptr_t>(kPlcSlotObjectRegionBaseV1 + kPlcSlotObjectRegionSizeV1) <= sdram_limit &&
                control_block_limit <= control_limit &&
@@ -375,6 +375,13 @@ public:
         auto* slot_manifest = reinterpret_cast<PlcSlotManifestV1*>(static_cast<uintptr_t>(slotManifestAddress(slot_id)));
         slot_manifest->params_base = layout.params_base;
         slot_manifest->params_size = params_size;
+        if (params_bytes != nullptr && params_size >= sizeof(PlcSlotParamsHeaderV1)) {
+            const auto* params_header = reinterpret_cast<const PlcSlotParamsHeaderV1*>(params_bytes);
+            if (params_header->magic == kPlcSlotParamsMagicV1 &&
+                params_header->version == kPlcRuntimeAbiV1Version) {
+                slot_manifest->load_epoch = params_header->load_epoch;
+            }
+        }
 
         auto* control_block = reinterpret_cast<PlcProgramControlBlockV1*>(static_cast<uintptr_t>(slotControlAddress(slot_id)));
         control_block->params_base = layout.params_base;
@@ -453,8 +460,7 @@ public:
             return result;
         }
 
-        if (parse_result.header.runtime_header_addr != kPlcRuntimeHeaderAddr ||
-            parse_result.header.abi_version != kPlcRuntimeAbiV1Version) {
+        if (parse_result.header.abi_version != kPlcRuntimeAbiV1Version) {
             result.status = kPlcSlotLoadAbiMismatch;
             return result;
         }
@@ -619,6 +625,13 @@ public:
         const uint8_t* src = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(slotObjectSnapshotDataAddress(slot_id)));
         std::memcpy(out, src + offset, copied_out);
         return true;
+    }
+
+    static bool stageObjectFileSnapshot(uint16_t slot_id,
+                                        const uint8_t* object_file_bytes,
+                                        uint32_t object_size)
+    {
+        return writeObjectFileSnapshot(slot_id, object_file_bytes, object_size);
     }
 
 private:
@@ -978,7 +991,7 @@ private:
                 return false;
             }
 
-            if (publisher.runtimeIndexForCatalogIndex(catalog_index) == PlcRuntimePublisherV1::kInvalidPointIndex) {
+            if (publisher.pointStateIndexForCatalogIndex(catalog_index) == PlcRuntimePublisherV1::kInvalidPointStateIndex) {
                 return false;
             }
         }
@@ -1026,7 +1039,7 @@ private:
                                             SymbolReader read_symbol)
     {
         PointCatalog& mutable_catalog = const_cast<PointCatalog&>(catalog);
-        PointDefinition* expected_definitions = PointCatalog::slotVariableDefinitionScratch();
+        PointDefinition* expected_definitions = PointCatalog::slotVariableDefinitionScratch(symbol_count);
         if (expected_definitions == nullptr) {
             return false;
         }
@@ -1066,7 +1079,7 @@ private:
 
             const size_t runtime_catalog_index = catalog.findIndex(expected.id);
             if (runtime_catalog_index >= catalog.size() ||
-                publisher.runtimeIndexForCatalogIndex(runtime_catalog_index) == PlcRuntimePublisherV1::kInvalidPointIndex) {
+                publisher.pointStateIndexForCatalogIndex(runtime_catalog_index) == PlcRuntimePublisherV1::kInvalidPointStateIndex) {
                 needs_publish = true;
             }
         }
@@ -1266,10 +1279,15 @@ private:
             "state",
             "runEnabled",
             "status",
+            "pc",
             "cycleCounter",
             "faultCode",
             "faultInfo",
             "bytecodeSize",
+            "loadEpoch",
+            "objectSize",
+            "objectChecksum",
+            "linkedChecksum",
             "source",
             "programType",
             "paramsSummary",
@@ -1313,8 +1331,7 @@ private:
     {
         if (header.magic != kPlcObjectFileMagicV1 ||
             header.version != kPlcObjectFileVersionV1 ||
-            header.abi_version != kPlcRuntimeAbiV1Version ||
-            header.runtime_header_addr != kPlcRuntimeHeaderAddr) {
+            header.abi_version != kPlcRuntimeAbiV1Version) {
             return kPlcSlotLoadParseFailed;
         }
         if (header.total_size < sizeof(PlcObjectFileHeaderV1) ||
@@ -1460,7 +1477,9 @@ private:
 
             applyRelocation(linked_code_out + relocation.code_offset,
                             relocation.relocation_kind,
-                            link_result.runtime_point_index);
+                            relocation.relocation_kind == kPlcRelocationPointStateIndexU16Le
+                                ? static_cast<uint32_t>(link_result.point_state_index)
+                                : link_result.point_state_value_offset);
             ++result.resolved_relocation_count;
         }
 
@@ -1473,31 +1492,31 @@ private:
     static size_t relocationPatchSize(uint8_t relocation_kind)
     {
         switch (relocation_kind) {
-        case kPlcRelocationPointIndexU16Le:
+        case kPlcRelocationPointStateIndexU16Le:
             return 2u;
-        case kPlcRelocationPointIndexU32Le:
+        case kPlcRelocationPointStateValueOffsetU32Le:
             return 4u;
         default:
             return 0u;
         }
     }
 
-    static void applyRelocation(uint8_t* dst, uint8_t relocation_kind, uint16_t runtime_point_index)
+    static void applyRelocation(uint8_t* dst, uint8_t relocation_kind, uint32_t patch_value)
     {
         if (dst == nullptr) {
             return;
         }
 
         switch (relocation_kind) {
-        case kPlcRelocationPointIndexU16Le:
-            dst[0] = static_cast<uint8_t>(runtime_point_index & 0xFFu);
-            dst[1] = static_cast<uint8_t>((runtime_point_index >> 8) & 0xFFu);
+        case kPlcRelocationPointStateIndexU16Le:
+            dst[0] = static_cast<uint8_t>(patch_value & 0xFFu);
+            dst[1] = static_cast<uint8_t>((patch_value >> 8) & 0xFFu);
             break;
-        case kPlcRelocationPointIndexU32Le:
-            dst[0] = static_cast<uint8_t>(runtime_point_index & 0xFFu);
-            dst[1] = static_cast<uint8_t>((runtime_point_index >> 8) & 0xFFu);
-            dst[2] = 0u;
-            dst[3] = 0u;
+        case kPlcRelocationPointStateValueOffsetU32Le:
+            dst[0] = static_cast<uint8_t>(patch_value & 0xFFu);
+            dst[1] = static_cast<uint8_t>((patch_value >> 8) & 0xFFu);
+            dst[2] = static_cast<uint8_t>((patch_value >> 16) & 0xFFu);
+            dst[3] = static_cast<uint8_t>((patch_value >> 24) & 0xFFu);
             break;
         default:
             break;

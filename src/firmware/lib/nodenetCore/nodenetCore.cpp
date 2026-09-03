@@ -95,12 +95,49 @@ static_assert((static_cast<uintptr_t>(kPlcUploadVolatileStagingBase) + kPlcUploa
                   static_cast<uintptr_t>(SDRAM_POINT_STATE_BASE),
               "Volatile PLC upload staging overlaps point-state SDRAM window");
 
+constexpr uint32_t kFnv1aOffset = 2166136261u;
+constexpr uint32_t kFnv1aPrime = 16777619u;
+
 struct PointCatalogFlashHeader {
     uint32_t magic = 0u;
     uint32_t version = 0u;
     uint32_t payload_size = 0u;
     uint32_t checksum = 0u;
 };
+
+static uint32_t fnv1a_u8(uint32_t hash, uint8_t value) {
+    return (hash ^ static_cast<uint32_t>(value)) * kFnv1aPrime;
+}
+
+static uint32_t fnv1a_u16(uint32_t hash, uint16_t value) {
+    hash = fnv1a_u8(hash, static_cast<uint8_t>(value & 0xFFu));
+    hash = fnv1a_u8(hash, static_cast<uint8_t>((value >> 8) & 0xFFu));
+    return hash;
+}
+
+static uint32_t fnv1a_u32(uint32_t hash, uint32_t value) {
+    hash = fnv1a_u8(hash, static_cast<uint8_t>(value & 0xFFu));
+    hash = fnv1a_u8(hash, static_cast<uint8_t>((value >> 8) & 0xFFu));
+    hash = fnv1a_u8(hash, static_cast<uint8_t>((value >> 16) & 0xFFu));
+    hash = fnv1a_u8(hash, static_cast<uint8_t>((value >> 24) & 0xFFu));
+    return hash;
+}
+
+static uint32_t fnv1a_bool(uint32_t hash, bool value) {
+    return fnv1a_u8(hash, value ? 1u : 0u);
+}
+
+static uint32_t fnv1a_cstr(uint32_t hash, const char* text) {
+    if (text == nullptr) {
+        return fnv1a_u8(hash, 0u);
+    }
+
+    while (*text != '\0') {
+        hash = fnv1a_u8(hash, static_cast<uint8_t>(*text));
+        ++text;
+    }
+    return fnv1a_u8(hash, 0u);
+}
 
 static void copy_text(char* dst, size_t dst_size, const char* src) {
     if (dst == nullptr || dst_size == 0u) {
@@ -815,7 +852,6 @@ static size_t measure_plc_slot_status_entry(uint32_t slot_id,
                                                              diagnostics_valid,
                                                              diagnostics_slot_id,
                                                              diagnostics_source));
-    size += 1u + json_u32_field_size("cycleCounter", loaded ? control_block.cycle_counter : 0u);
     size += 1u + json_u32_field_size("faultCode", loaded ? control_block.fault_code : 0u);
     size += 1u + json_u32_field_size("bytecodeSize", loaded ? control_block.bytecode_size : 0u);
     size += 1u + json_u32_field_size("status", loaded ? control_block.status : 0u);
@@ -911,11 +947,6 @@ static uint16_t plc_engine_last_fault_slot()
     return static_cast<uint16_t>((*plc_reg_ptr(0x00u) >> 16u) & 0x1Fu);
 }
 
-static uint32_t plc_engine_scan_count()
-{
-    return *plc_reg_ptr(0x04u);
-}
-
 static uint32_t plc_engine_last_fault_code()
 {
     return *plc_reg_ptr(0x08u);
@@ -1006,13 +1037,13 @@ static const char* plc_slot_source_name(uint16_t slot_id,
     return plc_control_block_loaded(*control_block, slot_id) ? "unknown" : "none";
 }
 
-static bool resolve_waveshare_runtime_index(const PointCatalog& catalog,
-                                            const PlcRuntimePublisherV1* publisher,
-                                            const char* device_id,
-                                            const char* feature,
-                                            const char* point_prefix,
-                                            uint8_t channel,
-                                            uint16_t& runtime_index) {
+static bool resolve_waveshare_point_state_index(const PointCatalog& catalog,
+                                                const PlcRuntimePublisherV1* publisher,
+                                                const char* device_id,
+                                                const char* feature,
+                                                const char* point_prefix,
+                                                uint8_t channel,
+                                                uint16_t& point_state_index) {
     if (publisher == nullptr || device_id == nullptr || feature == nullptr || point_prefix == nullptr || channel == 0u || channel > 8u) {
         return false;
     }
@@ -1025,8 +1056,8 @@ static bool resolve_waveshare_runtime_index(const PointCatalog& catalog,
     copy_text(id.feature, sizeof(id.feature), feature);
     copy_text(id.point_id, sizeof(id.point_id), point_id);
 
-    runtime_index = publisher->runtimeIndexForIdentity(catalog, id);
-    if (runtime_index == PlcRuntimePublisherV1::kInvalidPointIndex) {
+    point_state_index = publisher->pointStateIndexForIdentity(catalog, id);
+    if (point_state_index == PlcRuntimePublisherV1::kInvalidPointStateIndex) {
         return false;
     }
 
@@ -1041,22 +1072,22 @@ static bool resolve_waveshare_channel_runtime_indices(const PointCatalog& catalo
                                                       uint8_t output_channel,
                                                       uint16_t& input_runtime_index,
                                                       uint16_t& output_runtime_index) {
-    if (!resolve_waveshare_runtime_index(catalog,
-                                         publisher,
-                                         device_id,
-                                         feature,
-                                         "input",
-                                         input_channel,
-                                         input_runtime_index)) {
+    if (!resolve_waveshare_point_state_index(catalog,
+                                             publisher,
+                                             device_id,
+                                             feature,
+                                             "input",
+                                             input_channel,
+                                             input_runtime_index)) {
         return false;
     }
-    if (!resolve_waveshare_runtime_index(catalog,
-                                         publisher,
-                                         device_id,
-                                         feature,
-                                         "output",
-                                         output_channel,
-                                         output_runtime_index)) {
+    if (!resolve_waveshare_point_state_index(catalog,
+                                             publisher,
+                                             device_id,
+                                             feature,
+                                             "output",
+                                             output_channel,
+                                             output_runtime_index)) {
         return false;
     }
 
@@ -1250,10 +1281,10 @@ static void build_waveshare_mirror_symbols(const char* device_id,
 
     relocations[0].code_offset = 1u;
     relocations[0].symbol_index = 0u;
-    relocations[0].relocation_kind = kPlcRelocationPointIndexU16Le;
-    relocations[1].code_offset = 4u;
+    relocations[0].relocation_kind = kPlcRelocationPointStateValueOffsetU32Le;
+    relocations[1].code_offset = 6u;
     relocations[1].symbol_index = 1u;
-    relocations[1].relocation_kind = kPlcRelocationPointIndexU16Le;
+    relocations[1].relocation_kind = kPlcRelocationPointStateValueOffsetU32Le;
 }
 
 static PlcSlotLoadStatusV1 build_mirror_program_object_file(const char* device_id,
@@ -1290,8 +1321,8 @@ static PlcSlotLoadStatusV1 build_mirror_program_object_file(const char* device_i
     build_waveshare_mirror_symbols(device_id, feature, input_channel, output_channel, symbols, relocations);
 
     uint8_t object_code[] = {
-        0x10u, 0x00u, 0x00u,
-        0x11u, 0x00u, 0x00u,
+        0x10u, 0x00u, 0x00u, 0x00u, 0x00u,
+        0x11u, 0x00u, 0x00u, 0x00u, 0x00u,
         0x00u,
     };
     const size_t symbol_offset = sizeof(PlcObjectFileHeaderV1) + sizeof(object_code);
@@ -1564,7 +1595,6 @@ void NodeNetCore::begin()
     oled::showBootProgress("Node services: publish", 34u);
     publishBuiltinPointStates();
     publishBuiltinPlcPointStates(true);
-    _lastPlcBuiltinPointPublishMs = millis();
     JsonDocument discoverMsg(&g_sdram_json_allocator);
     discoverMsg["cmd"] = "WhoIs";
     discoverMsg["from"] = addr;
@@ -1580,15 +1610,12 @@ void NodeNetCore::loop()
     processInputQueue();
 
     _plcCore.loop();
+    refreshLoadedMirrorProgramRuntimeMapsIfNeeded();
 
     const uint32_t now_ms = millis();
     if (_plcUploadSession.active &&
         static_cast<uint32_t>(now_ms - _plcUploadSession.last_activity_ms) >= kPlcUploadSessionTimeoutMs) {
         resetPlcUploadSession();
-    }
-    if (static_cast<uint32_t>(now_ms - _lastPlcBuiltinPointPublishMs) >= kPlcBuiltinPublishPeriodMs) {
-        publishBuiltinPlcPointStates(false);
-        _lastPlcBuiltinPointPublishMs = now_ms;
     }
 
     processOutputQueue();
@@ -1778,7 +1805,6 @@ bool NodeNetCore::updatePointCommandState(const PointIdentity& id, const PointCo
 void NodeNetCore::attachPlcRuntimePublisher(const PlcRuntimePublisherV1* publisher)
 {
     _plcRuntimePublisher = publisher;
-    _plcCore.attachRuntimePublisher(publisher);
 }
 
 void NodeNetCore::setPlcSlotRuntimeDiagnostics(uint8_t slot_id,
@@ -1788,6 +1814,9 @@ void NodeNetCore::setPlcSlotRuntimeDiagnostics(uint8_t slot_id,
                                                uint16_t input_runtime_index,
                                                uint16_t output_runtime_index)
 {
+    const bool had_previous_slot = _plcSlotRuntimeDiagnostics.valid;
+    const uint16_t previous_slot_id = had_previous_slot ? _plcSlotRuntimeDiagnostics.slot_id : kPlcSlotCountV1;
+
     _plcSlotRuntimeDiagnostics.valid = true;
     _plcSlotRuntimeDiagnostics.slot_id = slot_id;
     _plcSlotRuntimeDiagnostics.input_channel = input_channel;
@@ -1797,6 +1826,460 @@ void NodeNetCore::setPlcSlotRuntimeDiagnostics(uint8_t slot_id,
               (source != nullptr && source[0] != '\0') ? source : "unknown");
     _plcSlotRuntimeDiagnostics.input_runtime_index = input_runtime_index;
     _plcSlotRuntimeDiagnostics.output_runtime_index = output_runtime_index;
+
+    if (had_previous_slot && previous_slot_id < kPlcSlotCountV1 && previous_slot_id != slot_id) {
+        syncPlcBuiltinSlotPointStates(previous_slot_id);
+    }
+    if (slot_id < kPlcSlotCountV1) {
+        syncPlcBuiltinSlotPointStates(slot_id);
+    }
+}
+
+void NodeNetCore::clearPlcSlotRuntimeDiagnostics()
+{
+    if (!_plcSlotRuntimeDiagnostics.valid) {
+        return;
+    }
+
+    const uint16_t previous_slot_id = _plcSlotRuntimeDiagnostics.slot_id;
+    _plcSlotRuntimeDiagnostics = {};
+    _plcSlotRuntimeDiagnostics.input_runtime_index = 0xFFFFu;
+    _plcSlotRuntimeDiagnostics.output_runtime_index = 0xFFFFu;
+
+    if (previous_slot_id < kPlcSlotCountV1) {
+        syncPlcBuiltinSlotPointStates(previous_slot_id);
+    }
+}
+
+uint32_t NodeNetCore::plcBuiltinEngineSyncSignature() const
+{
+    uint16_t active_slot_count = 0u;
+    uint16_t faulted_slot_count = 0u;
+    for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
+        const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+            static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+        if (plc_control_block_loaded(*control_block, slot_id)) {
+            ++active_slot_count;
+            if ((control_block->status & kPlcSlotStatusFaultedV1) != 0u) {
+                ++faulted_slot_count;
+            }
+        }
+    }
+
+    uint32_t hash = kFnv1aOffset;
+    hash = fnv1a_u16(hash, kPlcSlotCountV1);
+    hash = fnv1a_u16(hash, active_slot_count);
+    hash = fnv1a_u16(hash, faulted_slot_count);
+    hash = fnv1a_bool(hash, plc_engine_enabled());
+    hash = fnv1a_bool(hash, plc_engine_busy());
+    hash = fnv1a_u16(hash, plc_engine_active_slot());
+    hash = fnv1a_u32(hash, plc_engine_last_fault_code());
+    hash = fnv1a_u16(hash, plc_engine_last_fault_slot());
+    hash = fnv1a_u32(hash, plc_engine_scan_interval_cycles());
+    return hash;
+}
+
+uint32_t NodeNetCore::plcBuiltinSlotSyncSignature(uint16_t slot_id) const
+{
+    if (slot_id >= kPlcSlotCountV1) {
+        return 0u;
+    }
+
+    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+    const bool loaded = plc_control_block_loaded(*control_block, slot_id);
+    const auto* slot_manifest = reinterpret_cast<const PlcSlotManifestV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotManifestAddress(slot_id)));
+    const auto* snapshot_header = reinterpret_cast<const PlcObjectSnapshotHeaderV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotObjectSnapshotHeaderAddress(slot_id)));
+    const bool object_snapshot_valid = plc_object_snapshot_header_valid(*snapshot_header, slot_id);
+    const bool has_slot_diag = _plcSlotRuntimeDiagnostics.valid && _plcSlotRuntimeDiagnostics.slot_id == slot_id;
+
+    PlcSlotParamsHeaderV1 params_header = {};
+    const bool has_params_header = PlcSlotLoaderV1::readSlotParamsHeader(slot_id, params_header);
+    PlcMirrorProgramParamsV1 mirror_params = {};
+    const bool has_slot_params = PlcSlotLoaderV1::readMirrorProgramParams(slot_id, mirror_params);
+
+    uint32_t hash = kFnv1aOffset;
+    hash = fnv1a_u16(hash, slot_id);
+    hash = fnv1a_bool(hash, loaded);
+    hash = fnv1a_u32(hash, control_block->control);
+    hash = fnv1a_u32(hash, control_block->status);
+    hash = fnv1a_u32(hash, control_block->pc);
+    hash = fnv1a_u32(hash, control_block->fault_code);
+    hash = fnv1a_u32(hash, control_block->fault_info);
+    hash = fnv1a_u32(hash, control_block->bytecode_size);
+    hash = fnv1a_u32(hash, slot_manifest->load_epoch);
+    hash = fnv1a_u32(hash, slot_manifest->linked_code_checksum);
+    hash = fnv1a_bool(hash, object_snapshot_valid);
+    hash = fnv1a_u32(hash, object_snapshot_valid ? snapshot_header->object_size : 0u);
+    hash = fnv1a_u32(hash, object_snapshot_valid ? snapshot_header->object_checksum : 0u);
+    hash = fnv1a_bool(hash, has_params_header);
+    hash = fnv1a_u16(hash, has_params_header ? params_header.program_kind : 0u);
+    hash = fnv1a_u16(hash, has_params_header ? params_header.payload_size : 0u);
+    hash = fnv1a_bool(hash, has_slot_params);
+    hash = fnv1a_u16(hash, has_slot_params ? mirror_params.input_channel : 0u);
+    hash = fnv1a_u16(hash, has_slot_params ? mirror_params.output_channel : 0u);
+    hash = fnv1a_u16(hash, has_slot_params ? mirror_params.input_runtime_index : 0xFFFFu);
+    hash = fnv1a_u16(hash, has_slot_params ? mirror_params.output_runtime_index : 0xFFFFu);
+    hash = fnv1a_bool(hash, has_slot_diag);
+    hash = fnv1a_u8(hash, has_slot_diag ? _plcSlotRuntimeDiagnostics.input_channel : 0u);
+    hash = fnv1a_u8(hash, has_slot_diag ? _plcSlotRuntimeDiagnostics.output_channel : 0u);
+    hash = fnv1a_u16(hash, has_slot_diag ? _plcSlotRuntimeDiagnostics.input_runtime_index : 0xFFFFu);
+    hash = fnv1a_u16(hash, has_slot_diag ? _plcSlotRuntimeDiagnostics.output_runtime_index : 0xFFFFu);
+    hash = fnv1a_cstr(hash, has_slot_diag ? _plcSlotRuntimeDiagnostics.source : "");
+    return hash;
+}
+
+void NodeNetCore::syncPlcBuiltinEnginePointStatesIfChanged()
+{
+    const uint32_t signature = plcBuiltinEngineSyncSignature();
+    if (_plcBuiltinEngineSyncValid && _plcBuiltinEngineSyncSignature == signature) {
+        return;
+    }
+
+    syncPlcBuiltinEnginePointStates();
+}
+
+void NodeNetCore::syncPlcBuiltinSlotPointStatesIfChanged(uint16_t slot_id)
+{
+    if (slot_id >= kPlcSlotCountV1) {
+        return;
+    }
+
+    const uint32_t signature = plcBuiltinSlotSyncSignature(slot_id);
+    if (_plcBuiltinSlotSyncValid[slot_id] && _plcBuiltinSlotSyncSignature[slot_id] == signature) {
+        return;
+    }
+
+    syncPlcBuiltinSlotPointStates(slot_id);
+}
+
+void NodeNetCore::syncPlcBuiltinEnginePointStates()
+{
+    PointIdentity id = {};
+    PointState state = {};
+    const uint32_t now_ms = millis();
+
+    uint16_t active_slot_count = 0u;
+    uint16_t faulted_slot_count = 0u;
+    for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
+        const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+            static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+        if (plc_control_block_loaded(*control_block, slot_id)) {
+            ++active_slot_count;
+            if ((control_block->status & kPlcSlotStatusFaultedV1) != 0u) {
+                ++faulted_slot_count;
+            }
+        }
+    }
+
+    auto publish_bool = [&](const char* point_id, bool value) {
+        make_point_identity(id, deviceId, "plc", point_id);
+        state = {};
+        state.value.b = value;
+        state.quality = PointQuality::Good;
+        (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
+    };
+
+    auto publish_u16 = [&](const char* point_id, uint16_t value) {
+        make_point_identity(id, deviceId, "plc", point_id);
+        state = {};
+        state.value.u16 = value;
+        state.quality = PointQuality::Good;
+        (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
+    };
+
+    auto publish_u32 = [&](const char* point_id, uint32_t value) {
+        make_point_identity(id, deviceId, "plc", point_id);
+        state = {};
+        state.value.u32 = value;
+        state.quality = PointQuality::Good;
+        (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
+    };
+
+    publish_u16("slotCount", kPlcSlotCountV1);
+    publish_u16("activeSlotCount", active_slot_count);
+    publish_u16("faultedSlotCount", faulted_slot_count);
+    publish_bool("engineEnabled", plc_engine_enabled());
+    publish_bool("engineBusy", plc_engine_busy());
+    publish_u16("engineActiveSlot", plc_engine_active_slot());
+    publish_u32("engineLastFaultCode", plc_engine_last_fault_code());
+    publish_u16("engineLastFaultSlot", plc_engine_last_fault_slot());
+    publish_u32("engineScanIntervalCycles", plc_engine_scan_interval_cycles());
+    publish_bool("engineClearFault", false);
+
+    _plcBuiltinEngineSyncValid = true;
+    _plcBuiltinEngineSyncSignature = plcBuiltinEngineSyncSignature();
+}
+
+void NodeNetCore::syncPlcBuiltinSlotPointStates(uint16_t slot_id)
+{
+    if (slot_id >= kPlcSlotCountV1) {
+        return;
+    }
+
+    PointIdentity id = {};
+    PointState state = {};
+    const uint32_t now_ms = millis();
+    char feature[32] = {};
+    (void)std::snprintf(feature, sizeof(feature), "plc.slot%u", static_cast<unsigned>(slot_id));
+
+    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+    const bool loaded = plc_control_block_loaded(*control_block, slot_id);
+    const bool has_slot_diag = _plcSlotRuntimeDiagnostics.valid && _plcSlotRuntimeDiagnostics.slot_id == slot_id;
+    const auto* slot_manifest = reinterpret_cast<const PlcSlotManifestV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotManifestAddress(slot_id)));
+    const auto* snapshot_header = reinterpret_cast<const PlcObjectSnapshotHeaderV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotObjectSnapshotHeaderAddress(slot_id)));
+    const bool object_snapshot_valid = plc_object_snapshot_header_valid(*snapshot_header, slot_id);
+
+    PlcSlotParamsHeaderV1 params_header = {};
+    const bool has_params_header = PlcSlotLoaderV1::readSlotParamsHeader(slot_id, params_header);
+    const uint16_t program_kind = has_params_header ? params_header.program_kind : kPlcProgramKindUnknown;
+
+    PlcMirrorProgramParamsV1 mirror_params = {};
+    const bool has_slot_params = PlcSlotLoaderV1::readMirrorProgramParams(slot_id, mirror_params);
+    uint8_t input_channel = has_slot_params
+                                ? static_cast<uint8_t>(mirror_params.input_channel)
+                                : (has_slot_diag ? _plcSlotRuntimeDiagnostics.input_channel : 0u);
+    uint8_t output_channel = has_slot_params
+                                 ? static_cast<uint8_t>(mirror_params.output_channel)
+                                 : (has_slot_diag ? _plcSlotRuntimeDiagnostics.output_channel : 0u);
+    uint16_t input_runtime_index = has_slot_params
+                                       ? mirror_params.input_runtime_index
+                                       : (has_slot_diag ? _plcSlotRuntimeDiagnostics.input_runtime_index : 0xFFFFu);
+    uint16_t output_runtime_index = has_slot_params
+                                        ? mirror_params.output_runtime_index
+                                        : (has_slot_diag ? _plcSlotRuntimeDiagnostics.output_runtime_index : 0xFFFFu);
+    bool runtime_map_ok = input_runtime_index != 0xFFFFu && output_runtime_index != 0xFFFFu;
+    if (!runtime_map_ok) {
+        char waveshare_feature[sizeof(PointIdentity::feature)] = {};
+        if (resolve_waveshare_feature(_pointCatalog,
+                                      deviceId,
+                                      input_channel,
+                                      output_channel,
+                                      waveshare_feature,
+                                      sizeof(waveshare_feature))) {
+            runtime_map_ok = resolve_waveshare_channel_runtime_indices(_pointCatalog,
+                                                                       _plcRuntimePublisher,
+                                                                       deviceId,
+                                                                       waveshare_feature,
+                                                                       input_channel,
+                                                                       output_channel,
+                                                                       input_runtime_index,
+                                                                       output_runtime_index);
+        }
+    }
+    if (!runtime_map_ok) {
+        runtime_map_ok = plc_slot_manifest_runtime_map_ok(slot_id, _plcRuntimePublisher);
+    }
+
+    char params_summary[24] = {};
+    if (has_slot_params) {
+        (void)std::snprintf(params_summary,
+                            sizeof(params_summary),
+                            "in%u->out%u",
+                            static_cast<unsigned>(input_channel),
+                            static_cast<unsigned>(output_channel));
+    } else if (has_params_header) {
+        (void)std::snprintf(params_summary,
+                            sizeof(params_summary),
+                            "kind:%u bytes:%u",
+                            static_cast<unsigned>(params_header.program_kind),
+                            static_cast<unsigned>(params_header.payload_size));
+    } else {
+        copy_text(params_summary, sizeof(params_summary), loaded ? "none" : "empty");
+    }
+
+    auto publish_bool = [&](const char* point_id, bool value) {
+        make_point_identity(id, deviceId, feature, point_id);
+        state = {};
+        state.value.b = value;
+        state.quality = PointQuality::Good;
+        (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
+    };
+
+    auto publish_u16 = [&](const char* point_id, uint16_t value) {
+        make_point_identity(id, deviceId, feature, point_id);
+        state = {};
+        state.value.u16 = value;
+        state.quality = PointQuality::Good;
+        (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
+    };
+
+    auto publish_u32 = [&](const char* point_id, uint32_t value) {
+        make_point_identity(id, deviceId, feature, point_id);
+        state = {};
+        state.value.u32 = value;
+        state.quality = PointQuality::Good;
+        (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
+    };
+
+    auto publish_string = [&](const char* point_id, const char* value) {
+        make_point_identity(id, deviceId, feature, point_id);
+        state = {};
+        copy_text(state.string_value, sizeof(state.string_value), value);
+        state.quality = PointQuality::Good;
+        (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
+    };
+
+    publish_bool("loaded", loaded);
+    publish_string("state", plc_slot_state_name(*control_block, slot_id));
+    publish_bool("runEnabled", loaded && !plc_slot_paused(*control_block));
+    publish_u32("status", loaded ? control_block->status : 0u);
+    publish_u32("pc", loaded ? control_block->pc : 0u);
+    publish_u32("faultCode", loaded ? control_block->fault_code : 0u);
+    publish_u32("faultInfo", loaded ? control_block->fault_info : 0u);
+    publish_u32("bytecodeSize", loaded ? control_block->bytecode_size : 0u);
+    publish_u32("loadEpoch", loaded ? slot_manifest->load_epoch : 0u);
+    publish_u32("objectSize", object_snapshot_valid ? snapshot_header->object_size : 0u);
+    publish_u32("objectChecksum", object_snapshot_valid ? snapshot_header->object_checksum : 0u);
+    publish_u32("linkedChecksum", loaded ? slot_manifest->linked_code_checksum : 0u);
+    publish_string("source",
+                   plc_slot_source_name(slot_id,
+                                        _plcSlotRuntimeDiagnostics.valid,
+                                        _plcSlotRuntimeDiagnostics.slot_id,
+                                        _plcSlotRuntimeDiagnostics.source));
+    publish_string("programType", loaded ? plc_program_kind_name(program_kind) : "none");
+    publish_string("paramsSummary", params_summary);
+    publish_u16("inputChannel", input_channel);
+    publish_u16("outputChannel", output_channel);
+    publish_bool("runtimeMapOk", runtime_map_ok);
+    publish_bool("start", false);
+    publish_bool("stop", false);
+    publish_bool("reset", false);
+    publish_bool("clearFault", false);
+
+    _plcBuiltinSlotSyncValid[slot_id] = true;
+    _plcBuiltinSlotSyncSignature[slot_id] = plcBuiltinSlotSyncSignature(slot_id);
+}
+
+void NodeNetCore::syncPlcBuiltinRuntimeState()
+{
+    syncPlcBuiltinEnginePointStatesIfChanged();
+
+    const uint16_t active_slot = plc_engine_active_slot();
+    if (active_slot < kPlcSlotCountV1) {
+        syncPlcBuiltinSlotPointStatesIfChanged(active_slot);
+    }
+
+    const uint16_t last_fault_slot = plc_engine_last_fault_slot();
+    if (last_fault_slot < kPlcSlotCountV1 && last_fault_slot != active_slot) {
+        syncPlcBuiltinSlotPointStatesIfChanged(last_fault_slot);
+    }
+
+    if (_plcSlotRuntimeDiagnostics.valid &&
+        _plcSlotRuntimeDiagnostics.slot_id < kPlcSlotCountV1 &&
+        _plcSlotRuntimeDiagnostics.slot_id != active_slot &&
+        _plcSlotRuntimeDiagnostics.slot_id != last_fault_slot) {
+        syncPlcBuiltinSlotPointStatesIfChanged(_plcSlotRuntimeDiagnostics.slot_id);
+    }
+}
+
+bool NodeNetCore::refreshMirrorProgramRuntimeMap(uint16_t slot_id, uint32_t runtime_store_epoch)
+{
+    if (_plcRuntimePublisher == nullptr || slot_id >= kPlcSlotCountV1) {
+        return false;
+    }
+
+    if (plc_slot_manifest_runtime_map_ok(slot_id, _plcRuntimePublisher)) {
+        return true;
+    }
+
+    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+    if (!plc_control_block_loaded(*control_block, slot_id)) {
+        return false;
+    }
+
+    const bool slot_running = !plc_slot_paused(*control_block);
+    const auto* snapshot_header = reinterpret_cast<const PlcObjectSnapshotHeaderV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotObjectSnapshotHeaderAddress(slot_id)));
+    if (!plc_object_snapshot_header_valid(*snapshot_header, slot_id)) {
+        if (_logger != nullptr) {
+            _logger->Warning("PLC slot %u runtime map stale: snapshot unavailable", static_cast<unsigned>(slot_id));
+        }
+        return false;
+    }
+
+    const uint8_t* object_bytes = reinterpret_cast<const uint8_t*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotObjectSnapshotDataAddress(slot_id)));
+    const PlcSlotLoadResultV1 load_result = PlcSlotLoaderV1::loadObjectFileIntoSlot(*_plcRuntimePublisher,
+                                                                                     _pointCatalog,
+                                                                                     slot_id,
+                                                                                     object_bytes,
+                                                                                     snapshot_header->object_size);
+    if (load_result.status != kPlcSlotLoadOk) {
+        if (_logger != nullptr) {
+            _logger->Warning("PLC slot %u runtime map reload failed (status=%u parse=%u link=%u resolve=%u)",
+                             static_cast<unsigned>(slot_id),
+                             static_cast<unsigned>(load_result.status),
+                             static_cast<unsigned>(load_result.parse_status),
+                             static_cast<unsigned>(load_result.link_result.status),
+                             static_cast<unsigned>(load_result.link_result.resolve_status));
+        }
+        return false;
+    }
+
+    volatile PlcProgramControlBlockV1* reloaded_control_block = reinterpret_cast<volatile PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+    if (reloaded_control_block->magic == kPlcProgramControlBlockMagicV1 &&
+        reloaded_control_block->slot_id == slot_id) {
+        if (slot_running) {
+            reloaded_control_block->control &= ~kPlcSlotControlPausedV1;
+        } else {
+            reloaded_control_block->control |= kPlcSlotControlPausedV1;
+        }
+    }
+
+    syncPlcBuiltinSlotPointStates(slot_id);
+    return true;
+}
+
+void NodeNetCore::refreshLoadedMirrorProgramRuntimeMapsIfNeeded()
+{
+    if (_plcRuntimePublisher == nullptr ||
+        !_plcRuntimePublisher->ready() ||
+        !_plcRuntimePublisher->headerWritten()) {
+        return;
+    }
+
+    const uint32_t runtime_store_epoch = _plcRuntimePublisher->headerSnapshot().store_epoch;
+    if (!_pendingPlcRuntimeMapRefresh && _lastObservedPlcRuntimeStoreEpoch == runtime_store_epoch) {
+        return;
+    }
+
+    if (!_pendingPlcRuntimeMapRefresh) {
+        _lastObservedPlcRuntimeStoreEpoch = runtime_store_epoch;
+        _pendingPlcRuntimeMapRefresh = true;
+        _pendingPlcRuntimeMapRestoreEngine = plc_engine_enabled();
+        if (_pendingPlcRuntimeMapRestoreEngine) {
+            plc_engine_set_enabled(false);
+        }
+    }
+
+    if (plc_engine_busy()) {
+        return;
+    }
+
+    for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
+        const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+            static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+        if (!plc_control_block_loaded(*control_block, slot_id)) {
+            continue;
+        }
+
+        (void)refreshMirrorProgramRuntimeMap(slot_id, runtime_store_epoch);
+    }
+
+    if (_pendingPlcRuntimeMapRestoreEngine) {
+        plc_engine_set_enabled(true);
+    }
+    _pendingPlcRuntimeMapRestoreEngine = false;
+    _pendingPlcRuntimeMapRefresh = false;
+    _lastObservedPlcRuntimeStoreEpoch = _plcRuntimePublisher->headerSnapshot().store_epoch;
 }
 
 void NodeNetCore::nodeHeader(JsonDocument& doc) const
@@ -2255,7 +2738,7 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
             command_state.last_ack_ts_ms = now_ms;
         }
         (void)updatePointCommandState(definition.id, command_state);
-        publishBuiltinPlcPointStates(true);
+        syncPlcBuiltinEnginePointStates();
         return ok;
     }
 
@@ -2441,7 +2924,8 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
         command_state.last_ack_ts_ms = now_ms;
     }
     (void)updatePointCommandState(definition.id, command_state);
-    publishBuiltinPlcPointStates(true);
+    syncPlcBuiltinEnginePointStates();
+    syncPlcBuiltinSlotPointStates(slot_id);
     return ok;
 }
 
@@ -2590,6 +3074,44 @@ bool NodeNetCore::handlePointStatesRequest(const JsonDocument& request, JsonDocu
     const bool exact_point_match = path_match == PointPathMatchKind::Point;
     const bool exact_feature_match = path_match == PointPathMatchKind::Feature;
     const bool exact_device_match = path_match == PointPathMatchKind::Device;
+
+    if (exact_point_match || exact_feature_match) {
+        bool refresh_engine_points = false;
+        uint16_t refresh_slot_mask[kPlcSlotCountV1] = {};
+
+        for (size_t index = 0u; index < _pointCatalog.size(); ++index) {
+            bool matches = exact_point_match
+                ? path_matches_point(path, definitions[index])
+                : path_matches_feature(path, definitions[index]);
+            if (!matches || !strings_equal(definitions[index].id.device_id, deviceId)) {
+                continue;
+            }
+
+            const PointCatalog::PlcPointMeta& plc_meta = _pointCatalog.plcPointMeta(index);
+            if (!plc_meta.is_local) {
+                continue;
+            }
+
+            if (std::strcmp(definitions[index].id.feature, "plc") == 0) {
+                refresh_engine_points = true;
+            }
+            if (plc_meta.has_slot && plc_meta.slot_id < kPlcSlotCountV1) {
+                refresh_slot_mask[plc_meta.slot_id] = 1u;
+            }
+        }
+
+        if (refresh_engine_points) {
+            syncPlcBuiltinEnginePointStatesIfChanged();
+        }
+        for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
+            if (refresh_slot_mask[slot_id] != 0u) {
+                syncPlcBuiltinSlotPointStatesIfChanged(slot_id);
+            }
+        }
+
+        definitions = _pointCatalog.entries();
+        states = _pointCatalog.states();
+    }
 
     if (path[0] == '\0' || exact_device_match) {
         response["kind"] = "devices";
@@ -2872,6 +3394,8 @@ bool NodeNetCore::handlePlcStatusRequest(const JsonDocument& request, JsonDocume
         return true;
     }
 
+    syncPlcBuiltinSlotPointStates(slot_id);
+
     const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
         static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
     const bool loaded = plc_control_block_loaded(*control_block, slot_id);
@@ -2882,7 +3406,6 @@ bool NodeNetCore::handlePlcStatusRequest(const JsonDocument& request, JsonDocume
     response["loaded"] = loaded;
     response["status"] = loaded ? control_block->status : 0u;
     response["pc"] = loaded ? control_block->pc : 0u;
-    response["cycleCounter"] = loaded ? control_block->cycle_counter : 0u;
     response["faultCode"] = loaded ? control_block->fault_code : 0u;
     response["faultInfo"] = loaded ? control_block->fault_info : 0u;
     response["bytecodeBase"] = loaded ? control_block->bytecode_base : 0u;
@@ -2945,19 +3468,13 @@ bool NodeNetCore::handlePlcStatusRequest(const JsonDocument& request, JsonDocume
         response["outputRuntimeIndex"] = output_runtime_index;
     }
 
-    if (_plcRuntimePublisher != nullptr) {
-        const PlcRuntimeHeaderV1 header = _plcRuntimePublisher->headerSnapshot();
-        response["runtimeStoreEpoch"] = header.store_epoch;
-        response["runtimePublishedCount"] = _plcRuntimePublisher->publishedCount();
-        response["runtimeHeaderAddr"] = header.descriptor_base;
-    }
-
     return true;
 }
 
 bool NodeNetCore::handlePlcSlotsRequest(const JsonDocument& request, JsonDocument& response)
 {
     response["cmd"] = NodeNetCommands::toString(NodeNetCommands::Cmd::PLC_SLOTS_RES);
+    syncPlcBuiltinEnginePointStates();
 
     const uint32_t offset = request["offset"] | 0u;
     const uint32_t limit = request["limit"] | 4u;
@@ -2975,6 +3492,8 @@ bool NodeNetCore::handlePlcSlotsRequest(const JsonDocument& request, JsonDocumen
         if (emitted >= limit) {
             break;
         }
+
+        syncPlcBuiltinSlotPointStates(static_cast<uint16_t>(slot_id));
 
         const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
             static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(static_cast<uint16_t>(slot_id))));
@@ -2999,7 +3518,6 @@ bool NodeNetCore::handlePlcSlotsRequest(const JsonDocument& request, JsonDocumen
                                _plcSlotRuntimeDiagnostics.valid,
                                _plcSlotRuntimeDiagnostics.slot_id,
                                _plcSlotRuntimeDiagnostics.source);
-        slot["cycleCounter"] = loaded ? control_block->cycle_counter : 0u;
         slot["faultCode"] = loaded ? control_block->fault_code : 0u;
         slot["bytecodeSize"] = loaded ? control_block->bytecode_size : 0u;
         slot["status"] = loaded ? control_block->status : 0u;
@@ -3011,12 +3529,6 @@ bool NodeNetCore::handlePlcSlotsRequest(const JsonDocument& request, JsonDocumen
     }
 
     response["hasMore"] = (offset + (response["count"] | 0u)) < static_cast<uint32_t>(kPlcSlotCountV1);
-    if (_plcRuntimePublisher != nullptr) {
-        const PlcRuntimeHeaderV1 header = _plcRuntimePublisher->headerSnapshot();
-        response["runtimeStoreEpoch"] = header.store_epoch;
-        response["runtimePublishedCount"] = _plcRuntimePublisher->publishedCount();
-    }
-
     return true;
 }
 
@@ -3110,8 +3622,8 @@ bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument
         return true;
     }
 
-    uint16_t input_runtime_index = PlcRuntimePublisherV1::kInvalidPointIndex;
-    uint16_t output_runtime_index = PlcRuntimePublisherV1::kInvalidPointIndex;
+    uint16_t input_runtime_index = PlcRuntimePublisherV1::kInvalidPointStateIndex;
+    uint16_t output_runtime_index = PlcRuntimePublisherV1::kInvalidPointStateIndex;
     const bool runtime_map_ok = resolve_waveshare_channel_runtime_indices(_pointCatalog,
                                                                           _plcRuntimePublisher,
                                                                           deviceId,
@@ -3156,9 +3668,9 @@ bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument
     const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
         static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
     response["state"] = plc_slot_state_name(*control_block, slot_id);
-    response["cycleCounter"] = control_block->cycle_counter;
     response["faultCode"] = control_block->fault_code;
-    publishBuiltinPlcPointStates(true);
+    syncPlcBuiltinEnginePointStates();
+    syncPlcBuiltinSlotPointStates(slot_id);
     return true;
 }
 
@@ -3364,7 +3876,7 @@ bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonD
         if ((control_block->status & kPlcSlotStatusFaultedV1) == 0u) {
             control_block->status = kPlcSlotStatusLoadedV1;
         }
-        publishBuiltinPlcPointStates(true);
+        syncPlcBuiltinSlotPointStates(slot_id);
     }
 
     std::memset(plc_upload_volatile_staging_ptr(), 0xFF, static_cast<size_t>(staging_capacity));
@@ -3562,8 +4074,8 @@ void NodeNetCore::processPendingPlcAutoLoad()
                                                                               symbol.symbol_name);
                 const uint16_t runtime_index =
                     (catalog_index < _pointCatalog.size() && _plcRuntimePublisher != nullptr)
-                        ? _plcRuntimePublisher->runtimeIndexForCatalogIndex(catalog_index)
-                        : PlcRuntimePublisherV1::kInvalidPointIndex;
+                        ? _plcRuntimePublisher->pointStateIndexForCatalogIndex(catalog_index)
+                        : PlcRuntimePublisherV1::kInvalidPointStateIndex;
                 const unsigned actual_type = catalog_index < _pointCatalog.size()
                     ? static_cast<unsigned>(_pointCatalog.entries()[catalog_index].value_type)
                     : 0xFFFFu;
@@ -3600,7 +4112,8 @@ void NodeNetCore::processPendingPlcAutoLoad()
     if (restore_engine_enabled) {
         plc_engine_set_enabled(true);
     }
-    publishBuiltinPlcPointStates(true);
+    syncPlcBuiltinEnginePointStates();
+    syncPlcBuiltinSlotPointStates(slot_id);
 }
 
 bool NodeNetCore::handlePlcUploadDataMessage(const QueuedMessage& msg)
@@ -3969,12 +4482,11 @@ uint16_t NodeNetCore::restorePersistedPlcSlots()
     const uint32_t payload_end = static_cast<uint32_t>(sizeof(PlcFlashPackageHeader)) + package_header.payload_size;
     const uint32_t objects_base = static_cast<uint32_t>(sizeof(PlcFlashPackageHeader) +
                                                         (sizeof(PlcFlashPackageEntry) * kPlcSlotCountV1));
+    bool present_slots[kPlcSlotCountV1] = {};
     uint16_t restored_count = 0u;
-    _plcSlotRuntimeDiagnostics.valid = false;
+    clearPlcSlotRuntimeDiagnostics();
 
-    _pointCatalog.beginBatchUpdate();
     for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
-        oled::showBootProgress("Restore PLC slots", boot_restore_progress(slot_id));
         const PlcFlashPackageEntry& entry = entries[slot_id];
         if ((entry.flags & kPlcFlashPackageEntryPresent) == 0u) {
             continue;
@@ -3990,12 +4502,40 @@ uint16_t NodeNetCore::restorePersistedPlcSlots()
             continue;
         }
 
-        const PlcSlotLoadResultV1 load_result = PlcSlotLoaderV1::loadObjectFileFromFlash(*_plcRuntimePublisher,
-                                                                                          _pointCatalog,
-                                                                                          slot_id,
-                                                                                          *_flash,
-                                                                                          kPlcFlashPackageBase + entry.object_offset,
-                                                                                          entry.object_size);
+        const uint32_t payload_object_offset = entry.object_offset - static_cast<uint32_t>(sizeof(PlcFlashPackageHeader));
+        const uint8_t* object_bytes = payload_buffer + payload_object_offset;
+        if (!PlcSlotLoaderV1::stageObjectFileSnapshot(slot_id, object_bytes, entry.object_size)) {
+            if (_logger != nullptr) {
+                _logger->Warning("PLC flash snapshot staging failed for slot %u", static_cast<unsigned>(slot_id));
+            }
+            continue;
+        }
+
+        present_slots[slot_id] = true;
+    }
+
+    _pointCatalog.beginBatchUpdate();
+    for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
+        oled::showBootProgress("Restore PLC slots", boot_restore_progress(slot_id));
+        if (!present_slots[slot_id]) {
+            continue;
+        }
+        const auto* snapshot_header = reinterpret_cast<const PlcObjectSnapshotHeaderV1*>(
+            static_cast<uintptr_t>(PlcSlotLoaderV1::slotObjectSnapshotHeaderAddress(slot_id)));
+        if (!plc_object_snapshot_header_valid(*snapshot_header, slot_id)) {
+            if (_logger != nullptr) {
+                _logger->Warning("PLC flash snapshot unavailable for slot %u", static_cast<unsigned>(slot_id));
+            }
+            continue;
+        }
+
+        const uint8_t* object_bytes = reinterpret_cast<const uint8_t*>(
+            static_cast<uintptr_t>(PlcSlotLoaderV1::slotObjectSnapshotDataAddress(slot_id)));
+        const PlcSlotLoadResultV1 load_result = PlcSlotLoaderV1::loadObjectFileIntoSlot(*_plcRuntimePublisher,
+                                                                                         _pointCatalog,
+                                                                                         slot_id,
+                                                                                         object_bytes,
+                                                                                         snapshot_header->object_size);
         if (load_result.status != kPlcSlotLoadOk) {
             if (_logger != nullptr) {
                 _logger->Warning("PLC flash restore failed for slot %u (status=%u)",
@@ -4009,7 +4549,44 @@ uint16_t NodeNetCore::restorePersistedPlcSlots()
     }
     _pointCatalog.endBatchUpdate();
 
+    syncPlcRuntimeDefinitions();
+
+    for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
+        if (!present_slots[slot_id]) {
+            continue;
+        }
+
+        const auto* snapshot_header = reinterpret_cast<const PlcObjectSnapshotHeaderV1*>(
+            static_cast<uintptr_t>(PlcSlotLoaderV1::slotObjectSnapshotHeaderAddress(slot_id)));
+        if (!plc_object_snapshot_header_valid(*snapshot_header, slot_id)) {
+            if (_logger != nullptr) {
+                _logger->Warning("PLC flash final snapshot unavailable for slot %u", static_cast<unsigned>(slot_id));
+            }
+            continue;
+        }
+
+        const uint8_t* object_bytes = reinterpret_cast<const uint8_t*>(
+            static_cast<uintptr_t>(PlcSlotLoaderV1::slotObjectSnapshotDataAddress(slot_id)));
+        const PlcSlotLoadResultV1 load_result = PlcSlotLoaderV1::loadObjectFileIntoSlot(*_plcRuntimePublisher,
+                                                                                         _pointCatalog,
+                                                                                         slot_id,
+                                                                                         object_bytes,
+                                                                                         snapshot_header->object_size);
+        if (load_result.status != kPlcSlotLoadOk) {
+            if (_logger != nullptr) {
+                _logger->Warning("PLC flash final restore failed for slot %u (status=%u parse=%u link=%u resolve=%u)",
+                                 static_cast<unsigned>(slot_id),
+                                 static_cast<unsigned>(load_result.status),
+                                 static_cast<unsigned>(load_result.parse_status),
+                                 static_cast<unsigned>(load_result.link_result.status),
+                                 static_cast<unsigned>(load_result.link_result.resolve_status));
+            }
+        }
+    }
+
     oled::showBootProgress("Restore PLC slots", kBootRestoreProgressEnd);
+
+    refreshLoadedMirrorProgramRuntimeMapsIfNeeded();
 
     applyPersistedPlcRuntimeState();
 
@@ -4184,26 +4761,6 @@ void NodeNetCore::registerBuiltinPointDefinitions()
     (void)upsertPointDefinition(definition);
 
     definition = {};
-    make_point_identity(definition.id, deviceId, "plc", "runtimeStoreEpoch");
-    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Runtime Store Epoch");
-    definition.backend = PointBackend::Local;
-    definition.direction = PointDirection::Input;
-    definition.value_type = PointValueType::Uint32;
-    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
-    definition.polling.timeout_ms = 0u;
-    (void)upsertPointDefinition(definition);
-
-    definition = {};
-    make_point_identity(definition.id, deviceId, "plc", "runtimePublishedCount");
-    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Runtime Published Count");
-    definition.backend = PointBackend::Local;
-    definition.direction = PointDirection::Input;
-    definition.value_type = PointValueType::Uint16;
-    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
-    definition.polling.timeout_ms = 0u;
-    (void)upsertPointDefinition(definition);
-
-    definition = {};
     make_point_identity(definition.id, deviceId, "plc", "faultedSlotCount");
     copy_text(definition.display_name, sizeof(definition.display_name), "PLC Faulted Slot Count");
     definition.backend = PointBackend::Local;
@@ -4239,16 +4796,6 @@ void NodeNetCore::registerBuiltinPointDefinitions()
     definition.backend = PointBackend::Local;
     definition.direction = PointDirection::Input;
     definition.value_type = PointValueType::Uint16;
-    definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
-    definition.polling.timeout_ms = 0u;
-    (void)upsertPointDefinition(definition);
-
-    definition = {};
-    make_point_identity(definition.id, deviceId, "plc", "engineScanCount");
-    copy_text(definition.display_name, sizeof(definition.display_name), "PLC Engine Scan Count");
-    definition.backend = PointBackend::Local;
-    definition.direction = PointDirection::Input;
-    definition.value_type = PointValueType::Uint32;
     definition.polling.refresh_ms = kPlcBuiltinPublishPeriodMs;
     definition.polling.timeout_ms = 0u;
     (void)upsertPointDefinition(definition);
@@ -4325,10 +4872,14 @@ void NodeNetCore::registerBuiltinPointDefinitions()
         register_slot_point("state", "State", PointDirection::Input, PointValueType::String, 16u);
         register_slot_point("runEnabled", "Run Enabled", PointDirection::Input, PointValueType::Bool, 0u);
         register_slot_point("status", "Status", PointDirection::Input, PointValueType::Uint32, 0u);
-        register_slot_point("cycleCounter", "Cycle Counter", PointDirection::Input, PointValueType::Uint32, 0u);
+        register_slot_point("pc", "Program Counter", PointDirection::Input, PointValueType::Uint32, 0u);
         register_slot_point("faultCode", "Fault Code", PointDirection::Input, PointValueType::Uint32, 0u);
         register_slot_point("faultInfo", "Fault Info", PointDirection::Input, PointValueType::Uint32, 0u);
         register_slot_point("bytecodeSize", "Bytecode Size", PointDirection::Input, PointValueType::Uint32, 0u);
+        register_slot_point("loadEpoch", "Load Epoch", PointDirection::Input, PointValueType::Uint32, 0u);
+        register_slot_point("objectSize", "Object Size", PointDirection::Input, PointValueType::Uint32, 0u);
+        register_slot_point("objectChecksum", "Object Checksum", PointDirection::Input, PointValueType::Uint32, 0u);
+        register_slot_point("linkedChecksum", "Linked Checksum", PointDirection::Input, PointValueType::Uint32, 0u);
         register_slot_point("source", "Source", PointDirection::Input, PointValueType::String, 16u);
         register_slot_point("programType", "Program Type", PointDirection::Input, PointValueType::String, 16u);
         register_slot_point("paramsSummary", "Params Summary", PointDirection::Input, PointValueType::String, 24u);
@@ -4402,260 +4953,10 @@ void NodeNetCore::publishBuiltinPointStates()
 
 void NodeNetCore::publishBuiltinPlcPointStates(bool include_all_slots)
 {
-    PointIdentity id = {};
-    PointState state = {};
-    const uint32_t now_ms = millis();
+    (void)include_all_slots;
 
-    uint16_t active_slot_count = 0u;
-    uint16_t faulted_slot_count = 0u;
+    syncPlcBuiltinEnginePointStates();
     for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
-        const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
-            static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
-        if (plc_control_block_loaded(*control_block, slot_id)) {
-            ++active_slot_count;
-            if ((control_block->status & kPlcSlotStatusFaultedV1) != 0u) {
-                ++faulted_slot_count;
-            }
-        }
-    }
-
-    uint32_t runtime_store_epoch = 0u;
-    uint16_t runtime_published_count = 0u;
-    if (_plcRuntimePublisher != nullptr) {
-        const PlcRuntimeHeaderV1 header = _plcRuntimePublisher->headerSnapshot();
-        runtime_store_epoch = header.store_epoch;
-        runtime_published_count = _plcRuntimePublisher->publishedCount();
-    }
-
-    make_point_identity(id, deviceId, "plc", "slotCount");
-    state = {};
-    state.value.u16 = kPlcSlotCountV1;
-    state.quality = PointQuality::Good;
-    state.last_update_ms = now_ms;
-    state.last_good_update_ms = now_ms;
-    (void)updatePointState(id, state);
-
-    make_point_identity(id, deviceId, "plc", "activeSlotCount");
-    state = {};
-    state.value.u16 = active_slot_count;
-    state.quality = PointQuality::Good;
-    state.last_update_ms = now_ms;
-    state.last_good_update_ms = now_ms;
-    (void)updatePointState(id, state);
-
-    make_point_identity(id, deviceId, "plc", "runtimeStoreEpoch");
-    state = {};
-    state.value.u32 = runtime_store_epoch;
-    state.quality = PointQuality::Good;
-    state.last_update_ms = now_ms;
-    state.last_good_update_ms = now_ms;
-    (void)updatePointState(id, state);
-
-    make_point_identity(id, deviceId, "plc", "runtimePublishedCount");
-    state = {};
-    state.value.u16 = runtime_published_count;
-    state.quality = PointQuality::Good;
-    state.last_update_ms = now_ms;
-    state.last_good_update_ms = now_ms;
-    (void)updatePointState(id, state);
-
-    make_point_identity(id, deviceId, "plc", "faultedSlotCount");
-    state = {};
-    state.value.u16 = faulted_slot_count;
-    state.quality = PointQuality::Good;
-    state.last_update_ms = now_ms;
-    state.last_good_update_ms = now_ms;
-    (void)updatePointState(id, state);
-
-    make_point_identity(id, deviceId, "plc", "engineEnabled");
-    state = {};
-    state.value.b = plc_engine_enabled();
-    state.quality = PointQuality::Good;
-    state.last_update_ms = now_ms;
-    state.last_good_update_ms = now_ms;
-    (void)updatePointState(id, state);
-
-    make_point_identity(id, deviceId, "plc", "engineBusy");
-    state = {};
-    state.value.b = plc_engine_busy();
-    state.quality = PointQuality::Good;
-    state.last_update_ms = now_ms;
-    state.last_good_update_ms = now_ms;
-    (void)updatePointState(id, state);
-
-    make_point_identity(id, deviceId, "plc", "engineActiveSlot");
-    state = {};
-    state.value.u16 = plc_engine_active_slot();
-    state.quality = PointQuality::Good;
-    state.last_update_ms = now_ms;
-    state.last_good_update_ms = now_ms;
-    (void)updatePointState(id, state);
-
-    make_point_identity(id, deviceId, "plc", "engineScanCount");
-    state = {};
-    state.value.u32 = plc_engine_scan_count();
-    state.quality = PointQuality::Good;
-    state.last_update_ms = now_ms;
-    state.last_good_update_ms = now_ms;
-    (void)updatePointState(id, state);
-
-    make_point_identity(id, deviceId, "plc", "engineLastFaultCode");
-    state = {};
-    state.value.u32 = plc_engine_last_fault_code();
-    state.quality = PointQuality::Good;
-    state.last_update_ms = now_ms;
-    state.last_good_update_ms = now_ms;
-    (void)updatePointState(id, state);
-
-    make_point_identity(id, deviceId, "plc", "engineLastFaultSlot");
-    state = {};
-    state.value.u16 = plc_engine_last_fault_slot();
-    state.quality = PointQuality::Good;
-    state.last_update_ms = now_ms;
-    state.last_good_update_ms = now_ms;
-    (void)updatePointState(id, state);
-
-    make_point_identity(id, deviceId, "plc", "engineScanIntervalCycles");
-    state = {};
-    state.value.u32 = plc_engine_scan_interval_cycles();
-    state.quality = PointQuality::Good;
-    state.last_update_ms = now_ms;
-    state.last_good_update_ms = now_ms;
-    (void)updatePointState(id, state);
-
-    make_point_identity(id, deviceId, "plc", "engineClearFault");
-    state = {};
-    state.value.b = false;
-    state.quality = PointQuality::Good;
-    state.last_update_ms = now_ms;
-    state.last_good_update_ms = now_ms;
-    (void)updatePointState(id, state);
-
-    const uint16_t slot_publish_count = include_all_slots ? kPlcSlotCountV1 : 1u;
-    for (uint16_t slot_id = 0u; slot_id < slot_publish_count; ++slot_id) {
-        char feature[32] = {};
-        (void)std::snprintf(feature, sizeof(feature), "plc.slot%u", static_cast<unsigned>(slot_id));
-
-        const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
-            static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
-        const bool loaded = plc_control_block_loaded(*control_block, slot_id);
-        const bool has_slot_diag = _plcSlotRuntimeDiagnostics.valid && _plcSlotRuntimeDiagnostics.slot_id == slot_id;
-
-        PlcSlotParamsHeaderV1 params_header = {};
-        const bool has_params_header = PlcSlotLoaderV1::readSlotParamsHeader(slot_id, params_header);
-        const uint16_t program_kind = has_params_header ? params_header.program_kind : kPlcProgramKindUnknown;
-
-        PlcMirrorProgramParamsV1 mirror_params = {};
-        const bool has_slot_params = PlcSlotLoaderV1::readMirrorProgramParams(slot_id, mirror_params);
-        uint8_t input_channel = has_slot_params
-                                    ? static_cast<uint8_t>(mirror_params.input_channel)
-                                    : (has_slot_diag ? _plcSlotRuntimeDiagnostics.input_channel
-                                                     : 0u);
-        uint8_t output_channel = has_slot_params
-                                     ? static_cast<uint8_t>(mirror_params.output_channel)
-                                     : (has_slot_diag ? _plcSlotRuntimeDiagnostics.output_channel
-                                                      : 0u);
-        uint16_t input_runtime_index = has_slot_params
-                                           ? mirror_params.input_runtime_index
-                                           : (has_slot_diag ? _plcSlotRuntimeDiagnostics.input_runtime_index
-                                                            : 0xFFFFu);
-        uint16_t output_runtime_index = has_slot_params
-                                            ? mirror_params.output_runtime_index
-                                            : (has_slot_diag ? _plcSlotRuntimeDiagnostics.output_runtime_index
-                                                             : 0xFFFFu);
-        bool runtime_map_ok = input_runtime_index != 0xFFFFu && output_runtime_index != 0xFFFFu;
-        if (!runtime_map_ok) {
-            char waveshare_feature[sizeof(PointIdentity::feature)] = {};
-            if (resolve_waveshare_feature(_pointCatalog,
-                                          deviceId,
-                                          input_channel,
-                                          output_channel,
-                                          waveshare_feature,
-                                          sizeof(waveshare_feature))) {
-                runtime_map_ok = resolve_waveshare_channel_runtime_indices(_pointCatalog,
-                                                                           _plcRuntimePublisher,
-                                                                           deviceId,
-                                                                           waveshare_feature,
-                                                                           input_channel,
-                                                                           output_channel,
-                                                                           input_runtime_index,
-                                                                           output_runtime_index);
-            }
-        }
-        if (!runtime_map_ok) {
-            runtime_map_ok = plc_slot_manifest_runtime_map_ok(slot_id, _plcRuntimePublisher);
-        }
-
-        char params_summary[24] = {};
-        if (has_slot_params) {
-            (void)std::snprintf(params_summary,
-                                sizeof(params_summary),
-                                "in%u->out%u",
-                                static_cast<unsigned>(input_channel),
-                                static_cast<unsigned>(output_channel));
-        } else if (has_params_header) {
-            (void)std::snprintf(params_summary,
-                                sizeof(params_summary),
-                                "kind:%u bytes:%u",
-                                static_cast<unsigned>(params_header.program_kind),
-                                static_cast<unsigned>(params_header.payload_size));
-        } else {
-            copy_text(params_summary, sizeof(params_summary), loaded ? "none" : "empty");
-        }
-
-        auto publish_bool = [&](const char* point_id, bool value) {
-            make_point_identity(id, deviceId, feature, point_id);
-            state = {};
-            state.value.b = value;
-            state.quality = PointQuality::Good;
-            (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
-        };
-
-        auto publish_u16 = [&](const char* point_id, uint16_t value) {
-            make_point_identity(id, deviceId, feature, point_id);
-            state = {};
-            state.value.u16 = value;
-            state.quality = PointQuality::Good;
-            (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
-        };
-
-        auto publish_u32 = [&](const char* point_id, uint32_t value) {
-            make_point_identity(id, deviceId, feature, point_id);
-            state = {};
-            state.value.u32 = value;
-            state.quality = PointQuality::Good;
-            (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
-        };
-
-        auto publish_string = [&](const char* point_id, const char* value) {
-            make_point_identity(id, deviceId, feature, point_id);
-            state = {};
-            copy_text(state.string_value, sizeof(state.string_value), value);
-            state.quality = PointQuality::Good;
-            (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
-        };
-
-        publish_bool("loaded", loaded);
-        publish_string("state", plc_slot_state_name(*control_block, slot_id));
-        publish_bool("runEnabled", loaded && !plc_slot_paused(*control_block));
-        publish_u32("status", loaded ? control_block->status : 0u);
-        publish_u32("cycleCounter", loaded ? control_block->cycle_counter : 0u);
-        publish_u32("faultCode", loaded ? control_block->fault_code : 0u);
-        publish_u32("faultInfo", loaded ? control_block->fault_info : 0u);
-        publish_u32("bytecodeSize", loaded ? control_block->bytecode_size : 0u);
-        publish_string("source",
-                       plc_slot_source_name(slot_id,
-                                            _plcSlotRuntimeDiagnostics.valid,
-                                            _plcSlotRuntimeDiagnostics.slot_id,
-                                            _plcSlotRuntimeDiagnostics.source));
-        publish_string("programType", loaded ? plc_program_kind_name(program_kind) : "none");
-        publish_string("paramsSummary", params_summary);
-        publish_u16("inputChannel", input_channel);
-        publish_u16("outputChannel", output_channel);
-        publish_bool("runtimeMapOk", runtime_map_ok);
-        publish_bool("start", false);
-        publish_bool("stop", false);
-        publish_bool("reset", false);
-        publish_bool("clearFault", false);
+        syncPlcBuiltinSlotPointStates(slot_id);
     }
 }

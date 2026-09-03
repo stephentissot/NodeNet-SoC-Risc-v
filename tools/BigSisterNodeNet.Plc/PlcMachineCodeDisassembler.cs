@@ -27,7 +27,7 @@ namespace BigSisterNodeNet.Plc
             return DisassembleBytecode(codeBytes, null);
         }
 
-        public static string DisassembleBytecode(byte[] codeBytes, Func<ushort, string> operandFormatter)
+        public static string DisassembleBytecode(byte[] codeBytes, Func<uint, string> operandFormatter)
         {
             if (codeBytes == null)
             {
@@ -154,13 +154,13 @@ namespace BigSisterNodeNet.Plc
 
             builder.Append(BuildInstructionListing(result.CodeBytes,
                                                    result.Relocations,
-                                                   symbolIndex => ResolveObjectSymbolName(result.Symbols, symbolIndex)));
+                                                   symbolIndex => ResolveObjectSymbolName(result.Symbols, checked((ushort)symbolIndex))));
             return builder.ToString().TrimEnd();
         }
 
         private static string BuildInstructionListing(byte[] codeBytes,
                                                       IList<PlcAssemblyRelocation> relocations,
-                                                      Func<ushort, string> operandFormatter)
+                                                      Func<uint, string> operandFormatter)
         {
             var builder = new StringBuilder();
             var relocationByOffset = new Dictionary<uint, PlcAssemblyRelocation>();
@@ -512,13 +512,13 @@ namespace BigSisterNodeNet.Plc
                     case PlcMachineCodeAssembler.StorePointFloat32Opcode:
                     case PlcMachineCodeAssembler.IncrementPointIntOpcode:
                     case PlcMachineCodeAssembler.DecrementPointIntOpcode:
-                        if ((pc + 2) >= codeBytes.Length)
+                        if ((pc + 4) >= codeBytes.Length)
                         {
                             throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
                         }
 
                         var operandOffset = (uint)(pc + 1);
-                        var operandValue = ReadUInt16(codeBytes, pc + 1);
+                        var operandValue = ReadUInt32(codeBytes, pc + 1);
                         string operandText;
                         if (relocationByOffset.TryGetValue(operandOffset, out var relocation))
                         {
@@ -536,7 +536,7 @@ namespace BigSisterNodeNet.Plc
                            builder.Append(FormatOpcode(opcode))
                                .Append(' ')
                                .AppendLine(operandText);
-                        pc += 3;
+                        pc += 5;
                         break;
 
                     default:

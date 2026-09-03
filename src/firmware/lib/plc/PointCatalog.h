@@ -16,7 +16,7 @@ extern "C" void* realloc(void*, size_t);
 
 class PointCatalog {
 public:
-    static constexpr size_t kMaxPoints = 512u;
+    static constexpr size_t kMaxPoints = 1024u;
     static constexpr size_t kMaxSerializedSize = 8192u;
     static constexpr size_t kIndexCapacity = 1024u;
 
@@ -52,7 +52,7 @@ public:
     const PointDefinition* entries() const;
     const PointState* states() const;
     const PointCommandState* commandStates() const;
-    static PointDefinition* slotVariableDefinitionScratch();
+    static PointDefinition* slotVariableDefinitionScratch(size_t required_count);
 
     const PointDefinition* find(const PointIdentity& id) const;
     size_t findIndex(const PointIdentity& id) const;
@@ -88,7 +88,6 @@ public:
 
 private:
     static constexpr uint16_t kInvalidIndex = 0xFFFFu;
-    static constexpr size_t kDirtyStateQueueCapacity = kMaxPoints;
 
     static bool identitiesEqual(const PointIdentity& lhs, const PointIdentity& rhs);
     static void copyDefinition(PointDefinition& dst, const PointDefinition& src);
@@ -115,15 +114,8 @@ private:
     size_t count_ = 0u;
     size_t browse_device_count_ = 0u;
     size_t browse_feature_count_ = 0u;
-    uint16_t dirty_state_queue_[kDirtyStateQueueCapacity] = {};
-    uint8_t dirty_state_flags_[(kMaxPoints + 7u) / 8u] = {};
-    size_t dirty_state_queue_head_ = 0u;
-    size_t dirty_state_queue_tail_ = 0u;
-    size_t dirty_state_queue_count_ = 0u;
-    bool runtime_full_sync_required_ = true;
     size_t batch_update_depth_ = 0u;
     bool batch_browse_rebuild_pending_ = false;
-    bool batch_runtime_full_sync_pending_ = false;
 };
 
 #endif
