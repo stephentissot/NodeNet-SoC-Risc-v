@@ -1,0 +1,28 @@
+VAR FLOAT leftValue
+VAR FLOAT rightValue
+VAR BOOL equalFlag
+VAR BOOL lessFlag
+VAR BOOL greaterOrEqualFlag
+
+PUSH_F32 -0.0
+STORE_F32 leftValue
+
+PUSH_F32 0.0
+STORE_F32 rightValue
+
+LOAD_F32 leftValue
+LOAD_F32 rightValue
+FEQ
+STORE_BOOL equalFlag
+
+LOAD_F32 leftValue
+PUSH_F32 10.5
+FLT
+STORE_BOOL lessFlag
+
+LOAD_F32 rightValue
+LOAD_F32 leftValue
+FGE
+STORE_BOOL greaterOrEqualFlag
+
+HALT

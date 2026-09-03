@@ -78,4 +78,6 @@ SECTIONS
         *(.sdram .sdram.*)
         _sdram_end = .;
     } > SDRAM
+
+    ASSERT(_sdram_end <= 0x20100000, "SDRAM image exceeds reserved PLC runtime base at 0x20100000")
 }

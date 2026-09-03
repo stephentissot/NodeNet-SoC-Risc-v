@@ -859,6 +859,33 @@ static bool plc_object_snapshot_header_valid(const PlcObjectSnapshotHeaderV1& he
            header.object_size <= PlcSlotLoaderV1::slotObjectSnapshotCapacity();
 }
 
+static bool plc_slot_manifest_runtime_map_ok(uint16_t slot_id,
+                                             const PlcRuntimePublisherV1* publisher)
+{
+    if (publisher == nullptr) {
+        return false;
+    }
+
+    const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
+    if (!plc_control_block_loaded(*control_block, slot_id)) {
+        return false;
+    }
+
+    const auto* slot_manifest = reinterpret_cast<const PlcSlotManifestV1*>(
+        static_cast<uintptr_t>(PlcSlotLoaderV1::slotManifestAddress(slot_id)));
+    if (slot_manifest->slot_id != slot_id ||
+        slot_manifest->version != kPlcRuntimeAbiV1Version ||
+        slot_manifest->status != kPlcSlotManifestStatusLoadedV1 ||
+        slot_manifest->runtime_header_addr != kPlcRuntimeHeaderAddr) {
+        return false;
+    }
+
+    const PlcRuntimeHeaderV1 runtime_header = publisher->headerSnapshot();
+    return runtime_header.magic == kPlcRuntimeAbiV1Magic &&
+           slot_manifest->load_epoch == runtime_header.store_epoch;
+}
+
 static volatile uint32_t* plc_reg_ptr(uint32_t offset_bytes)
 {
     return reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(PLC_BASE + offset_bytes));
@@ -1034,6 +1061,31 @@ static bool resolve_waveshare_channel_runtime_indices(const PointCatalog& catalo
     }
 
     return true;
+}
+
+static size_t find_slot_variable_catalog_index(const PointCatalog& catalog,
+                                               uint16_t slot_id,
+                                               const char* symbol_name)
+{
+    if (symbol_name == nullptr || symbol_name[0] == '\0') {
+        return PointCatalog::kMaxPoints;
+    }
+
+    char feature[32] = {};
+    (void)std::snprintf(feature, sizeof(feature), "plc.slot%u", static_cast<unsigned>(slot_id));
+    for (size_t index = 0u; index < catalog.size(); ++index) {
+        const PointDefinition& definition = catalog.entries()[index];
+        if (std::strcmp(definition.id.feature, feature) != 0) {
+            continue;
+        }
+        if (std::strcmp(definition.id.point_id, symbol_name) != 0) {
+            continue;
+        }
+
+        return index;
+    }
+
+    return PointCatalog::kMaxPoints;
 }
 
 static PlcMirrorProgramParamsV1 make_mirror_program_params(uint8_t input_channel,
@@ -2880,6 +2932,9 @@ bool NodeNetCore::handlePlcStatusRequest(const JsonDocument& request, JsonDocume
                                                                        output_runtime_index);
         }
     }
+    if (!runtime_map_ok) {
+        runtime_map_ok = plc_slot_manifest_runtime_map_ok(slot_id, _plcRuntimePublisher);
+    }
 
     JsonObject params_doc = response["params"].to<JsonObject>();
     params_doc["inputChannel"] = input_channel;
@@ -3489,6 +3544,7 @@ void NodeNetCore::processPendingPlcAutoLoad()
     _lastPlcAutoLoadDiagnostics.failing_relocation_index = load_result.link_result.failing_relocation_index;
     if (load_result.status != kPlcSlotLoadOk) {
         if (_logger != nullptr) {
+            PlcObjectParseResultV1 object_parse = PlcObjectLinkerV1::parseObjectFile(object_bytes, object_size);
             _logger->Warning("Deferred PLC auto-load failed slot=%u status=%u parse=%u link=%u resolve=%u symbol=%u relocation=%u",
                              static_cast<unsigned>(slot_id),
                              static_cast<unsigned>(load_result.status),
@@ -3497,6 +3553,31 @@ void NodeNetCore::processPendingPlcAutoLoad()
                              static_cast<unsigned>(load_result.link_result.resolve_status),
                              static_cast<unsigned>(load_result.link_result.failing_symbol_index),
                              static_cast<unsigned>(load_result.link_result.failing_relocation_index));
+            if (object_parse.status == kPlcObjectParseOk &&
+                load_result.link_result.failing_symbol_index < object_parse.object_image.symbol_count) {
+                const PlcObjectSymbolRecordV1& symbol =
+                    object_parse.object_image.symbols[load_result.link_result.failing_symbol_index];
+                const size_t catalog_index = find_slot_variable_catalog_index(_pointCatalog,
+                                                                              slot_id,
+                                                                              symbol.symbol_name);
+                const uint16_t runtime_index =
+                    (catalog_index < _pointCatalog.size() && _plcRuntimePublisher != nullptr)
+                        ? _plcRuntimePublisher->runtimeIndexForCatalogIndex(catalog_index)
+                        : PlcRuntimePublisherV1::kInvalidPointIndex;
+                const unsigned actual_type = catalog_index < _pointCatalog.size()
+                    ? static_cast<unsigned>(_pointCatalog.entries()[catalog_index].value_type)
+                    : 0xFFFFu;
+                _logger->Warning("Deferred PLC auto-load symbol[%u] name=%s kind=%u expectedType=%u catalogIndex=%u runtimeIndex=%u actualType=%u published=%u skipped=%u",
+                                 static_cast<unsigned>(load_result.link_result.failing_symbol_index),
+                                 symbol.symbol_name,
+                                 static_cast<unsigned>(symbol.symbol_kind),
+                                 static_cast<unsigned>(symbol.expected_type),
+                                 catalog_index < _pointCatalog.size() ? static_cast<unsigned>(catalog_index) : 0xFFFFu,
+                                 static_cast<unsigned>(runtime_index),
+                                 actual_type,
+                                 _plcRuntimePublisher != nullptr ? static_cast<unsigned>(_plcRuntimePublisher->publishedCount()) : 0u,
+                                 _plcRuntimePublisher != nullptr ? static_cast<unsigned>(_plcRuntimePublisher->skippedCount()) : 0u);
+            }
         }
         if (restore_engine_enabled) {
             plc_engine_set_enabled(true);
@@ -4500,6 +4581,9 @@ void NodeNetCore::publishBuiltinPlcPointStates(bool include_all_slots)
                                                                            input_runtime_index,
                                                                            output_runtime_index);
             }
+        }
+        if (!runtime_map_ok) {
+            runtime_map_ok = plc_slot_manifest_runtime_map_ok(slot_id, _plcRuntimePublisher);
         }
 
         char params_summary[24] = {};

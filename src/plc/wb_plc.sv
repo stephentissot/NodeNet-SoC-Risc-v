@@ -66,6 +66,15 @@ module wb_plc #(
     localparam [7:0] OPCODE_LOAD_I16 = 8'h12;
     localparam [7:0] OPCODE_STORE_I16 = 8'h13;
     localparam [7:0] OPCODE_PUSH_I16 = 8'h14;
+    localparam [7:0] OPCODE_LOAD_U32 = 8'h15;
+    localparam [7:0] OPCODE_STORE_U32 = 8'h16;
+    localparam [7:0] OPCODE_LOAD_I32 = 8'h17;
+    localparam [7:0] OPCODE_STORE_I32 = 8'h18;
+    localparam [7:0] OPCODE_LOAD_F32 = 8'h19;
+    localparam [7:0] OPCODE_STORE_F32 = 8'h1A;
+    localparam [7:0] OPCODE_PUSH_U32 = 8'h1B;
+    localparam [7:0] OPCODE_PUSH_I32 = 8'h1C;
+    localparam [7:0] OPCODE_PUSH_F32 = 8'h1D;
     localparam [7:0] OPCODE_INC_INT16 = 8'h20;
     localparam [7:0] OPCODE_DEC_INT16 = 8'h21;
     localparam [7:0] OPCODE_ADD = 8'h22;
@@ -102,18 +111,36 @@ module wb_plc #(
     localparam [7:0] OPCODE_CTD_DONE = 8'h41;
     localparam [7:0] OPCODE_CTD_VALUE = 8'h42;
     localparam [7:0] OPCODE_CTD_RESET = 8'h43;
+    localparam [7:0] OPCODE_FEQ = 8'h44;
+    localparam [7:0] OPCODE_FNE = 8'h45;
+    localparam [7:0] OPCODE_FLT = 8'h46;
+    localparam [7:0] OPCODE_FLE = 8'h47;
+    localparam [7:0] OPCODE_FGT = 8'h48;
+    localparam [7:0] OPCODE_FGE = 8'h49;
+    localparam [7:0] OPCODE_SX_I16_TO_I32 = 8'h4A;
+    localparam [7:0] OPCODE_TRUNC_I32_TO_I16 = 8'h4B;
+    localparam [7:0] OPCODE_BOOL_TO_U32 = 8'h4C;
+    localparam [7:0] OPCODE_BOOL_TO_I32 = 8'h4D;
+    localparam [7:0] OPCODE_U32_TO_BOOL = 8'h4E;
+    localparam [7:0] OPCODE_I32_TO_BOOL = 8'h4F;
     localparam integer EDGE_STATE_BITS = 384;
     localparam integer EDGE_STATE_WORD_COUNT = EDGE_STATE_BITS / 32;
     localparam integer EDGE_STATE_SECTION_BYTES = EDGE_STATE_WORD_COUNT * 4;
     localparam [2:0] STACK_DEPTH_MAX = 3'd4;
 
-    localparam [1:0] STACK_TYPE_NONE = 2'd0;
-    localparam [1:0] STACK_TYPE_BOOL = 2'd1;
-    localparam [1:0] STACK_TYPE_INT16 = 2'd2;
+    localparam [2:0] STACK_TYPE_NONE = 3'd0;
+    localparam [2:0] STACK_TYPE_BOOL = 3'd1;
+    localparam [2:0] STACK_TYPE_INT16 = 3'd2;
+    localparam [2:0] STACK_TYPE_UINT32 = 3'd3;
+    localparam [2:0] STACK_TYPE_INT32 = 3'd4;
+    localparam [2:0] STACK_TYPE_FLOAT32 = 3'd5;
 
     localparam [7:0] RUNTIME_TYPE_BOOL = 8'd1;
     localparam [7:0] RUNTIME_TYPE_UINT16 = 8'd2;
     localparam [7:0] RUNTIME_TYPE_INT16 = 8'd3;
+    localparam [7:0] RUNTIME_TYPE_UINT32 = 8'd4;
+    localparam [7:0] RUNTIME_TYPE_INT32 = 8'd5;
+    localparam [7:0] RUNTIME_TYPE_FLOAT32 = 8'd6;
     localparam [7:0] RUNTIME_FLAG_READABLE = 8'h01;
     localparam [7:0] RUNTIME_FLAG_WRITABLE = 8'h02;
     localparam [7:0] RUNTIME_FLAG_SHARED_POINT_STATE = 8'h40;
@@ -218,6 +245,9 @@ module wb_plc #(
     localparam [6:0] ST_COUNTER_WRITE_WORD0 = 7'd69;
     localparam [6:0] ST_COUNTER_WRITE_WORD1 = 7'd70;
     localparam [6:0] ST_COUNTER_WRITE_FLAGS = 7'd71;
+    localparam [6:0] ST_PUSH_WIDE32_VALUE = 7'd72;
+    localparam [6:0] ST_WIDE32_READ_VALUE = 7'd73;
+    localparam [6:0] ST_WIDE32_WRITE_VALUE0 = 7'd74;
 
     reg        engine_enable;
     reg [31:0] scan_interval_cycles;
@@ -243,10 +273,10 @@ module wb_plc #(
     reg [31:0] slot_entry_pc;
     reg [31:0] current_pc;
     reg [31:0] instruction_count;
-    reg [63:0] stack_value;
-    reg [7:0]  stack_type;
+    reg [127:0] stack_value;
+    reg [11:0]  stack_type;
     reg [2:0]  stack_depth;
-    reg [15:0] pending_stack_value;
+    reg [31:0] pending_stack_value;
     reg [31:0] current_immediate_u32;
     reg [7:0]  current_opcode;
     reg [15:0] current_runtime_index;
@@ -296,10 +326,45 @@ module wb_plc #(
         end
     endfunction
 
-    function [6:0] stack_value_bit_index;
+    function [7:0] stack_value_bit_index;
         input [2:0] stack_index;
         begin
-            stack_value_bit_index = {stack_index, 4'b0000};
+            stack_value_bit_index = {stack_index, 5'b00000};
+        end
+    endfunction
+
+    function [4:0] stack_type_bit_index;
+        input [2:0] stack_index;
+        begin
+            stack_type_bit_index = (stack_index * 3'd3);
+        end
+    endfunction
+
+    function [31:0] stack_entry_value32;
+        input [2:0] stack_index;
+        begin
+            stack_entry_value32 = stack_value[stack_value_bit_index(stack_index) +: 32];
+        end
+    endfunction
+
+    function stack_entry_bool;
+        input [2:0] stack_index;
+        begin
+            stack_entry_bool = stack_value[stack_value_bit_index(stack_index)] != 1'b0;
+        end
+    endfunction
+
+    function [15:0] stack_entry_i16;
+        input [2:0] stack_index;
+        begin
+            stack_entry_i16 = stack_value[stack_value_bit_index(stack_index) +: 16];
+        end
+    endfunction
+
+    function [2:0] stack_entry_type;
+        input [2:0] stack_index;
+        begin
+            stack_entry_type = stack_type[stack_type_bit_index(stack_index) +: 3];
         end
     endfunction
 
@@ -500,6 +565,60 @@ module wb_plc #(
         input [15:0] raw_value;
         begin
             sign_extend_i16 = {{16{raw_value[15]}}, raw_value};
+        end
+    endfunction
+
+    function float32_is_nan;
+        input [31:0] raw_value;
+        begin
+            float32_is_nan = (raw_value[30:23] == 8'hFF) && (raw_value[22:0] != 23'd0);
+        end
+    endfunction
+
+    function float32_is_zero;
+        input [31:0] raw_value;
+        begin
+            float32_is_zero = raw_value[30:0] == 31'd0;
+        end
+    endfunction
+
+    function [31:0] float32_ordered_key;
+        input [31:0] raw_value;
+        begin
+            float32_ordered_key = raw_value[31] ? ~raw_value : (raw_value ^ 32'h8000_0000);
+        end
+    endfunction
+
+    function float32_equal;
+        input [31:0] left_value;
+        input [31:0] right_value;
+        begin
+            float32_equal = !float32_is_nan(left_value) &&
+                            !float32_is_nan(right_value) &&
+                            ((left_value == right_value) ||
+                             (float32_is_zero(left_value) && float32_is_zero(right_value)));
+        end
+    endfunction
+
+    function float32_less_than;
+        input [31:0] left_value;
+        input [31:0] right_value;
+        begin
+            float32_less_than = !float32_is_nan(left_value) &&
+                                !float32_is_nan(right_value) &&
+                                !float32_equal(left_value, right_value) &&
+                                (float32_ordered_key(left_value) < float32_ordered_key(right_value));
+        end
+    endfunction
+
+    function float32_less_or_equal;
+        input [31:0] left_value;
+        input [31:0] right_value;
+        begin
+            float32_less_or_equal = !float32_is_nan(left_value) &&
+                                    !float32_is_nan(right_value) &&
+                                    (float32_equal(left_value, right_value) ||
+                                     (float32_ordered_key(left_value) < float32_ordered_key(right_value)));
         end
     endfunction
 
@@ -708,10 +827,10 @@ module wb_plc #(
             slot_entry_pc <= 32'd0;
             current_pc <= 32'd0;
             instruction_count <= 32'd0;
-            stack_value <= 64'd0;
-            stack_type <= 8'd0;
+            stack_value <= 128'd0;
+            stack_type <= 12'd0;
             stack_depth <= 3'd0;
-            pending_stack_value <= 16'd0;
+            pending_stack_value <= 32'd0;
             current_immediate_u32 <= 32'd0;
             current_opcode <= 8'd0;
             current_runtime_index <= 16'd0;
@@ -889,10 +1008,10 @@ module wb_plc #(
                         slot_entry_pc <= (cb_pc < cb_bytecode_size) ? cb_pc : 32'd0;
                         current_pc <= (cb_pc < cb_bytecode_size) ? cb_pc : 32'd0;
                         instruction_count <= 32'd0;
-                        stack_value <= 64'd0;
-                        stack_type <= 8'd0;
+                        stack_value <= 128'd0;
+                        stack_type <= 12'd0;
                         stack_depth <= 3'd0;
-                        pending_stack_value <= 16'd0;
+                        pending_stack_value <= 32'd0;
                         cached_word_valid <= 1'b0;
                         state <= ST_FETCH_OPCODE;
                     end
@@ -1090,7 +1209,11 @@ module wb_plc #(
                     end else if (cached_word_valid && (cached_word_addr == ((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC))) begin
                         current_immediate_u32[31:24] <= pick_byte(cached_word_data, (cb_bytecode_base + current_pc) & 32'd3);
                         current_pc <= current_pc + 32'd1;
-                        state <= ST_TIMER_PREP_START;
+                        state <= (current_opcode == OPCODE_PUSH_U32 ||
+                                  current_opcode == OPCODE_PUSH_I32 ||
+                                  current_opcode == OPCODE_PUSH_F32)
+                            ? ST_PUSH_WIDE32_VALUE
+                            : ST_TIMER_PREP_START;
                     end else if (!m_cyc_o) begin
                         start_read((cb_bytecode_base + current_pc) & 32'hFFFF_FFFC);
                     end else if (m_ack_i) begin
@@ -1100,7 +1223,11 @@ module wb_plc #(
                         cached_word_data <= m_dat_i;
                         current_immediate_u32[31:24] <= pick_byte(m_dat_i, (cb_bytecode_base + current_pc) & 32'd3);
                         current_pc <= current_pc + 32'd1;
-                        state <= ST_TIMER_PREP_START;
+                        state <= (current_opcode == OPCODE_PUSH_U32 ||
+                                  current_opcode == OPCODE_PUSH_I32 ||
+                                  current_opcode == OPCODE_PUSH_F32)
+                            ? ST_PUSH_WIDE32_VALUE
+                            : ST_TIMER_PREP_START;
                     end
                 end
 
@@ -1108,8 +1235,24 @@ module wb_plc #(
                     if (stack_depth >= STACK_DEPTH_MAX) begin
                         begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                     end else begin
-                        stack_value[stack_value_bit_index(stack_depth) +: 16] <= current_runtime_index;
-                        stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_INT16;
+                        stack_value[stack_value_bit_index(stack_depth) +: 32] <= sign_extend_i16(current_runtime_index);
+                        stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_INT16;
+                        stack_depth <= stack_depth + 3'd1;
+                        state <= ST_FETCH_OPCODE;
+                    end
+                end
+
+                ST_PUSH_WIDE32_VALUE: begin
+                    if (stack_depth >= STACK_DEPTH_MAX) begin
+                        begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
+                    end else begin
+                        stack_value[stack_value_bit_index(stack_depth) +: 32] <= current_immediate_u32;
+                        stack_type[stack_type_bit_index(stack_depth) +: 3] <=
+                            (current_opcode == OPCODE_PUSH_U32)
+                                ? STACK_TYPE_UINT32
+                                : ((current_opcode == OPCODE_PUSH_I32)
+                                    ? STACK_TYPE_INT32
+                                    : STACK_TYPE_FLOAT32);
                         stack_depth <= stack_depth + 3'd1;
                         state <= ST_FETCH_OPCODE;
                     end
@@ -1122,8 +1265,8 @@ module wb_plc #(
                             if (stack_depth >= STACK_DEPTH_MAX) begin
                                 begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth) +: 16] <= 16'd1;
-                                stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_value[stack_value_bit_index(stack_depth) +: 32] <= 32'd1;
+                                stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_BOOL;
                                 stack_depth <= stack_depth + 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1132,8 +1275,8 @@ module wb_plc #(
                             if (stack_depth >= STACK_DEPTH_MAX) begin
                                 begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth) +: 16] <= 16'd0;
-                                stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_value[stack_value_bit_index(stack_depth) +: 32] <= 32'd0;
+                                stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_BOOL;
                                 stack_depth <= stack_depth + 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1144,9 +1287,10 @@ module wb_plc #(
                             end else if (stack_depth >= STACK_DEPTH_MAX) begin
                                 begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth) +: 16] <=
-                                    stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
-                                stack_type[(stack_depth << 1) +: 2] <= stack_type[((stack_depth - 3'd1) << 1) +: 2];
+                                stack_value[stack_value_bit_index(stack_depth) +: 32] <=
+                                    stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32];
+                                stack_type[stack_type_bit_index(stack_depth) +: 3] <=
+                                    stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3];
                                 stack_depth <= stack_depth + 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1165,16 +1309,16 @@ module wb_plc #(
                             end else begin
                                 case (stack_depth)
                                     3'd2: begin
-                                        stack_value[31:0] <= {stack_value[15:0], stack_value[31:16]};
-                                        stack_type[3:0] <= {stack_type[1:0], stack_type[3:2]};
+                                        stack_value[63:0] <= {stack_value[31:0], stack_value[63:32]};
+                                        stack_type[5:0] <= {stack_type[2:0], stack_type[5:3]};
                                     end
                                     3'd3: begin
-                                        stack_value[47:0] <= {stack_value[31:16], stack_value[47:32], stack_value[15:0]};
-                                        stack_type[5:0] <= {stack_type[3:2], stack_type[5:4], stack_type[1:0]};
+                                        stack_value[95:0] <= {stack_value[63:32], stack_value[95:64], stack_value[31:0]};
+                                        stack_type[8:0] <= {stack_type[5:3], stack_type[8:6], stack_type[2:0]};
                                     end
                                     default: begin
-                                        stack_value[63:0] <= {stack_value[47:32], stack_value[63:48], stack_value[31:16], stack_value[15:0]};
-                                        stack_type[7:0] <= {stack_type[5:4], stack_type[7:6], stack_type[3:2], stack_type[1:0]};
+                                        stack_value[127:0] <= {stack_value[95:64], stack_value[127:96], stack_value[63:32], stack_value[31:0]};
+                                        stack_type[11:0] <= {stack_type[8:6], stack_type[11:9], stack_type[5:3], stack_type[2:0]};
                                     end
                                 endcase
                                 state <= ST_FETCH_OPCODE;
@@ -1183,14 +1327,15 @@ module wb_plc #(
                         OPCODE_AND: begin
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_BOOL ||
-                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                            end else if (stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] != STACK_TYPE_BOOL ||
+                                         stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] != STACK_TYPE_BOOL) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
-                                    stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] &
-                                    stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
-                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    {31'd0,
+                                     stack_entry_bool(stack_depth - 3'd2) &
+                                     stack_entry_bool(stack_depth - 3'd1)};
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <= STACK_TYPE_BOOL;
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1198,14 +1343,15 @@ module wb_plc #(
                         OPCODE_OR: begin
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_BOOL ||
-                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                            end else if (stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] != STACK_TYPE_BOOL ||
+                                         stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] != STACK_TYPE_BOOL) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
-                                    stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] |
-                                    stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
-                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    {31'd0,
+                                     stack_entry_bool(stack_depth - 3'd2) |
+                                     stack_entry_bool(stack_depth - 3'd1)};
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <= STACK_TYPE_BOOL;
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1213,14 +1359,15 @@ module wb_plc #(
                         OPCODE_XOR: begin
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_BOOL ||
-                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                            end else if (stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] != STACK_TYPE_BOOL ||
+                                         stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] != STACK_TYPE_BOOL) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
-                                    stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] ^
-                                    stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
-                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    {31'd0,
+                                     stack_entry_bool(stack_depth - 3'd2) ^
+                                     stack_entry_bool(stack_depth - 3'd1)};
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <= STACK_TYPE_BOOL;
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1228,25 +1375,26 @@ module wb_plc #(
                         OPCODE_NOT: begin
                             if (stack_depth == 3'd0) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                            end else if (stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] != STACK_TYPE_BOOL) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] <=
-                                    ~stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] & 16'd1;
+                                stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32] <=
+                                    {31'd0, ~stack_entry_bool(stack_depth - 3'd1)};
                                 state <= ST_FETCH_OPCODE;
                             end
                         end
                         OPCODE_EQ: begin
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] == STACK_TYPE_NONE ||
-                                         stack_type[((stack_depth - 3'd2) << 1) +: 2] != stack_type[((stack_depth - 3'd1) << 1) +: 2]) begin
+                            end else if (stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] == STACK_TYPE_NONE ||
+                                         stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] !=
+                                         stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3]) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
-                                    (stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] ==
-                                     stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]) ? 16'd1 : 16'd0;
-                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    (stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] ==
+                                     stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32]) ? 32'd1 : 32'd0;
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <= STACK_TYPE_BOOL;
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1254,14 +1402,105 @@ module wb_plc #(
                         OPCODE_NE: begin
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] == STACK_TYPE_NONE ||
-                                         stack_type[((stack_depth - 3'd2) << 1) +: 2] != stack_type[((stack_depth - 3'd1) << 1) +: 2]) begin
+                            end else if (stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] == STACK_TYPE_NONE ||
+                                         stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] !=
+                                         stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3]) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
-                                    (stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] !=
-                                     stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]) ? 16'd1 : 16'd0;
-                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    (stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] !=
+                                     stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32]) ? 32'd1 : 32'd0;
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_FEQ: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_FLOAT32 ||
+                                         stack_entry_type(stack_depth - 3'd1) != STACK_TYPE_FLOAT32) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    float32_equal(stack_entry_value32(stack_depth - 3'd2),
+                                                  stack_entry_value32(stack_depth - 3'd1)) ? 32'd1 : 32'd0;
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_FNE: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_FLOAT32 ||
+                                         stack_entry_type(stack_depth - 3'd1) != STACK_TYPE_FLOAT32) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    float32_equal(stack_entry_value32(stack_depth - 3'd2),
+                                                  stack_entry_value32(stack_depth - 3'd1)) ? 32'd0 : 32'd1;
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_FLT: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_FLOAT32 ||
+                                         stack_entry_type(stack_depth - 3'd1) != STACK_TYPE_FLOAT32) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    float32_less_than(stack_entry_value32(stack_depth - 3'd2),
+                                                      stack_entry_value32(stack_depth - 3'd1)) ? 32'd1 : 32'd0;
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_FLE: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_FLOAT32 ||
+                                         stack_entry_type(stack_depth - 3'd1) != STACK_TYPE_FLOAT32) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    float32_less_or_equal(stack_entry_value32(stack_depth - 3'd2),
+                                                          stack_entry_value32(stack_depth - 3'd1)) ? 32'd1 : 32'd0;
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_FGT: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_FLOAT32 ||
+                                         stack_entry_type(stack_depth - 3'd1) != STACK_TYPE_FLOAT32) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    float32_less_than(stack_entry_value32(stack_depth - 3'd1),
+                                                      stack_entry_value32(stack_depth - 3'd2)) ? 32'd1 : 32'd0;
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <= STACK_TYPE_BOOL;
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_FGE: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_FLOAT32 ||
+                                         stack_entry_type(stack_depth - 3'd1) != STACK_TYPE_FLOAT32) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    float32_less_or_equal(stack_entry_value32(stack_depth - 3'd1),
+                                                          stack_entry_value32(stack_depth - 3'd2)) ? 32'd1 : 32'd0;
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <= STACK_TYPE_BOOL;
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1269,14 +1508,21 @@ module wb_plc #(
                         OPCODE_ADD: begin
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
-                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                            end else if (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_NONE ||
+                                         stack_entry_type(stack_depth - 3'd2) != stack_entry_type(stack_depth - 3'd1) ||
+                                         (stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT16 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_UINT32 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT32)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
-                                    $signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) +
-                                    $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]);
-                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_INT16;
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_INT16)
+                                        ? sign_extend_i16($signed(stack_entry_i16(stack_depth - 3'd2)) +
+                                                          $signed(stack_entry_i16(stack_depth - 3'd1)))
+                                        : (stack_entry_value32(stack_depth - 3'd2) +
+                                           stack_entry_value32(stack_depth - 3'd1));
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <=
+                                    stack_entry_type(stack_depth - 3'd2);
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1284,14 +1530,21 @@ module wb_plc #(
                         OPCODE_SUB: begin
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
-                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                            end else if (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_NONE ||
+                                         stack_entry_type(stack_depth - 3'd2) != stack_entry_type(stack_depth - 3'd1) ||
+                                         (stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT16 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_UINT32 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT32)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
-                                    $signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) -
-                                    $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]);
-                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_INT16;
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_INT16)
+                                        ? sign_extend_i16($signed(stack_entry_i16(stack_depth - 3'd2)) -
+                                                          $signed(stack_entry_i16(stack_depth - 3'd1)))
+                                        : (stack_entry_value32(stack_depth - 3'd2) -
+                                           stack_entry_value32(stack_depth - 3'd1));
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <=
+                                    stack_entry_type(stack_depth - 3'd2);
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1299,14 +1552,23 @@ module wb_plc #(
                         OPCODE_LT: begin
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
-                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                            end else if (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_NONE ||
+                                         stack_entry_type(stack_depth - 3'd2) != stack_entry_type(stack_depth - 3'd1) ||
+                                         (stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT16 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_UINT32 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT32)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
-                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) <
-                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16])) ? 16'd1 : 16'd0;
-                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_INT16)
+                                        ? (($signed(stack_entry_i16(stack_depth - 3'd2)) <
+                                            $signed(stack_entry_i16(stack_depth - 3'd1))) ? 32'd1 : 32'd0)
+                                        : ((stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_INT32)
+                                            ? (($signed(stack_entry_value32(stack_depth - 3'd2)) <
+                                                $signed(stack_entry_value32(stack_depth - 3'd1))) ? 32'd1 : 32'd0)
+                                            : ((stack_entry_value32(stack_depth - 3'd2) <
+                                                stack_entry_value32(stack_depth - 3'd1)) ? 32'd1 : 32'd0));
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <= STACK_TYPE_BOOL;
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1314,14 +1576,23 @@ module wb_plc #(
                         OPCODE_LE: begin
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
-                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                            end else if (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_NONE ||
+                                         stack_entry_type(stack_depth - 3'd2) != stack_entry_type(stack_depth - 3'd1) ||
+                                         (stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT16 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_UINT32 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT32)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
-                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) <=
-                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16])) ? 16'd1 : 16'd0;
-                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_INT16)
+                                        ? (($signed(stack_entry_i16(stack_depth - 3'd2)) <=
+                                            $signed(stack_entry_i16(stack_depth - 3'd1))) ? 32'd1 : 32'd0)
+                                        : ((stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_INT32)
+                                            ? (($signed(stack_entry_value32(stack_depth - 3'd2)) <=
+                                                $signed(stack_entry_value32(stack_depth - 3'd1))) ? 32'd1 : 32'd0)
+                                            : ((stack_entry_value32(stack_depth - 3'd2) <=
+                                                stack_entry_value32(stack_depth - 3'd1)) ? 32'd1 : 32'd0));
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <= STACK_TYPE_BOOL;
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1329,14 +1600,23 @@ module wb_plc #(
                         OPCODE_GT: begin
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
-                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                            end else if (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_NONE ||
+                                         stack_entry_type(stack_depth - 3'd2) != stack_entry_type(stack_depth - 3'd1) ||
+                                         (stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT16 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_UINT32 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT32)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
-                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) >
-                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16])) ? 16'd1 : 16'd0;
-                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_INT16)
+                                        ? (($signed(stack_entry_i16(stack_depth - 3'd2)) >
+                                            $signed(stack_entry_i16(stack_depth - 3'd1))) ? 32'd1 : 32'd0)
+                                        : ((stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_INT32)
+                                            ? (($signed(stack_entry_value32(stack_depth - 3'd2)) >
+                                                $signed(stack_entry_value32(stack_depth - 3'd1))) ? 32'd1 : 32'd0)
+                                            : ((stack_entry_value32(stack_depth - 3'd2) >
+                                                stack_entry_value32(stack_depth - 3'd1)) ? 32'd1 : 32'd0));
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <= STACK_TYPE_BOOL;
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1344,14 +1624,23 @@ module wb_plc #(
                         OPCODE_GE: begin
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
-                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                            end else if (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_NONE ||
+                                         stack_entry_type(stack_depth - 3'd2) != stack_entry_type(stack_depth - 3'd1) ||
+                                         (stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT16 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_UINT32 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT32)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
-                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) >=
-                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16])) ? 16'd1 : 16'd0;
-                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_BOOL;
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_INT16)
+                                        ? (($signed(stack_entry_i16(stack_depth - 3'd2)) >=
+                                            $signed(stack_entry_i16(stack_depth - 3'd1))) ? 32'd1 : 32'd0)
+                                        : ((stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_INT32)
+                                            ? (($signed(stack_entry_value32(stack_depth - 3'd2)) >=
+                                                $signed(stack_entry_value32(stack_depth - 3'd1))) ? 32'd1 : 32'd0)
+                                            : ((stack_entry_value32(stack_depth - 3'd2) >=
+                                                stack_entry_value32(stack_depth - 3'd1)) ? 32'd1 : 32'd0));
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <= STACK_TYPE_BOOL;
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1359,16 +1648,30 @@ module wb_plc #(
                         OPCODE_MIN: begin
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
-                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                            end else if (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_NONE ||
+                                         stack_entry_type(stack_depth - 3'd2) != stack_entry_type(stack_depth - 3'd1) ||
+                                         (stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT16 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_UINT32 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT32)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
-                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) <=
-                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]))
-                                        ? stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]
-                                        : stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
-                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_INT16;
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_INT16)
+                                        ? (($signed(stack_entry_i16(stack_depth - 3'd2)) <=
+                                            $signed(stack_entry_i16(stack_depth - 3'd1)))
+                                                ? sign_extend_i16(stack_entry_i16(stack_depth - 3'd2))
+                                                : sign_extend_i16(stack_entry_i16(stack_depth - 3'd1)))
+                                        : ((stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_INT32)
+                                            ? (($signed(stack_entry_value32(stack_depth - 3'd2)) <=
+                                                $signed(stack_entry_value32(stack_depth - 3'd1)))
+                                                    ? stack_entry_value32(stack_depth - 3'd2)
+                                                    : stack_entry_value32(stack_depth - 3'd1))
+                                            : ((stack_entry_value32(stack_depth - 3'd2) <=
+                                                stack_entry_value32(stack_depth - 3'd1))
+                                                    ? stack_entry_value32(stack_depth - 3'd2)
+                                                    : stack_entry_value32(stack_depth - 3'd1)));
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <=
+                                    stack_entry_type(stack_depth - 3'd2);
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1376,16 +1679,30 @@ module wb_plc #(
                         OPCODE_MAX: begin
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
-                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                            end else if (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_NONE ||
+                                         stack_entry_type(stack_depth - 3'd2) != stack_entry_type(stack_depth - 3'd1) ||
+                                         (stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT16 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_UINT32 &&
+                                          stack_entry_type(stack_depth - 3'd2) != STACK_TYPE_INT32)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16] <=
-                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]) >=
-                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]))
-                                        ? stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]
-                                        : stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
-                                stack_type[((stack_depth - 3'd2) << 1) +: 2] <= STACK_TYPE_INT16;
+                                stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 32] <=
+                                    (stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_INT16)
+                                        ? (($signed(stack_entry_i16(stack_depth - 3'd2)) >=
+                                            $signed(stack_entry_i16(stack_depth - 3'd1)))
+                                                ? sign_extend_i16(stack_entry_i16(stack_depth - 3'd2))
+                                                : sign_extend_i16(stack_entry_i16(stack_depth - 3'd1)))
+                                        : ((stack_entry_type(stack_depth - 3'd2) == STACK_TYPE_INT32)
+                                            ? (($signed(stack_entry_value32(stack_depth - 3'd2)) >=
+                                                $signed(stack_entry_value32(stack_depth - 3'd1)))
+                                                    ? stack_entry_value32(stack_depth - 3'd2)
+                                                    : stack_entry_value32(stack_depth - 3'd1))
+                                            : ((stack_entry_value32(stack_depth - 3'd2) >=
+                                                stack_entry_value32(stack_depth - 3'd1))
+                                                    ? stack_entry_value32(stack_depth - 3'd2)
+                                                    : stack_entry_value32(stack_depth - 3'd1)));
+                                stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3] <=
+                                    stack_entry_type(stack_depth - 3'd2);
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1393,20 +1710,40 @@ module wb_plc #(
                         OPCODE_CLAMP: begin
                             if (stack_depth < 3'd3) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd3) << 1) +: 2] != STACK_TYPE_INT16 ||
-                                         stack_type[((stack_depth - 3'd2) << 1) +: 2] != STACK_TYPE_INT16 ||
-                                         stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                            end else if (stack_entry_type(stack_depth - 3'd3) == STACK_TYPE_NONE ||
+                                         stack_entry_type(stack_depth - 3'd3) != stack_entry_type(stack_depth - 3'd2) ||
+                                         stack_entry_type(stack_depth - 3'd3) != stack_entry_type(stack_depth - 3'd1) ||
+                                         (stack_entry_type(stack_depth - 3'd3) != STACK_TYPE_INT16 &&
+                                          stack_entry_type(stack_depth - 3'd3) != STACK_TYPE_UINT32 &&
+                                          stack_entry_type(stack_depth - 3'd3) != STACK_TYPE_INT32)) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 16] <=
-                                    ($signed(stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 16]) <
-                                     $signed(stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]))
-                                        ? stack_value[stack_value_bit_index(stack_depth - 3'd2) +: 16]
-                                        : (($signed(stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 16]) >
-                                            $signed(stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]))
-                                               ? stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16]
-                                               : stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 16]);
-                                stack_type[((stack_depth - 3'd3) << 1) +: 2] <= STACK_TYPE_INT16;
+                                stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 32] <=
+                                    (stack_entry_type(stack_depth - 3'd3) == STACK_TYPE_INT16)
+                                        ? (($signed(stack_entry_i16(stack_depth - 3'd3)) <
+                                            $signed(stack_entry_i16(stack_depth - 3'd2)))
+                                                ? sign_extend_i16(stack_entry_i16(stack_depth - 3'd2))
+                                                : (($signed(stack_entry_i16(stack_depth - 3'd3)) >
+                                                     $signed(stack_entry_i16(stack_depth - 3'd1)))
+                                                        ? sign_extend_i16(stack_entry_i16(stack_depth - 3'd1))
+                                                        : sign_extend_i16(stack_entry_i16(stack_depth - 3'd3))))
+                                        : ((stack_entry_type(stack_depth - 3'd3) == STACK_TYPE_INT32)
+                                            ? (($signed(stack_entry_value32(stack_depth - 3'd3)) <
+                                                $signed(stack_entry_value32(stack_depth - 3'd2)))
+                                                    ? stack_entry_value32(stack_depth - 3'd2)
+                                                    : (($signed(stack_entry_value32(stack_depth - 3'd3)) >
+                                                         $signed(stack_entry_value32(stack_depth - 3'd1)))
+                                                            ? stack_entry_value32(stack_depth - 3'd1)
+                                                            : stack_entry_value32(stack_depth - 3'd3)))
+                                            : ((stack_entry_value32(stack_depth - 3'd3) <
+                                                stack_entry_value32(stack_depth - 3'd2))
+                                                    ? stack_entry_value32(stack_depth - 3'd2)
+                                                    : ((stack_entry_value32(stack_depth - 3'd3) >
+                                                         stack_entry_value32(stack_depth - 3'd1))
+                                                            ? stack_entry_value32(stack_depth - 3'd1)
+                                                            : stack_entry_value32(stack_depth - 3'd3))));
+                                stack_type[stack_type_bit_index(stack_depth - 3'd3) +: 3] <=
+                                    stack_entry_type(stack_depth - 3'd3);
                                 stack_depth <= stack_depth - 3'd2;
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -1414,26 +1751,106 @@ module wb_plc #(
                         OPCODE_SEL: begin
                             if (stack_depth < 3'd3) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
-                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL ||
-                                         stack_type[((stack_depth - 3'd3) << 1) +: 2] == STACK_TYPE_NONE ||
-                                         stack_type[((stack_depth - 3'd3) << 1) +: 2] != stack_type[((stack_depth - 3'd2) << 1) +: 2]) begin
+                            end else if (stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] != STACK_TYPE_BOOL ||
+                                         stack_type[stack_type_bit_index(stack_depth - 3'd3) +: 3] == STACK_TYPE_NONE ||
+                                         stack_type[stack_type_bit_index(stack_depth - 3'd3) +: 3] !=
+                                         stack_type[stack_type_bit_index(stack_depth - 3'd2) +: 3]) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 16] <=
+                                stack_value[stack_value_bit_index(stack_depth - 3'd3) +: 32] <=
                                     stack_value[stack_value_bit_index(
-                                        stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] != 16'd0
+                                        stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32] != 32'd0
                                             ? (stack_depth - 3'd2)
-                                            : (stack_depth - 3'd3)) +: 16];
-                                stack_type[((stack_depth - 3'd3) << 1) +: 2] <=
-                                    stack_type[((stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] != 16'd0
-                                        ? (stack_depth - 3'd2)
-                                        : (stack_depth - 3'd3)) << 1) +: 2];
+                                            : (stack_depth - 3'd3)) +: 32];
+                                stack_type[stack_type_bit_index(stack_depth - 3'd3) +: 3] <=
+                                    stack_type[stack_type_bit_index(
+                                        (stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32] != 32'd0)
+                                            ? (stack_depth - 3'd2)
+                                            : (stack_depth - 3'd3)) +: 3];
                                 stack_depth <= stack_depth - 3'd2;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_SX_I16_TO_I32: begin
+                            if (stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_entry_type(stack_depth - 3'd1) != STACK_TYPE_INT16) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32] <=
+                                    sign_extend_i16(stack_entry_i16(stack_depth - 3'd1));
+                                stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] <= STACK_TYPE_INT32;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_TRUNC_I32_TO_I16: begin
+                            if (stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_entry_type(stack_depth - 3'd1) != STACK_TYPE_INT32) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32] <=
+                                    sign_extend_i16(stack_entry_i16(stack_depth - 3'd1));
+                                stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] <= STACK_TYPE_INT16;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_BOOL_TO_U32: begin
+                            if (stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_entry_type(stack_depth - 3'd1) != STACK_TYPE_BOOL) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32] <=
+                                    {31'd0, stack_entry_bool(stack_depth - 3'd1)};
+                                stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] <= STACK_TYPE_UINT32;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_BOOL_TO_I32: begin
+                            if (stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_entry_type(stack_depth - 3'd1) != STACK_TYPE_BOOL) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32] <=
+                                    {31'd0, stack_entry_bool(stack_depth - 3'd1)};
+                                stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] <= STACK_TYPE_INT32;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_U32_TO_BOOL: begin
+                            if (stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_entry_type(stack_depth - 3'd1) != STACK_TYPE_UINT32) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32] <=
+                                    (stack_entry_value32(stack_depth - 3'd1) != 32'd0) ? 32'd1 : 32'd0;
+                                stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] <= STACK_TYPE_BOOL;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end
+                        OPCODE_I32_TO_BOOL: begin
+                            if (stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if (stack_entry_type(stack_depth - 3'd1) != STACK_TYPE_INT32) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32] <=
+                                    (stack_entry_value32(stack_depth - 3'd1) != 32'd0) ? 32'd1 : 32'd0;
+                                stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] <= STACK_TYPE_BOOL;
                                 state <= ST_FETCH_OPCODE;
                             end
                         end
                         OPCODE_HALT: state <= ST_HALT_WRITE_STATUS;
                         OPCODE_PUSH_I16,
+                        OPCODE_LOAD_U32,
+                        OPCODE_STORE_U32,
+                        OPCODE_LOAD_I32,
+                        OPCODE_STORE_I32,
+                        OPCODE_LOAD_F32,
+                        OPCODE_STORE_F32,
                         OPCODE_LOAD_BOOL,
                         OPCODE_STORE_BOOL,
                         OPCODE_LOAD_I16,
@@ -1464,6 +1881,9 @@ module wb_plc #(
                         OPCODE_JMP,
                         OPCODE_JZ,
                         OPCODE_JNZ: state <= ST_FETCH_OPERAND0;
+                        OPCODE_PUSH_U32,
+                        OPCODE_PUSH_I32,
+                        OPCODE_PUSH_F32: state <= ST_FETCH_IMMEDIATE0;
                         default: begin_fault(FAULT_INVALID_OPCODE, current_opcode);
                     endcase
                 end
@@ -1481,14 +1901,14 @@ module wb_plc #(
                         OPCODE_JZ: begin
                             if (stack_depth < 3'd1) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd3);
-                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                            end else if (stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] != STACK_TYPE_BOOL) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd3);
-                            end else if ((stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] == 16'd0) &&
+                            end else if ((stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32] == 32'd0) &&
                                          (branch_target_pc(current_pc, current_runtime_index) >= cb_bytecode_size)) begin
                                 begin_fault(FAULT_INVALID_OPCODE, current_pc - 32'd3);
                             end else begin
                                 stack_depth <= stack_depth - 3'd1;
-                                if (stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] == 16'd0) begin
+                                if (stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32] == 32'd0) begin
                                     current_pc <= branch_target_pc(current_pc, current_runtime_index);
                                 end
                                 state <= ST_FETCH_OPCODE;
@@ -1497,14 +1917,14 @@ module wb_plc #(
                         OPCODE_JNZ: begin
                             if (stack_depth < 3'd1) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd3);
-                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                            end else if (stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] != STACK_TYPE_BOOL) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd3);
-                            end else if ((stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] != 16'd0) &&
+                            end else if ((stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32] != 32'd0) &&
                                          (branch_target_pc(current_pc, current_runtime_index) >= cb_bytecode_size)) begin
                                 begin_fault(FAULT_INVALID_OPCODE, current_pc - 32'd3);
                             end else begin
                                 stack_depth <= stack_depth - 3'd1;
-                                if (stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16] != 16'd0) begin
+                                if (stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32] != 32'd0) begin
                                     current_pc <= branch_target_pc(current_pc, current_runtime_index);
                                 end
                                 state <= ST_FETCH_OPCODE;
@@ -1557,10 +1977,10 @@ module wb_plc #(
                                 begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
                             end else if (stack_depth == 3'd0) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
-                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                            end else if (stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] != STACK_TYPE_BOOL) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                             end else begin
-                                pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                                pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32];
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_STORE_BOOL_READ_VALUE;
                             end
@@ -1584,12 +2004,87 @@ module wb_plc #(
                                 begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
                             end else if (stack_depth == 3'd0) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
-                            end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_INT16) begin
+                            end else if (stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] != STACK_TYPE_INT16) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                             end else begin
-                                pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                                pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32];
                                 stack_depth <= stack_depth - 3'd1;
                                 state <= ST_INT16_READ_VALUE;
+                            end
+                        end else if (current_opcode == OPCODE_LOAD_U32) begin
+                            runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
+                            if (desc_value_type != RUNTIME_TYPE_UINT32 ||
+                                (desc_flags & (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
+                            end else begin
+                                state <= ST_WIDE32_READ_VALUE;
+                            end
+                        end else if (current_opcode == OPCODE_STORE_U32) begin
+                            runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
+                            runtime_status_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_QUALITY_OFFSET;
+                            if (desc_value_type != RUNTIME_TYPE_UINT32 ||
+                                (desc_flags & (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
+                                begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
+                            end else if (stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
+                            end else if (stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] != STACK_TYPE_UINT32) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
+                            end else begin
+                                pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32];
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_WIDE32_READ_VALUE;
+                            end
+                        end else if (current_opcode == OPCODE_LOAD_I32) begin
+                            runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
+                            if (desc_value_type != RUNTIME_TYPE_INT32 ||
+                                (desc_flags & (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
+                            end else begin
+                                state <= ST_WIDE32_READ_VALUE;
+                            end
+                        end else if (current_opcode == OPCODE_STORE_I32) begin
+                            runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
+                            runtime_status_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_QUALITY_OFFSET;
+                            if (desc_value_type != RUNTIME_TYPE_INT32 ||
+                                (desc_flags & (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
+                                begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
+                            end else if (stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
+                            end else if (stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] != STACK_TYPE_INT32) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
+                            end else begin
+                                pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32];
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_WIDE32_READ_VALUE;
+                            end
+                        end else if (current_opcode == OPCODE_LOAD_F32) begin
+                            runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
+                            if (desc_value_type != RUNTIME_TYPE_FLOAT32 ||
+                                (desc_flags & (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_READABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
+                            end else begin
+                                state <= ST_WIDE32_READ_VALUE;
+                            end
+                        end else if (current_opcode == OPCODE_STORE_F32) begin
+                            runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
+                            runtime_status_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_QUALITY_OFFSET;
+                            if (desc_value_type != RUNTIME_TYPE_FLOAT32 ||
+                                (desc_flags & (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) !=
+                                    (RUNTIME_FLAG_WRITABLE | RUNTIME_FLAG_SHARED_POINT_STATE)) begin
+                                begin_fault(FAULT_WRITE_REJECTED, current_runtime_index);
+                            end else if (stack_depth == 3'd0) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
+                            end else if (stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] != STACK_TYPE_FLOAT32) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
+                            end else begin
+                                pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32];
+                                stack_depth <= stack_depth - 3'd1;
+                                state <= ST_WIDE32_READ_VALUE;
                             end
                         end else if (current_opcode == OPCODE_INC_INT16 || current_opcode == OPCODE_DEC_INT16) begin
                             runtime_value_addr <= SHARED_POINT_STATE_BASE + m_dat_i + SHARED_POINT_STATE_VALUE_OFFSET;
@@ -1615,8 +2110,8 @@ module wb_plc #(
                         if (stack_depth >= STACK_DEPTH_MAX) begin
                             begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                         end else begin
-                            stack_value[stack_value_bit_index(stack_depth) +: 16] <= {15'd0, m_dat_i[0]};
-                            stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_BOOL;
+                            stack_value[stack_value_bit_index(stack_depth) +: 32] <= {31'd0, m_dat_i[0]};
+                            stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_BOOL;
                             stack_depth <= stack_depth + 3'd1;
                             state <= ST_FETCH_OPCODE;
                         end
@@ -1635,7 +2130,7 @@ module wb_plc #(
                         end else if (stack_depth >= STACK_DEPTH_MAX) begin
                             begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                         end else begin
-                            pending_stack_value <= {15'd0, m_dat_i[0]};
+                            pending_stack_value <= {31'd0, m_dat_i[0]};
                             state <= ST_EDGE_READ_PREV_WORD;
                         end
                     end
@@ -1657,7 +2152,7 @@ module wb_plc #(
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         value_word1 <= m_dat_i;
-                        stack_value[stack_value_bit_index(stack_depth) +: 16] <= {15'd0,
+                        stack_value[stack_value_bit_index(stack_depth) +: 32] <= {31'd0,
                             (current_opcode == OPCODE_R_TRIG)
                                 ? (((m_dat_i & edge_state_bit_mask(current_runtime_index)) != 32'd0) &&
                                    ((value_word0 & edge_state_bit_mask(current_runtime_index)) == 32'd0) &&
@@ -1665,7 +2160,7 @@ module wb_plc #(
                                 : (((m_dat_i & edge_state_bit_mask(current_runtime_index)) != 32'd0) &&
                                    ((value_word0 & edge_state_bit_mask(current_runtime_index)) != 32'd0) &&
                                    !pending_stack_value[0])};
-                        stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_BOOL;
+                        stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_BOOL;
                         stack_depth <= stack_depth + 3'd1;
                         state <= ST_EDGE_WRITE_PREV_WORD;
                     end
@@ -1698,10 +2193,10 @@ module wb_plc #(
                         begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
                     end else if (stack_depth == 3'd0) begin
                         begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
-                    end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                    end else if (stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] != STACK_TYPE_BOOL) begin
                         begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                     end else begin
-                        pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                        pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32];
                         stack_depth <= stack_depth - 3'd1;
                         state <= ST_TIMER_READ_WORD0;
                     end
@@ -1749,21 +2244,21 @@ module wb_plc #(
                         if (current_opcode == OPCODE_TON_DONE ||
                             current_opcode == OPCODE_TOF_DONE ||
                             current_opcode == OPCODE_TP_DONE) begin
-                            stack_value[stack_value_bit_index(stack_depth) +: 16] <= {15'd0,
+                            stack_value[stack_value_bit_index(stack_depth) +: 32] <= {31'd0,
                                 timer_done_live(value_word0, value_word1, m_dat_i, ms_counter)};
-                            stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_BOOL;
+                            stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_BOOL;
                             stack_depth <= stack_depth + 3'd1;
                             state <= ST_FETCH_OPCODE;
                         end else if (current_opcode == OPCODE_TON_ELAPSED) begin
-                            stack_value[stack_value_bit_index(stack_depth) +: 16] <=
-                                timer_metric_i16(timer_elapsed_value(value_word0, value_word1, m_dat_i, ms_counter));
-                            stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_INT16;
+                            stack_value[stack_value_bit_index(stack_depth) +: 32] <=
+                                sign_extend_i16(timer_metric_i16(timer_elapsed_value(value_word0, value_word1, m_dat_i, ms_counter)));
+                            stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_INT16;
                             stack_depth <= stack_depth + 3'd1;
                             state <= ST_FETCH_OPCODE;
                         end else if (current_opcode == OPCODE_TON_REMAINING) begin
-                            stack_value[stack_value_bit_index(stack_depth) +: 16] <=
-                                timer_metric_i16(timer_remaining_value(value_word0, value_word1, m_dat_i, ms_counter));
-                            stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_INT16;
+                            stack_value[stack_value_bit_index(stack_depth) +: 32] <=
+                                sign_extend_i16(timer_metric_i16(timer_remaining_value(value_word0, value_word1, m_dat_i, ms_counter)));
+                            stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_INT16;
                             stack_depth <= stack_depth + 3'd1;
                             state <= ST_FETCH_OPCODE;
                         end else begin
@@ -1882,10 +2377,10 @@ module wb_plc #(
                         begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
                     end else if (stack_depth == 3'd0) begin
                         begin_fault(FAULT_STACK_UNDERFLOW, current_runtime_index);
-                    end else if (stack_type[((stack_depth - 3'd1) << 1) +: 2] != STACK_TYPE_BOOL) begin
+                    end else if (stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3] != STACK_TYPE_BOOL) begin
                         begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                     end else begin
-                        pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 16];
+                        pending_stack_value <= stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32];
                         stack_depth <= stack_depth - 3'd1;
                         state <= ST_COUNTER_READ_WORD0;
                     end
@@ -1930,14 +2425,14 @@ module wb_plc #(
                         finish_bus_cycle();
                         value_word2 <= m_dat_i;
                         if (current_opcode == OPCODE_CTU_DONE || current_opcode == OPCODE_CTD_DONE) begin
-                            stack_value[stack_value_bit_index(stack_depth) +: 16] <= {15'd0,
+                            stack_value[stack_value_bit_index(stack_depth) +: 32] <= {31'd0,
                                 counter_done_live(current_opcode, value_word0[15:0], value_word1[15:0])};
-                            stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_BOOL;
+                            stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_BOOL;
                             stack_depth <= stack_depth + 3'd1;
                             state <= ST_FETCH_OPCODE;
                         end else if (current_opcode == OPCODE_CTU_VALUE || current_opcode == OPCODE_CTD_VALUE) begin
-                            stack_value[stack_value_bit_index(stack_depth) +: 16] <= value_word0[15:0];
-                            stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_INT16;
+                            stack_value[stack_value_bit_index(stack_depth) +: 32] <= sign_extend_i16(value_word0[15:0]);
+                            stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_INT16;
                             stack_depth <= stack_depth + 3'd1;
                             state <= ST_FETCH_OPCODE;
                         end else begin
@@ -2018,6 +2513,10 @@ module wb_plc #(
                     runtime_write_enqueue_pending <= 1'b1;
                     if (current_opcode == OPCODE_STORE_BOOL) begin
                         state <= ST_STORE_BOOL_WRITE_VALUE0;
+                    end else if (current_opcode == OPCODE_STORE_U32 ||
+                                 current_opcode == OPCODE_STORE_I32 ||
+                                 current_opcode == OPCODE_STORE_F32) begin
+                        state <= ST_WIDE32_WRITE_VALUE0;
                     end else begin
                         state <= ST_INT16_WRITE_VALUE0;
                     end
@@ -2076,14 +2575,14 @@ module wb_plc #(
                             if (stack_depth >= STACK_DEPTH_MAX) begin
                                 begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth) +: 16] <= m_dat_i[15:0];
-                                stack_type[(stack_depth << 1) +: 2] <= STACK_TYPE_INT16;
+                                stack_value[stack_value_bit_index(stack_depth) +: 32] <= sign_extend_i16(m_dat_i[15:0]);
+                                stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_INT16;
                                 stack_depth <= stack_depth + 3'd1;
                                 state <= ST_FETCH_OPCODE;
                             end
                         end else if (current_opcode == OPCODE_STORE_I16) begin
                             value_word0 <= m_dat_i;
-                            if (m_dat_i[15:0] == pending_stack_value) begin
+                            if (m_dat_i[15:0] == pending_stack_value[15:0]) begin
                                 state <= ST_FETCH_OPCODE;
                             end else begin
                                 state <= ST_WRITE_RUNTIME_LAST_WRITER;
@@ -2095,14 +2594,55 @@ module wb_plc #(
                     end
                 end
 
+                ST_WIDE32_READ_VALUE: begin
+                    if (!m_cyc_o) begin
+                        start_read(runtime_value_addr);
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        if (current_opcode == OPCODE_LOAD_U32 ||
+                            current_opcode == OPCODE_LOAD_I32 ||
+                            current_opcode == OPCODE_LOAD_F32) begin
+                            if (stack_depth >= STACK_DEPTH_MAX) begin
+                                begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
+                            end else begin
+                                stack_value[stack_value_bit_index(stack_depth) +: 32] <= m_dat_i;
+                                stack_type[stack_type_bit_index(stack_depth) +: 3] <=
+                                    (current_opcode == OPCODE_LOAD_U32)
+                                        ? STACK_TYPE_UINT32
+                                        : ((current_opcode == OPCODE_LOAD_I32)
+                                            ? STACK_TYPE_INT32
+                                            : STACK_TYPE_FLOAT32);
+                                stack_depth <= stack_depth + 3'd1;
+                                state <= ST_FETCH_OPCODE;
+                            end
+                        end else begin
+                            value_word0 <= m_dat_i;
+                            if (m_dat_i == pending_stack_value) begin
+                                state <= ST_FETCH_OPCODE;
+                            end else begin
+                                state <= ST_WRITE_RUNTIME_LAST_WRITER;
+                            end
+                        end
+                    end
+                end
+
                 ST_INT16_WRITE_VALUE0: begin
                     if (!m_cyc_o) begin
                         start_write(runtime_value_addr,
                                     (current_opcode == OPCODE_STORE_I16)
-                                        ? {{16{pending_stack_value[15]}}, pending_stack_value}
+                                        ? sign_extend_i16(pending_stack_value[15:0])
                                         : ((current_opcode == OPCODE_INC_INT16)
                                             ? ($signed({{16{value_word0[15]}}, value_word0[15:0]}) + 32'sd1)
                                             : ($signed({{16{value_word0[15]}}, value_word0[15:0]}) - 32'sd1)));
+                    end else if (m_ack_i) begin
+                        finish_bus_cycle();
+                        state <= ST_INT16_WRITE_STATUS0;
+                    end
+                end
+
+                ST_WIDE32_WRITE_VALUE0: begin
+                    if (!m_cyc_o) begin
+                        start_write(runtime_value_addr, pending_stack_value);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         state <= ST_INT16_WRITE_STATUS0;

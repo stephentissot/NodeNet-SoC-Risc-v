@@ -9,7 +9,7 @@ It separates three levels clearly:
 
 - syntax already accepted by the current desktop assembler
 - object-file and loader contracts already enforced by firmware
-- the frozen instruction subset targeted by `plc_vm step 2`
+- the validated instruction subset currently executed by `plc_vm`
 - planned instruction families explicitly reserved for later phases
 
 The goal is to keep source syntax stable while allowing the firmware loader to
@@ -46,8 +46,17 @@ Implemented today:
 - `EQ`
 - `NE`
 - `PUSH_I16 imm16`
+- `PUSH_U32 imm32`
+- `PUSH_I32 imm32`
+- `PUSH_F32 imm32`
 - `LOAD_I16 <symbol>`
 - `STORE_I16 <symbol>`
+- `LOAD_U32 <symbol>`
+- `STORE_U32 <symbol>`
+- `LOAD_I32 <symbol>`
+- `STORE_I32 <symbol>`
+- `LOAD_F32 <symbol>`
+- `STORE_F32 <symbol>`
 - `ADD`
 - `SUB`
 - `LT`
@@ -58,6 +67,18 @@ Implemented today:
 - `MAX`
 - `CLAMP`
 - `SEL`
+- `FEQ`
+- `FNE`
+- `FLT`
+- `FLE`
+- `FGT`
+- `FGE`
+- `SX_I16_TO_I32`
+- `TRUNC_I32_TO_I16`
+- `BOOL_TO_U32`
+- `BOOL_TO_I32`
+- `U32_TO_BOOL`
+- `I32_TO_BOOL`
 - `INC_INT <symbol>`
 - `DEC_INT <symbol>`
 - `DB <byte0>, <byte1>, ...`
@@ -79,8 +100,8 @@ Step 2 objective for this document:
 Reserved for later phases unless explicitly promoted by a follow-up branch:
 
 - timer and event primitives
-- float execution
-- wide integer utilities that add hardware cost without immediate bring-up value
+- float arithmetic and int/float numeric conversions
+- additional wide-integer utilities that add hardware cost without immediate bring-up value
 
 ## Source File Structure
 
@@ -149,7 +170,8 @@ Step 2 keeps straight-line scan execution only:
 
 - execution starts at bytecode offset `0`
 - execution stops on `HALT` or on fault
-- there is no branch, call, or loop instruction in the frozen core subset
+- relative branches `JMP`, `JZ`, and `JNZ` are implemented
+- there is still no call or return instruction in the current core subset
 
 ## Step 2 Frozen Core ISA
 
@@ -171,6 +193,9 @@ The recommended frozen core ISA for this branch is:
 - `PUSH_TRUE`
 - `PUSH_FALSE`
 - `PUSH_I16 imm16`
+- `PUSH_U32 imm32`
+- `PUSH_I32 imm32`
+- `PUSH_F32 imm32`
 - `DUP`
 - `DROP`
 - `SWAP`
@@ -181,6 +206,12 @@ The recommended frozen core ISA for this branch is:
 - `STORE_BOOL <symbol>`
 - `LOAD_I16 <symbol>`
 - `STORE_I16 <symbol>`
+- `LOAD_U32 <symbol>`
+- `STORE_U32 <symbol>`
+- `LOAD_I32 <symbol>`
+- `STORE_I32 <symbol>`
+- `LOAD_F32 <symbol>`
+- `STORE_F32 <symbol>`
 
 ### Boolean and integer core
 
@@ -200,6 +231,18 @@ The recommended frozen core ISA for this branch is:
 - `MAX`
 - `CLAMP`
 - `SEL`
+- `FEQ`
+- `FNE`
+- `FLT`
+- `FLE`
+- `FGT`
+- `FGE`
+- `SX_I16_TO_I32`
+- `TRUNC_I32_TO_I16`
+- `BOOL_TO_U32`
+- `BOOL_TO_I32`
+- `U32_TO_BOOL`
+- `I32_TO_BOOL`
 - `JMP rel16|label`
 - `JZ rel16|label`
 - `JNZ rel16|label`
@@ -210,11 +253,11 @@ The recommended frozen core ISA for this branch is:
 
 Instruction families reserved but not part of the frozen step 2 core:
 
-- `LOAD_U16`, `STORE_U16`, `LOAD_U32`, `STORE_U32`, `LOAD_I32`, `STORE_I32`
+- `LOAD_U16`, `STORE_U16`
 - `NEG`, `ABS`
 - `CALL`, `RET`
 - timer, counter, and edge primitives
-- float load/store, compare, arithmetic, and conversion families
+- float arithmetic and int/float conversion families
 
 ## Step 2 Core Opcode Contract
 

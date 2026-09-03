@@ -106,6 +106,9 @@ private:
     bool commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now_ms);
     bool commitRuntimeUint16(uint16_t runtime_index, uint16_t value, uint32_t now_ms);
     bool commitRuntimeInt16(uint16_t runtime_index, int16_t value, uint32_t now_ms);
+    bool commitRuntimeUint32(uint16_t runtime_index, uint32_t value, uint32_t now_ms);
+    bool commitRuntimeInt32(uint16_t runtime_index, int32_t value, uint32_t now_ms);
+    bool commitRuntimeFloat(uint16_t runtime_index, float value, uint32_t now_ms);
     bool commitRuntimeEnum(uint16_t runtime_index, int32_t value, uint32_t now_ms);
     PointQuality qualityFromModbusError(ModbusMaster::Error error) const;
 };

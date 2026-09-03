@@ -60,6 +60,15 @@ namespace BigSisterNodeNet.Plc
         public const byte LoadPointInt16Opcode = 0x12;
         public const byte StorePointInt16Opcode = 0x13;
         public const byte PushInt16Opcode = 0x14;
+        public const byte LoadPointUInt32Opcode = 0x15;
+        public const byte StorePointUInt32Opcode = 0x16;
+        public const byte LoadPointInt32Opcode = 0x17;
+        public const byte StorePointInt32Opcode = 0x18;
+        public const byte LoadPointFloat32Opcode = 0x19;
+        public const byte StorePointFloat32Opcode = 0x1A;
+        public const byte PushUInt32Opcode = 0x1B;
+        public const byte PushInt32Opcode = 0x1C;
+        public const byte PushFloat32Opcode = 0x1D;
         public const byte IncrementPointIntOpcode = 0x20;
         public const byte DecrementPointIntOpcode = 0x21;
         public const byte AddOpcode = 0x22;
@@ -96,6 +105,18 @@ namespace BigSisterNodeNet.Plc
         public const byte CounterDownDoneOpcode = 0x41;
         public const byte CounterDownValueOpcode = 0x42;
         public const byte CounterDownResetOpcode = 0x43;
+        public const byte FloatEqualOpcode = 0x44;
+        public const byte FloatNotEqualOpcode = 0x45;
+        public const byte FloatLessThanOpcode = 0x46;
+        public const byte FloatLessOrEqualOpcode = 0x47;
+        public const byte FloatGreaterThanOpcode = 0x48;
+        public const byte FloatGreaterOrEqualOpcode = 0x49;
+        public const byte SignExtendInt16ToInt32Opcode = 0x4A;
+        public const byte TruncateInt32ToInt16Opcode = 0x4B;
+        public const byte BoolToUInt32Opcode = 0x4C;
+        public const byte BoolToInt32Opcode = 0x4D;
+        public const byte UInt32ToBoolOpcode = 0x4E;
+        public const byte Int32ToBoolOpcode = 0x4F;
 
         public static PlcAssemblyResult Assemble(string source, PlcObjectFileOptions options)
         {
@@ -239,10 +260,58 @@ namespace BigSisterNodeNet.Plc
                             output.Add(NeOpcode);
                             break;
 
+                        case "FEQ":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(FloatEqualOpcode);
+                            break;
+
+                        case "FNE":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(FloatNotEqualOpcode);
+                            break;
+
+                        case "FLT":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(FloatLessThanOpcode);
+                            break;
+
+                        case "FLE":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(FloatLessOrEqualOpcode);
+                            break;
+
+                        case "FGT":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(FloatGreaterThanOpcode);
+                            break;
+
+                        case "FGE":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(FloatGreaterOrEqualOpcode);
+                            break;
+
                         case "PUSH_I16":
                             RequireOperandCount(tokens, 2, parsedLine.LineNumber);
                             output.Add(PushInt16Opcode);
                             WriteUInt16(output, ParseInt16Literal(tokens[1], parsedLine.LineNumber));
+                            break;
+
+                        case "PUSH_U32":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(PushUInt32Opcode);
+                            WriteUInt32(output, ParseUInt32Literal(tokens[1], parsedLine.LineNumber, "imm32"));
+                            break;
+
+                        case "PUSH_I32":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(PushInt32Opcode);
+                            WriteUInt32(output, ParseInt32Literal(tokens[1], parsedLine.LineNumber));
+                            break;
+
+                        case "PUSH_F32":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(PushFloat32Opcode);
+                            WriteUInt32(output, ParseFloat32Literal(tokens[1], parsedLine.LineNumber));
                             break;
 
                         case "LOAD_BOOL":
@@ -285,6 +354,42 @@ namespace BigSisterNodeNet.Plc
                                                  PlcRuntimeLinkAccess.Read);
                             break;
 
+                        case "LOAD_U32":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(LoadPointUInt32Opcode);
+                            WriteRelocatedSymbol(output,
+                                                 tokens[1],
+                                                 parsedLine.LineNumber,
+                                                 result,
+                                                 symbolIndexByName,
+                                                 PlcValueType.Uint32,
+                                                 PlcRuntimeLinkAccess.Read);
+                            break;
+
+                        case "LOAD_I32":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(LoadPointInt32Opcode);
+                            WriteRelocatedSymbol(output,
+                                                 tokens[1],
+                                                 parsedLine.LineNumber,
+                                                 result,
+                                                 symbolIndexByName,
+                                                 PlcValueType.Int32,
+                                                 PlcRuntimeLinkAccess.Read);
+                            break;
+
+                        case "LOAD_F32":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(LoadPointFloat32Opcode);
+                            WriteRelocatedSymbol(output,
+                                                 tokens[1],
+                                                 parsedLine.LineNumber,
+                                                 result,
+                                                 symbolIndexByName,
+                                                 PlcValueType.Float,
+                                                 PlcRuntimeLinkAccess.Read);
+                            break;
+
                         case "STORE_I16":
                             RequireOperandCount(tokens, 2, parsedLine.LineNumber);
                             output.Add(StorePointInt16Opcode);
@@ -294,6 +399,42 @@ namespace BigSisterNodeNet.Plc
                                                  result,
                                                  symbolIndexByName,
                                                  PlcValueType.Int16,
+                                                 PlcRuntimeLinkAccess.Write);
+                            break;
+
+                        case "STORE_U32":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(StorePointUInt32Opcode);
+                            WriteRelocatedSymbol(output,
+                                                 tokens[1],
+                                                 parsedLine.LineNumber,
+                                                 result,
+                                                 symbolIndexByName,
+                                                 PlcValueType.Uint32,
+                                                 PlcRuntimeLinkAccess.Write);
+                            break;
+
+                        case "STORE_I32":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(StorePointInt32Opcode);
+                            WriteRelocatedSymbol(output,
+                                                 tokens[1],
+                                                 parsedLine.LineNumber,
+                                                 result,
+                                                 symbolIndexByName,
+                                                 PlcValueType.Int32,
+                                                 PlcRuntimeLinkAccess.Write);
+                            break;
+
+                        case "STORE_F32":
+                            RequireOperandCount(tokens, 2, parsedLine.LineNumber);
+                            output.Add(StorePointFloat32Opcode);
+                            WriteRelocatedSymbol(output,
+                                                 tokens[1],
+                                                 parsedLine.LineNumber,
+                                                 result,
+                                                 symbolIndexByName,
+                                                 PlcValueType.Float,
                                                  PlcRuntimeLinkAccess.Write);
                             break;
 
@@ -345,6 +486,36 @@ namespace BigSisterNodeNet.Plc
                         case "SEL":
                             RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(SelectOpcode);
+                            break;
+
+                        case "SX_I16_TO_I32":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(SignExtendInt16ToInt32Opcode);
+                            break;
+
+                        case "TRUNC_I32_TO_I16":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(TruncateInt32ToInt16Opcode);
+                            break;
+
+                        case "BOOL_TO_U32":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(BoolToUInt32Opcode);
+                            break;
+
+                        case "BOOL_TO_I32":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(BoolToInt32Opcode);
+                            break;
+
+                        case "U32_TO_BOOL":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(UInt32ToBoolOpcode);
+                            break;
+
+                        case "I32_TO_BOOL":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(Int32ToBoolOpcode);
                             break;
 
                         case "JMP":
@@ -627,6 +798,12 @@ namespace BigSisterNodeNet.Plc
                 case "VAR":
                     return 0;
                 case "PUSH_I16":
+                case "LOAD_U32":
+                case "STORE_U32":
+                case "LOAD_I32":
+                case "STORE_I32":
+                case "LOAD_F32":
+                case "STORE_F32":
                 case "LOAD_BOOL":
                 case "LOAD_POINT_BOOL":
                 case "LB":
@@ -659,6 +836,10 @@ namespace BigSisterNodeNet.Plc
                 case "DEC_INT":
                 case "DEC":
                     return 3;
+                case "PUSH_U32":
+                case "PUSH_I32":
+                case "PUSH_F32":
+                    return 5;
                 case "CTU_COUNT":
                 case "CTD_COUNT":
                     return 5;
@@ -1120,6 +1301,45 @@ namespace BigSisterNodeNet.Plc
             catch (OverflowException)
             {
                 throw new PlcMachineCodeCompileException($"Invalid {description} literal '{text}'", lineNumber);
+            }
+        }
+
+        private static uint ParseInt32Literal(string text, int lineNumber)
+        {
+            try
+            {
+                if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Convert.ToUInt32(text.Substring(2), 16);
+                }
+
+                var signedValue = Convert.ToInt32(text, System.Globalization.CultureInfo.InvariantCulture);
+                return unchecked((uint)signedValue);
+            }
+            catch (FormatException)
+            {
+                throw new PlcMachineCodeCompileException($"Invalid INT32 literal '{text}'", lineNumber);
+            }
+            catch (OverflowException)
+            {
+                throw new PlcMachineCodeCompileException($"Invalid INT32 literal '{text}'", lineNumber);
+            }
+        }
+
+        private static uint ParseFloat32Literal(string text, int lineNumber)
+        {
+            try
+            {
+                var value = float.Parse(text, System.Globalization.CultureInfo.InvariantCulture);
+                return BitConverter.ToUInt32(BitConverter.GetBytes(value), 0);
+            }
+            catch (FormatException)
+            {
+                throw new PlcMachineCodeCompileException($"Invalid FLOAT literal '{text}'", lineNumber);
+            }
+            catch (OverflowException)
+            {
+                throw new PlcMachineCodeCompileException($"Invalid FLOAT literal '{text}'", lineNumber);
             }
         }
 

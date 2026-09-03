@@ -2,7 +2,7 @@
 
 This library provides the PLC object-file tooling used by the desktop-side NodeNet Core.
 
-Current project status: **PLC Ready** with **V0 basic ISA** and relocatable `objectFileV1` deployment.
+Current project status: **PLC Ready** with relocatable `objectFileV1` deployment and stage-11 typed scalar extensions.
 
 It covers three things:
 
@@ -20,7 +20,7 @@ Documentation note:
 
 ## Machine-code syntax
 
-The syntax is intentionally narrow and matches the current firmware V0 basic ISA,
+The syntax is intentionally narrow and matches the current firmware bytecode contract,
 but operands are symbolic point names rather than literal runtime indices.
 
 Supported declarations:
@@ -52,12 +52,63 @@ Reserved slot-runtime names that cannot be used in `VAR` declarations:
 
 Supported instructions:
 
+- `NOP`
 - `HALT`
+- `PUSH_TRUE`
+- `PUSH_FALSE`
+- `DUP`
+- `DROP`
+- `SWAP`
 - `LOAD_BOOL <symbol>`
 - `STORE_BOOL <symbol>`
+- `LOAD_I16 <symbol>`
+- `STORE_I16 <symbol>`
+- `PUSH_I16 imm16`
+- `LOAD_U32 <symbol>`
+- `STORE_U32 <symbol>`
+- `PUSH_U32 imm32`
+- `LOAD_I32 <symbol>`
+- `STORE_I32 <symbol>`
+- `PUSH_I32 imm32`
+- `LOAD_F32 <symbol>`
+- `STORE_F32 <symbol>`
+- `PUSH_F32 imm32`
+- `AND`
+- `OR`
+- `XOR`
+- `NOT`
+- `EQ`
+- `NE`
+- `ADD`
+- `SUB`
+- `LT`
+- `LE`
+- `GT`
+- `GE`
+- `MIN`
+- `MAX`
+- `CLAMP`
+- `SEL`
+- `FEQ`
+- `FNE`
+- `FLT`
+- `FLE`
+- `FGT`
+- `FGE`
+- `SX_I16_TO_I32`
+- `TRUNC_I32_TO_I16`
+- `BOOL_TO_U32`
+- `BOOL_TO_I32`
+- `U32_TO_BOOL`
+- `I32_TO_BOOL`
 - `INC_INT <symbol>`
 - `DEC_INT <symbol>`
 - `DB <byte0>, <byte1>, ...`
+
+Current float scope:
+
+- `PUSH_F32`, `LOAD_F32`, `STORE_F32` and ordered comparisons are implemented
+- `FADD`, `FSUB`, `FMUL`, `FDIV`, and int/float numeric conversions are not yet implemented in RTL
 
 Supported aliases:
 

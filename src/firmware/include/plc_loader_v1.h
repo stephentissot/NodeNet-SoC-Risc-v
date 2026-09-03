@@ -629,6 +629,12 @@ private:
                opcode == 0x12u ||
                opcode == 0x13u ||
                opcode == 0x14u ||
+               opcode == 0x15u ||
+               opcode == 0x16u ||
+               opcode == 0x17u ||
+               opcode == 0x18u ||
+               opcode == 0x19u ||
+               opcode == 0x1Au ||
                opcode == 0x20u ||
                opcode == 0x21u ||
                opcode == 0x2Cu ||
@@ -650,6 +656,13 @@ private:
                opcode == 0x41u ||
                opcode == 0x42u ||
                opcode == 0x43u;
+    }
+
+    static bool opcodeHasU32Immediate(uint8_t opcode)
+    {
+        return opcode == 0x1Bu ||
+               opcode == 0x1Cu ||
+               opcode == 0x1Du;
     }
 
     static bool opcodeHasTimerStartOperand(uint8_t opcode)
@@ -684,6 +697,15 @@ private:
                opcode == 0x0Au ||
                opcode == 0x0Bu ||
                opcode == 0x0Cu ||
+               opcode == 0x15u ||
+               opcode == 0x16u ||
+               opcode == 0x17u ||
+               opcode == 0x18u ||
+               opcode == 0x19u ||
+               opcode == 0x1Au ||
+               opcode == 0x1Bu ||
+               opcode == 0x1Cu ||
+               opcode == 0x1Du ||
                opcode == 0x22u ||
                opcode == 0x23u ||
                opcode == 0x24u ||
@@ -718,13 +740,30 @@ private:
                opcode == 0x41u ||
                opcode == 0x42u ||
                opcode == 0x43u ||
-               opcodeHasU16Operand(opcode);
+               opcode == 0x44u ||
+               opcode == 0x45u ||
+               opcode == 0x46u ||
+               opcode == 0x47u ||
+               opcode == 0x48u ||
+               opcode == 0x49u ||
+               opcode == 0x4Au ||
+               opcode == 0x4Bu ||
+               opcode == 0x4Cu ||
+               opcode == 0x4Du ||
+               opcode == 0x4Eu ||
+               opcode == 0x4Fu ||
+               opcodeHasU16Operand(opcode) ||
+               opcodeHasU32Immediate(opcode);
     }
 
     static uint32_t instructionSizeForOpcode(uint8_t opcode)
     {
         if (opcodeHasTimerStartOperand(opcode)) {
             return 7u;
+        }
+
+        if (opcodeHasU32Immediate(opcode)) {
+            return 5u;
         }
 
         if (opcodeHasCounterCountOperand(opcode)) {

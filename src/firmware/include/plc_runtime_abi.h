@@ -310,9 +310,13 @@ public:
         }
 
         PointCatalog& mutable_catalog = const_cast<PointCatalog&>(catalog);
-        if (!header_written_ || mutable_catalog.runtimeFullSyncRequired()) {
+        const uint32_t current_definition_hash = hashCatalogDefinitions(catalog);
+        if (!header_written_ ||
+            mutable_catalog.runtimeFullSyncRequired() ||
+            current_definition_hash != definition_hash_ ||
+            !descriptorMappingComplete(catalog)) {
             rebuildDescriptors(catalog);
-            definition_hash_ = hashCatalogDefinitions(catalog);
+            definition_hash_ = current_definition_hash;
             ++store_epoch_;
             writeHeader();
             header_written_ = true;
@@ -422,6 +426,22 @@ private:
     static bool isSupported(PointValueType value_type)
     {
         return mapValueType(value_type) != kPlcRuntimeTypeInvalid;
+    }
+
+    bool descriptorMappingComplete(const PointCatalog& catalog) const
+    {
+        const PointDefinition* definitions = catalog.entries();
+        for (size_t index = 0u; index < catalog.size(); ++index) {
+            if (!shouldPublishDefinition(definitions[index])) {
+                continue;
+            }
+
+            if (catalog_to_runtime_[index] == kInvalidPointIndex) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     static bool stringsEqual(const char* lhs, const char* rhs)
