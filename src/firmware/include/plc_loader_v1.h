@@ -768,6 +768,7 @@ private:
                opcode == 0x50u ||
                opcode == 0x51u ||
                opcode == 0x52u ||
+               opcode == 0x53u ||
                opcodeHasU16Operand(opcode) ||
                opcodeHasU32Immediate(opcode);
     }

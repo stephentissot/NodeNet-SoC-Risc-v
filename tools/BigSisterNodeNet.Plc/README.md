@@ -98,6 +98,7 @@ Supported instructions:
 - `FADD`
 - `FSUB`
 - `FMUL`
+- `FDIV`
 - `SX_I16_TO_I32`
 - `TRUNC_I32_TO_I16`
 - `BOOL_TO_U32`
@@ -110,8 +111,8 @@ Supported instructions:
 
 Current float scope:
 
-- `PUSH_F32`, `LOAD_F32`, `STORE_F32`, ordered comparisons, `FADD`, `FSUB`, and `FMUL` are implemented
-- `FDIV` and int/float numeric conversions remain deferred
+- `PUSH_F32`, `LOAD_F32`, `STORE_F32`, ordered comparisons, `FADD`, `FSUB`, `FMUL`, and `FDIV` are implemented
+- int/float numeric conversions remain deferred
 
 Supported aliases:
 

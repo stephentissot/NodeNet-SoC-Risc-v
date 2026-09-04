@@ -187,7 +187,11 @@ module tb_wb_plc_stage11_float_ops;
         code_mem[9] = 32'h0000_1D40;
         code_mem[10] = 32'h1A52_4080;
         code_mem[11] = 32'h0000_00A0;
-        code_mem[12] = 32'h0000_0000;
+        code_mem[12] = 32'hC000_001D;
+        code_mem[13] = 32'h0000_1D40;
+        code_mem[14] = 32'h1A53_4000;
+        code_mem[15] = 32'h0000_00F0;
+        code_mem[16] = 32'h0000_0000;
 
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd0)] = MAGIC_CONTROL_BLOCK;
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd4)] = 32'd0;
@@ -198,7 +202,7 @@ module tb_wb_plc_stage11_float_ops;
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd24)] = 32'd0;
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd28)] = 32'd0;
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd32)] = BYTECODE_BASE;
-        control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd36)] = 32'd49;
+        control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd36)] = 32'd65;
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd40)] = 32'd0;
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd44)] = 32'd0;
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd48)] = 32'd0;
@@ -225,6 +229,9 @@ module tb_wb_plc_stage11_float_ops;
         end
         if (shared_mem[40] !== 32'h4149_08C0) begin
             $fatal(1, "product mismatch");
+        end
+        if (shared_mem[60] !== 32'h4040_0000) begin
+            $fatal(1, "quotient mismatch");
         end
 
         $display("PASS stage11 float arithmetic regression");

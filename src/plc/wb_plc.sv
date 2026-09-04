@@ -413,6 +413,7 @@ module wb_plc_float_op(
     localparam [7:0] OPCODE_FADD = 8'h50;
     localparam [7:0] OPCODE_FSUB = 8'h51;
     localparam [7:0] OPCODE_FMUL = 8'h52;
+    localparam [7:0] OPCODE_FDIV = 8'h53;
 
     localparam [2:0] STACK_TYPE_NONE = 3'd0;
     localparam [2:0] STACK_TYPE_FLOAT32 = 3'd5;
@@ -657,6 +658,70 @@ module wb_plc_float_op(
         end
     endfunction
 
+    function [31:0] float_div_result;
+        input [31:0] left_value;
+        input [31:0] right_value;
+        reg result_sign;
+        reg [7:0] left_exp;
+        reg [7:0] right_exp;
+        reg [7:0] left_eff_exp;
+        reg [7:0] right_eff_exp;
+        reg [22:0] left_frac;
+        reg [22:0] right_frac;
+        reg [23:0] left_mant;
+        reg [23:0] right_mant;
+        reg [23:0] quotient_mant;
+        reg [47:0] quotient_full;
+        integer result_exp;
+        begin
+            result_sign = left_value[31] ^ right_value[31];
+            left_exp = left_value[30:23];
+            right_exp = right_value[30:23];
+            left_frac = left_value[22:0];
+            right_frac = right_value[22:0];
+
+            if (float32_is_nan(left_value) || float32_is_nan(right_value)) begin
+                float_div_result = FLOAT_QNAN;
+            end else if ((float32_is_zero(left_value) && float32_is_zero(right_value)) ||
+                         (float32_is_inf(left_value) && float32_is_inf(right_value))) begin
+                float_div_result = FLOAT_QNAN;
+            end else if (float32_is_inf(left_value)) begin
+                float_div_result = pack_float_inf(result_sign);
+            end else if (float32_is_zero(right_value)) begin
+                float_div_result = pack_float_inf(result_sign);
+            end else if (float32_is_zero(left_value) || float32_is_inf(right_value)) begin
+                float_div_result = pack_float_zero(result_sign);
+            end else begin
+                left_eff_exp = (left_exp == 8'd0) ? 8'd1 : left_exp;
+                right_eff_exp = (right_exp == 8'd0) ? 8'd1 : right_exp;
+                left_mant = (left_exp == 8'd0) ? {1'b0, left_frac} : {1'b1, left_frac};
+                right_mant = (right_exp == 8'd0) ? {1'b0, right_frac} : {1'b1, right_frac};
+
+                quotient_full = ({left_mant, 23'd0}) / right_mant;
+                result_exp = left_eff_exp - right_eff_exp + 127;
+
+                if (quotient_full[24]) begin
+                    quotient_mant = quotient_full[24:1];
+                    result_exp = result_exp + 1;
+                end else begin
+                    quotient_mant = quotient_full[23:0];
+                    if (!quotient_mant[23]) begin
+                        quotient_mant = quotient_mant << 1;
+                        result_exp = result_exp - 1;
+                    end
+                end
+
+                if (quotient_mant == 24'd0 || result_exp <= 0) begin
+                    float_div_result = pack_float_zero(result_sign);
+                end else if (result_exp >= 255) begin
+                    float_div_result = pack_float_inf(result_sign);
+                end else begin
+                    float_div_result = {result_sign, result_exp[7:0], quotient_mant[22:0]};
+                end
+            end
+        end
+    endfunction
+
     always @(posedge clk or posedge rst) begin
         if (rst) begin
             busy <= 1'b0;
@@ -684,7 +749,8 @@ module wb_plc_float_op(
                 done <= 1'b1;
                 supported <= (opcode_latched == OPCODE_FADD) ||
                              (opcode_latched == OPCODE_FSUB) ||
-                             (opcode_latched == OPCODE_FMUL);
+                             (opcode_latched == OPCODE_FMUL) ||
+                             (opcode_latched == OPCODE_FDIV);
                 type_ok <= (lhs_type_latched == STACK_TYPE_FLOAT32) &&
                            (rhs_type_latched == STACK_TYPE_FLOAT32);
                 result_type <= STACK_TYPE_NONE;
@@ -703,6 +769,10 @@ module wb_plc_float_op(
                         end
                         OPCODE_FMUL: begin
                             result_value <= float_mul_result(lhs_value_latched, rhs_value_latched);
+                            result_type <= STACK_TYPE_FLOAT32;
+                        end
+                        OPCODE_FDIV: begin
+                            result_value <= float_div_result(lhs_value_latched, rhs_value_latched);
                             result_type <= STACK_TYPE_FLOAT32;
                         end
                         default: begin
@@ -917,6 +987,7 @@ module wb_plc #(
     localparam [7:0] OPCODE_FADD = 8'h50;
     localparam [7:0] OPCODE_FSUB = 8'h51;
     localparam [7:0] OPCODE_FMUL = 8'h52;
+    localparam [7:0] OPCODE_FDIV = 8'h53;
     localparam integer EDGE_STATE_BITS = 1024;
     localparam integer EDGE_STATE_WORD_COUNT = EDGE_STATE_BITS / 32;
     localparam integer EDGE_STATE_SECTION_BYTES = EDGE_STATE_WORD_COUNT * 4;
@@ -2335,7 +2406,8 @@ module wb_plc #(
                         end
                         OPCODE_FADD,
                         OPCODE_FSUB,
-                        OPCODE_FMUL: begin
+                        OPCODE_FMUL,
+                        OPCODE_FDIV: begin
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
                             end else begin

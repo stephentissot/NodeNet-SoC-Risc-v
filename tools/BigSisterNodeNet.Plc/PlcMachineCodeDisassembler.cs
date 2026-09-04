@@ -288,6 +288,11 @@ namespace BigSisterNodeNet.Plc
                         pc += 1;
                         break;
 
+                    case PlcMachineCodeAssembler.FloatDivOpcode:
+                        builder.AppendLine("FDIV");
+                        pc += 1;
+                        break;
+
                     case PlcMachineCodeAssembler.AddOpcode:
                         builder.AppendLine("ADD");
                         pc += 1;

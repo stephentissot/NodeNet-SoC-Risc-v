@@ -120,6 +120,7 @@ namespace BigSisterNodeNet.Plc
         public const byte FloatAddOpcode = 0x50;
         public const byte FloatSubOpcode = 0x51;
         public const byte FloatMulOpcode = 0x52;
+        public const byte FloatDivOpcode = 0x53;
 
         public static PlcAssemblyResult Assemble(string source, PlcObjectFileOptions options)
         {
@@ -306,6 +307,11 @@ namespace BigSisterNodeNet.Plc
                         case "FMUL":
                             RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(FloatMulOpcode);
+                            break;
+
+                        case "FDIV":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(FloatDivOpcode);
                             break;
 
                         case "PUSH_I16":

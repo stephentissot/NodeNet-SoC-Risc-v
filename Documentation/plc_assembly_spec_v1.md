@@ -2305,7 +2305,7 @@ VM family is:
 - `FADD`
 - `FSUB`
 - `FMUL`
-- `FDIV` remains deferred
+- `FDIV`
 - `FNEG`
 - `FABS`
 - `FEQ`
@@ -2427,6 +2427,7 @@ Implemented mnemonics:
 - `FADD`
 - `FSUB`
 - `FMUL`
+- `FDIV`
 - `FEQ`
 - `FNE`
 - `FLT`
@@ -2436,7 +2437,6 @@ Implemented mnemonics:
 
 Reserved mnemonics:
 
-- `FDIV`
 - `FMIN`
 - `FMAX`
 - `I32_TO_F32`
