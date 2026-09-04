@@ -3795,6 +3795,7 @@ void NodeNetCore::processPendingPlcAutoLoad()
     const uint32_t object_size = _pendingPlcAutoLoad.object_size;
     const bool restore_engine_enabled = _pendingPlcAutoLoad.restore_engine_enabled;
     const bool restore_slot_running = _pendingPlcAutoLoad.restore_slot_running;
+    const uint32_t runtime_store_epoch_before = _plcRuntimePublisher->headerSnapshot().store_epoch;
     _pendingPlcAutoLoad = {};
 
     const uint8_t* object_bytes = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(object_base));
@@ -3864,6 +3865,27 @@ void NodeNetCore::processPendingPlcAutoLoad()
             control_block->control |= kPlcSlotControlPausedV1;
         }
         control_block->status = kPlcSlotStatusLoadedV1;
+    }
+
+    const uint32_t runtime_store_epoch_after = _plcRuntimePublisher->headerSnapshot().store_epoch;
+    if (runtime_store_epoch_after != runtime_store_epoch_before) {
+        for (uint16_t other_slot_id = 0u; other_slot_id < kPlcSlotCountV1; ++other_slot_id) {
+            if (other_slot_id == slot_id) {
+                continue;
+            }
+
+            const auto* other_control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
+                static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(other_slot_id)));
+            if (!plc_control_block_loaded(*other_control_block, other_slot_id)) {
+                continue;
+            }
+
+            (void)refreshMirrorProgramRuntimeMap(other_slot_id, runtime_store_epoch_after);
+        }
+
+        _pendingPlcRuntimeMapRestoreEngine = false;
+        _pendingPlcRuntimeMapRefresh = false;
+        _lastObservedPlcRuntimeStoreEpoch = runtime_store_epoch_after;
     }
 
     if (restore_engine_enabled) {
