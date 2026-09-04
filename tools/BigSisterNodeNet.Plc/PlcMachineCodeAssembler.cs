@@ -117,6 +117,9 @@ namespace BigSisterNodeNet.Plc
         public const byte BoolToInt32Opcode = 0x4D;
         public const byte UInt32ToBoolOpcode = 0x4E;
         public const byte Int32ToBoolOpcode = 0x4F;
+        public const byte FloatAddOpcode = 0x50;
+        public const byte FloatSubOpcode = 0x51;
+        public const byte FloatMulOpcode = 0x52;
 
         public static PlcAssemblyResult Assemble(string source, PlcObjectFileOptions options)
         {
@@ -288,6 +291,21 @@ namespace BigSisterNodeNet.Plc
                         case "FGE":
                             RequireOperandCount(tokens, 1, parsedLine.LineNumber);
                             output.Add(FloatGreaterOrEqualOpcode);
+                            break;
+
+                        case "FADD":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(FloatAddOpcode);
+                            break;
+
+                        case "FSUB":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(FloatSubOpcode);
+                            break;
+
+                        case "FMUL":
+                            RequireOperandCount(tokens, 1, parsedLine.LineNumber);
+                            output.Add(FloatMulOpcode);
                             break;
 
                         case "PUSH_I16":

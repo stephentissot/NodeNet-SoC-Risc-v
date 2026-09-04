@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 `default_nettype none
 
-module tb_wb_plc_stage11;
+module tb_wb_plc_stage11_float_ops;
     localparam [31:0] CONTROL_REGION_BASE = 32'h2017_0000;
     localparam [31:0] SHARED_POINT_STATE_BASE = 32'h207E_0000;
     localparam integer SLOT_COUNT = 16;
@@ -17,9 +17,6 @@ module tb_wb_plc_stage11;
     localparam [31:0] MAGIC_CONTROL_BLOCK = 32'h3142_4350;
     localparam [31:0] SLOT_STATUS_RUNNING = 32'h0000_0002;
     localparam [31:0] SLOT_STATUS_FAULTED = 32'h8000_0000;
-
-    localparam [31:0] POINT_QUALITY_UNKNOWN = 32'd0;
-    localparam [31:0] POINT_QUALITY_GOOD = 32'd1;
 
     reg clk = 1'b0;
     reg rst = 1'b1;
@@ -147,23 +144,23 @@ module tb_wb_plc_stage11;
             wb_cyc_i <= 1'b1;
             wb_stb_i <= 1'b1;
             @(posedge clk);
+            wb_we_i <= 1'b0;
             wb_cyc_i <= 1'b0;
             wb_stb_i <= 1'b0;
-            wb_we_i <= 1'b0;
             wb_sel_i <= 4'h0;
             wb_adr_i <= 32'd0;
             wb_dat_i <= 32'd0;
         end
     endtask
 
-    always @* begin
-        m_ack_i = m_cyc_o && m_stb_o;
-        m_dat_i = mem_read32(m_adr_o);
-    end
-
     always @(posedge clk) begin
-        if (m_cyc_o && m_stb_o && m_we_o) begin
-            mem_write32(m_adr_o, m_dat_o);
+        m_ack_i <= 1'b0;
+        if (m_cyc_o && m_stb_o) begin
+            m_dat_i <= mem_read32(m_adr_o);
+            if (m_we_o) begin
+                mem_write32(m_adr_o, m_dat_o);
+            end
+            m_ack_i <= 1'b1;
         end
     end
 
@@ -178,21 +175,19 @@ module tb_wb_plc_stage11;
             code_mem[i] = 32'd0;
         end
 
-        // Program bytes, little-endian packed by word.
-        code_mem[0] = 32'h631B_4C02;
-        code_mem[1] = 32'h2200_0000;
-        code_mem[2] = 32'h0000_0016;
-        code_mem[3] = 32'h0000_1500;
-        code_mem[4] = 32'h641B_0000;
-        code_mem[5] = 32'h0B00_0000;
-        code_mem[6] = 32'h4AFF_8514;
-        code_mem[7] = 32'h0050_1804;
-        code_mem[8] = 32'h4B04_0000;
-        code_mem[9] = 32'h0000_A013;
-        code_mem[10] = 32'hFF85_1C00;
-        code_mem[11] = 32'h070B_FFFF;
-        code_mem[12] = 32'h0000_F011;
-        code_mem[13] = 32'h0000_0000;
+        code_mem[0] = 32'h4908_C01D;
+        code_mem[1] = 32'h0000_1D40;
+        code_mem[2] = 32'h1A50_4080;
+        code_mem[3] = 32'h0000_0000;
+        code_mem[4] = 32'h4908_C01D;
+        code_mem[5] = 32'h0000_1D40;
+        code_mem[6] = 32'h1A51_4080;
+        code_mem[7] = 32'h0000_0050;
+        code_mem[8] = 32'h4908_C01D;
+        code_mem[9] = 32'h0000_1D40;
+        code_mem[10] = 32'h1A52_4080;
+        code_mem[11] = 32'h0000_00A0;
+        code_mem[12] = 32'h0000_0000;
 
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd0)] = MAGIC_CONTROL_BLOCK;
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd4)] = 32'd0;
@@ -203,7 +198,7 @@ module tb_wb_plc_stage11;
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd24)] = 32'd0;
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd28)] = 32'd0;
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd32)] = BYTECODE_BASE;
-        control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd36)] = 32'd54;
+        control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd36)] = 32'd49;
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd40)] = 32'd0;
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd44)] = 32'd0;
         control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd48)] = 32'd0;
@@ -222,20 +217,17 @@ module tb_wb_plc_stage11;
         if ((control_mem[control_index(SLOT0_CONTROL_ADDR + 32'd12)] & SLOT_STATUS_FAULTED) != 32'd0) begin
             $fatal(1, "slot faulted");
         end
-        if (shared_mem[0] !== 32'd100) begin
-            $fatal(1, "u32Value mismatch");
+        if (shared_mem[0] !== 32'h40E4_8460) begin
+            $fatal(1, "sum mismatch");
         end
-        if (shared_mem[20] !== 32'hFFFF_FF85) begin
-            $fatal(1, "i32Value mismatch");
+        if (shared_mem[20] !== 32'hBF5B_DD00) begin
+            $fatal(1, "diff mismatch");
         end
-        if (shared_mem[40][15:0] !== 16'hFF85) begin
-            $fatal(1, "i16RoundTrip mismatch");
-        end
-        if (shared_mem[60] !== 32'd1) begin
-            $fatal(1, "allOk mismatch");
+        if (shared_mem[40] !== 32'h4149_08C0) begin
+            $fatal(1, "product mismatch");
         end
 
-        $display("PASS stage11 numeric VM regression");
+        $display("PASS stage11 float arithmetic regression");
         $finish;
     end
 

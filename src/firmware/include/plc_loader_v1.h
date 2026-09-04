@@ -765,6 +765,9 @@ private:
                opcode == 0x4Du ||
                opcode == 0x4Eu ||
                opcode == 0x4Fu ||
+               opcode == 0x50u ||
+               opcode == 0x51u ||
+               opcode == 0x52u ||
                opcodeHasU16Operand(opcode) ||
                opcodeHasU32Immediate(opcode);
     }

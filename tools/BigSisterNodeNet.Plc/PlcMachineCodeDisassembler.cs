@@ -273,6 +273,21 @@ namespace BigSisterNodeNet.Plc
                         pc += 1;
                         break;
 
+                    case PlcMachineCodeAssembler.FloatAddOpcode:
+                        builder.AppendLine("FADD");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.FloatSubOpcode:
+                        builder.AppendLine("FSUB");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.FloatMulOpcode:
+                        builder.AppendLine("FMUL");
+                        pc += 1;
+                        break;
+
                     case PlcMachineCodeAssembler.AddOpcode:
                         builder.AppendLine("ADD");
                         pc += 1;

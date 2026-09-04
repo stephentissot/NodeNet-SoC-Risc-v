@@ -393,6 +393,330 @@ module wb_plc_float_cmp_alu(
 
 endmodule
 
+module wb_plc_float_op(
+    input  wire        clk,
+    input  wire        rst,
+    input  wire        start,
+    input  wire [7:0]  opcode,
+    input  wire [2:0]  lhs_type,
+    input  wire [2:0]  rhs_type,
+    input  wire [31:0] lhs_value32,
+    input  wire [31:0] rhs_value32,
+    output reg         busy,
+    output reg         done,
+    output reg         supported,
+    output reg         type_ok,
+    output reg  [31:0] result_value,
+    output reg  [2:0]  result_type
+);
+
+    localparam [7:0] OPCODE_FADD = 8'h50;
+    localparam [7:0] OPCODE_FSUB = 8'h51;
+    localparam [7:0] OPCODE_FMUL = 8'h52;
+
+    localparam [2:0] STACK_TYPE_NONE = 3'd0;
+    localparam [2:0] STACK_TYPE_FLOAT32 = 3'd5;
+
+    localparam [31:0] FLOAT_QNAN = 32'h7FC0_0000;
+
+    reg [7:0] opcode_latched;
+    reg [2:0] lhs_type_latched;
+    reg [2:0] rhs_type_latched;
+    reg [31:0] lhs_value_latched;
+    reg [31:0] rhs_value_latched;
+
+    function float32_is_nan;
+        input [31:0] raw_value;
+        begin
+            float32_is_nan = (raw_value[30:23] == 8'hFF) && (raw_value[22:0] != 23'd0);
+        end
+    endfunction
+
+    function float32_is_inf;
+        input [31:0] raw_value;
+        begin
+            float32_is_inf = (raw_value[30:23] == 8'hFF) && (raw_value[22:0] == 23'd0);
+        end
+    endfunction
+
+    function float32_is_zero;
+        input [31:0] raw_value;
+        begin
+            float32_is_zero = raw_value[30:0] == 31'd0;
+        end
+    endfunction
+
+    function [31:0] pack_float_zero;
+        input sign_bit;
+        begin
+            pack_float_zero = {sign_bit, 31'd0};
+        end
+    endfunction
+
+    function [31:0] pack_float_inf;
+        input sign_bit;
+        begin
+            pack_float_inf = {sign_bit, 8'hFF, 23'd0};
+        end
+    endfunction
+
+    function [4:0] leading_zero_count24;
+        input [23:0] value;
+        integer idx;
+        reg found;
+        begin
+            leading_zero_count24 = 5'd24;
+            found = 1'b0;
+            for (idx = 23; idx >= 0; idx = idx - 1) begin
+                if (!found && value[idx]) begin
+                    leading_zero_count24 = 23 - idx;
+                    found = 1'b1;
+                end
+            end
+        end
+    endfunction
+
+    function [31:0] float_addsub_result;
+        input subtract;
+        input [31:0] left_value;
+        input [31:0] right_value;
+        reg left_sign;
+        reg right_sign;
+        reg right_effective_sign;
+        reg large_sign;
+        reg small_sign;
+        reg result_sign;
+        reg [7:0] left_exp;
+        reg [7:0] right_exp;
+        reg [7:0] left_eff_exp;
+        reg [7:0] right_eff_exp;
+        reg [7:0] large_exp;
+        reg [7:0] small_exp;
+        reg [22:0] left_frac;
+        reg [22:0] right_frac;
+        reg [23:0] left_mant;
+        reg [23:0] right_mant;
+        reg [23:0] large_mant;
+        reg [23:0] small_mant;
+        reg [23:0] norm_mant;
+        reg [26:0] large_ext;
+        reg [26:0] small_ext;
+        reg [26:0] shifted_small;
+        reg [26:0] diff_ext;
+        reg [27:0] sum_ext;
+        reg [7:0] result_exp;
+        integer exp_diff;
+        integer shift_count;
+        begin
+            left_sign = left_value[31];
+            right_sign = right_value[31];
+            right_effective_sign = right_sign ^ subtract;
+            left_exp = left_value[30:23];
+            right_exp = right_value[30:23];
+            left_frac = left_value[22:0];
+            right_frac = right_value[22:0];
+
+            if (float32_is_nan(left_value) || float32_is_nan(right_value)) begin
+                float_addsub_result = FLOAT_QNAN;
+            end else if (float32_is_inf(left_value) && float32_is_inf(right_value)) begin
+                float_addsub_result = (left_sign == right_effective_sign)
+                    ? pack_float_inf(left_sign)
+                    : FLOAT_QNAN;
+            end else if (float32_is_inf(left_value)) begin
+                float_addsub_result = pack_float_inf(left_sign);
+            end else if (float32_is_inf(right_value)) begin
+                float_addsub_result = pack_float_inf(right_effective_sign);
+            end else if (float32_is_zero(left_value) && float32_is_zero(right_value)) begin
+                float_addsub_result = 32'd0;
+            end else if (float32_is_zero(left_value)) begin
+                float_addsub_result = {right_effective_sign, right_value[30:0]};
+            end else if (float32_is_zero(right_value)) begin
+                float_addsub_result = left_value;
+            end else begin
+                left_eff_exp = (left_exp == 8'd0) ? 8'd1 : left_exp;
+                right_eff_exp = (right_exp == 8'd0) ? 8'd1 : right_exp;
+                left_mant = (left_exp == 8'd0) ? {1'b0, left_frac} : {1'b1, left_frac};
+                right_mant = (right_exp == 8'd0) ? {1'b0, right_frac} : {1'b1, right_frac};
+
+                if ((left_eff_exp > right_eff_exp) ||
+                    ((left_eff_exp == right_eff_exp) && (left_mant >= right_mant))) begin
+                    large_sign = left_sign;
+                    large_exp = left_eff_exp;
+                    large_mant = left_mant;
+                    small_sign = right_effective_sign;
+                    small_exp = right_eff_exp;
+                    small_mant = right_mant;
+                end else begin
+                    large_sign = right_effective_sign;
+                    large_exp = right_eff_exp;
+                    large_mant = right_mant;
+                    small_sign = left_sign;
+                    small_exp = left_eff_exp;
+                    small_mant = left_mant;
+                end
+
+                exp_diff = large_exp - small_exp;
+                large_ext = {large_mant, 3'b000};
+                small_ext = {small_mant, 3'b000};
+                shifted_small = (exp_diff > 26) ? 27'd0 : (small_ext >> exp_diff);
+
+                if (large_sign == small_sign) begin
+                    sum_ext = {1'b0, large_ext} + {1'b0, shifted_small};
+                    result_sign = large_sign;
+                    if (sum_ext[27]) begin
+                        sum_ext = sum_ext >> 1;
+                        large_exp = large_exp + 8'd1;
+                    end
+
+                    norm_mant = sum_ext[26:3];
+                    if (norm_mant == 24'd0) begin
+                        float_addsub_result = pack_float_zero(result_sign);
+                    end else if (large_exp >= 8'hFF) begin
+                        float_addsub_result = pack_float_inf(result_sign);
+                    end else begin
+                        float_addsub_result = {result_sign, large_exp, norm_mant[22:0]};
+                    end
+                end else begin
+                    if (large_ext == shifted_small) begin
+                        float_addsub_result = 32'd0;
+                    end else begin
+                        diff_ext = large_ext - shifted_small;
+                        shift_count = leading_zero_count24(diff_ext[26:3]);
+                        if (shift_count >= large_exp) begin
+                            float_addsub_result = pack_float_zero(result_sign);
+                        end else begin
+                            result_sign = large_sign;
+                            result_exp = large_exp - shift_count;
+                            diff_ext = diff_ext << shift_count;
+                            norm_mant = diff_ext[26:3];
+                            if (norm_mant == 24'd0) begin
+                                float_addsub_result = pack_float_zero(result_sign);
+                            end else begin
+                                float_addsub_result = {result_sign, result_exp, norm_mant[22:0]};
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    endfunction
+
+    function [31:0] float_mul_result;
+        input [31:0] left_value;
+        input [31:0] right_value;
+        reg result_sign;
+        reg [7:0] left_exp;
+        reg [7:0] right_exp;
+        reg [7:0] left_eff_exp;
+        reg [7:0] right_eff_exp;
+        reg [22:0] left_frac;
+        reg [22:0] right_frac;
+        reg [23:0] left_mant;
+        reg [23:0] right_mant;
+        reg [23:0] norm_mant;
+        reg [47:0] product;
+        integer result_exp;
+        begin
+            result_sign = left_value[31] ^ right_value[31];
+            left_exp = left_value[30:23];
+            right_exp = right_value[30:23];
+            left_frac = left_value[22:0];
+            right_frac = right_value[22:0];
+
+            if (float32_is_nan(left_value) || float32_is_nan(right_value)) begin
+                float_mul_result = FLOAT_QNAN;
+            end else if ((float32_is_inf(left_value) && float32_is_zero(right_value)) ||
+                         (float32_is_zero(left_value) && float32_is_inf(right_value))) begin
+                float_mul_result = FLOAT_QNAN;
+            end else if (float32_is_inf(left_value) || float32_is_inf(right_value)) begin
+                float_mul_result = pack_float_inf(result_sign);
+            end else if (float32_is_zero(left_value) || float32_is_zero(right_value)) begin
+                float_mul_result = pack_float_zero(result_sign);
+            end else begin
+                left_eff_exp = (left_exp == 8'd0) ? 8'd1 : left_exp;
+                right_eff_exp = (right_exp == 8'd0) ? 8'd1 : right_exp;
+                left_mant = (left_exp == 8'd0) ? {1'b0, left_frac} : {1'b1, left_frac};
+                right_mant = (right_exp == 8'd0) ? {1'b0, right_frac} : {1'b1, right_frac};
+
+                product = left_mant * right_mant;
+                result_exp = left_eff_exp + right_eff_exp - 127;
+                if (product[47]) begin
+                    product = product >> 1;
+                    result_exp = result_exp + 1;
+                end
+
+                norm_mant = product[46:23];
+                if (norm_mant == 24'd0 || result_exp <= 0) begin
+                    float_mul_result = pack_float_zero(result_sign);
+                end else if (result_exp >= 255) begin
+                    float_mul_result = pack_float_inf(result_sign);
+                end else begin
+                    float_mul_result = {result_sign, result_exp[7:0], norm_mant[22:0]};
+                end
+            end
+        end
+    endfunction
+
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            busy <= 1'b0;
+            done <= 1'b0;
+            supported <= 1'b0;
+            type_ok <= 1'b0;
+            result_value <= 32'd0;
+            result_type <= STACK_TYPE_NONE;
+            opcode_latched <= 8'd0;
+            lhs_type_latched <= STACK_TYPE_NONE;
+            rhs_type_latched <= STACK_TYPE_NONE;
+            lhs_value_latched <= 32'd0;
+            rhs_value_latched <= 32'd0;
+        end else begin
+            done <= 1'b0;
+            if (start && !busy) begin
+                busy <= 1'b1;
+                opcode_latched <= opcode;
+                lhs_type_latched <= lhs_type;
+                rhs_type_latched <= rhs_type;
+                lhs_value_latched <= lhs_value32;
+                rhs_value_latched <= rhs_value32;
+            end else if (busy) begin
+                busy <= 1'b0;
+                done <= 1'b1;
+                supported <= (opcode_latched == OPCODE_FADD) ||
+                             (opcode_latched == OPCODE_FSUB) ||
+                             (opcode_latched == OPCODE_FMUL);
+                type_ok <= (lhs_type_latched == STACK_TYPE_FLOAT32) &&
+                           (rhs_type_latched == STACK_TYPE_FLOAT32);
+                result_type <= STACK_TYPE_NONE;
+                result_value <= 32'd0;
+
+                if ((lhs_type_latched == STACK_TYPE_FLOAT32) &&
+                    (rhs_type_latched == STACK_TYPE_FLOAT32)) begin
+                    case (opcode_latched)
+                        OPCODE_FADD: begin
+                            result_value <= float_addsub_result(1'b0, lhs_value_latched, rhs_value_latched);
+                            result_type <= STACK_TYPE_FLOAT32;
+                        end
+                        OPCODE_FSUB: begin
+                            result_value <= float_addsub_result(1'b1, lhs_value_latched, rhs_value_latched);
+                            result_type <= STACK_TYPE_FLOAT32;
+                        end
+                        OPCODE_FMUL: begin
+                            result_value <= float_mul_result(lhs_value_latched, rhs_value_latched);
+                            result_type <= STACK_TYPE_FLOAT32;
+                        end
+                        default: begin
+                            result_value <= 32'd0;
+                            result_type <= STACK_TYPE_NONE;
+                        end
+                    endcase
+                end
+            end
+        end
+    end
+
+endmodule
+
 module wb_plc_bool_alu(
     input  wire [7:0]  opcode,
     input  wire [2:0]  top_type,
@@ -590,6 +914,9 @@ module wb_plc #(
     localparam [7:0] OPCODE_BOOL_TO_I32 = 8'h4D;
     localparam [7:0] OPCODE_U32_TO_BOOL = 8'h4E;
     localparam [7:0] OPCODE_I32_TO_BOOL = 8'h4F;
+    localparam [7:0] OPCODE_FADD = 8'h50;
+    localparam [7:0] OPCODE_FSUB = 8'h51;
+    localparam [7:0] OPCODE_FMUL = 8'h52;
     localparam integer EDGE_STATE_BITS = 1024;
     localparam integer EDGE_STATE_WORD_COUNT = EDGE_STATE_BITS / 32;
     localparam integer EDGE_STATE_SECTION_BYTES = EDGE_STATE_WORD_COUNT * 4;
@@ -709,6 +1036,8 @@ module wb_plc #(
     localparam [6:0] ST_PUSH_WIDE32_VALUE = 7'd72;
     localparam [6:0] ST_WIDE32_READ_VALUE = 7'd73;
     localparam [6:0] ST_WIDE32_WRITE_VALUE0 = 7'd74;
+    localparam [6:0] ST_FLOAT_OP_START = 7'd75;
+    localparam [6:0] ST_FLOAT_OP_WAIT = 7'd76;
 
     reg        engine_enable;
     reg [31:0] scan_interval_cycles;
@@ -752,6 +1081,7 @@ module wb_plc #(
     reg        cached_word_valid;
     reg [31:0] cached_word_addr;
     reg [31:0] cached_word_data;
+    reg        float_op_start;
 
     wire wb_hit = wb_cyc_i && wb_stb_i && (wb_adr_i[31:5] == ADDR[31:5]);
     wire busy = (state != ST_IDLE);
@@ -809,6 +1139,12 @@ module wb_plc #(
     wire        float_cmp_alu_type_ok;
     wire [31:0] float_cmp_alu_result_value;
     wire [2:0]  float_cmp_alu_result_type;
+    wire        float_op_busy;
+    wire        float_op_done;
+    wire        float_op_supported;
+    wire        float_op_type_ok;
+    wire [31:0] float_op_result_value;
+    wire [2:0]  float_op_result_type;
 
     wb_plc_int_alu int_alu (
         .opcode(current_opcode),
@@ -870,6 +1206,23 @@ module wb_plc #(
         .type_ok(float_cmp_alu_type_ok),
         .result_value(float_cmp_alu_result_value),
         .result_type(float_cmp_alu_result_type)
+    );
+
+    wb_plc_float_op float_op (
+        .clk(clk),
+        .rst(rst),
+        .start(float_op_start),
+        .opcode(current_opcode),
+        .lhs_type(stack_next_type),
+        .rhs_type(stack_top_type),
+        .lhs_value32(stack_next_value32),
+        .rhs_value32(stack_top_value32),
+        .busy(float_op_busy),
+        .done(float_op_done),
+        .supported(float_op_supported),
+        .type_ok(float_op_type_ok),
+        .result_value(float_op_result_value),
+        .result_type(float_op_result_type)
     );
 
     function [31:0] slot_control_block_addr;
@@ -1434,12 +1787,14 @@ module wb_plc #(
             cached_word_valid <= 1'b0;
             cached_word_addr <= 32'd0;
             cached_word_data <= 32'd0;
+            float_op_start <= 1'b0;
             scan_countdown <= DEFAULT_SCAN_INTERVAL_CYCLES;
             scan_counter <= 32'd0;
             last_fault_code <= 32'd0;
             last_fault_slot <= 8'd0;
             finish_bus_cycle();
         end else begin
+            float_op_start <= 1'b0;
             if (clear_fault_request) begin
                 last_fault_code <= 32'd0;
                 last_fault_slot <= 8'd0;
@@ -1978,6 +2333,15 @@ module wb_plc #(
                                 state <= ST_FETCH_OPCODE;
                             end
                         end
+                        OPCODE_FADD,
+                        OPCODE_FSUB,
+                        OPCODE_FMUL: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else begin
+                                state <= ST_FLOAT_OP_START;
+                            end
+                        end
                         OPCODE_ADD,
                         OPCODE_SUB,
                         OPCODE_LT,
@@ -2070,6 +2434,24 @@ module wb_plc #(
                         OPCODE_PUSH_F32: state <= ST_FETCH_IMMEDIATE0;
                         default: begin_fault(FAULT_INVALID_OPCODE, current_opcode);
                     endcase
+                end
+
+                ST_FLOAT_OP_START: begin
+                    float_op_start <= 1'b1;
+                    state <= ST_FLOAT_OP_WAIT;
+                end
+
+                ST_FLOAT_OP_WAIT: begin
+                    if (float_op_done) begin
+                        if (!float_op_supported || !float_op_type_ok) begin
+                            begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                        end else begin
+                            stack_value[stack_value_bit_index(stack_next_index) +: 32] <= float_op_result_value;
+                            stack_type[stack_type_bit_index(stack_next_index) +: 3] <= float_op_result_type;
+                            stack_depth <= stack_depth - 3'd1;
+                            state <= ST_FETCH_OPCODE;
+                        end
+                    end
                 end
 
                 ST_BRANCH_EXECUTE: begin

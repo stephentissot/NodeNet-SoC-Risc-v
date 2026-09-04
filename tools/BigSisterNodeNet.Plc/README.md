@@ -95,6 +95,9 @@ Supported instructions:
 - `FLE`
 - `FGT`
 - `FGE`
+- `FADD`
+- `FSUB`
+- `FMUL`
 - `SX_I16_TO_I32`
 - `TRUNC_I32_TO_I16`
 - `BOOL_TO_U32`
@@ -107,8 +110,8 @@ Supported instructions:
 
 Current float scope:
 
-- `PUSH_F32`, `LOAD_F32`, `STORE_F32` and ordered comparisons are implemented
-- `FADD`, `FSUB`, `FMUL`, `FDIV`, and int/float numeric conversions are not yet implemented in RTL
+- `PUSH_F32`, `LOAD_F32`, `STORE_F32`, ordered comparisons, `FADD`, `FSUB`, and `FMUL` are implemented
+- `FDIV` and int/float numeric conversions remain deferred
 
 Supported aliases:
 

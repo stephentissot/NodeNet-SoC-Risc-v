@@ -73,6 +73,9 @@ Implemented today:
 - `FLE`
 - `FGT`
 - `FGE`
+- `FADD`
+- `FSUB`
+- `FMUL`
 - `SX_I16_TO_I32`
 - `TRUNC_I32_TO_I16`
 - `BOOL_TO_U32`
@@ -2302,7 +2305,7 @@ VM family is:
 - `FADD`
 - `FSUB`
 - `FMUL`
-- `FDIV`
+- `FDIV` remains deferred
 - `FNEG`
 - `FABS`
 - `FEQ`
@@ -2419,18 +2422,21 @@ Reserved mnemonics:
 
 ### Float Operations
 
-Reserved mnemonics:
+Implemented mnemonics:
 
 - `FADD`
 - `FSUB`
 - `FMUL`
-- `FDIV`
 - `FEQ`
 - `FNE`
 - `FLT`
 - `FLE`
 - `FGT`
 - `FGE`
+
+Reserved mnemonics:
+
+- `FDIV`
 - `FMIN`
 - `FMAX`
 - `I32_TO_F32`

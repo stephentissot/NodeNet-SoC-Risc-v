@@ -223,8 +223,8 @@ Implementation priority for the current freeze:
   polymorphic for same-type `int16`, `uint32`, and `int32` operands
 - `FEQ`, `FNE`, `FLT`, `FLE`, `FGT`, and `FGE` are implemented as ordered
   `float32` comparisons on raw IEEE-754 single-precision values
-- full float arithmetic (`FADD`, `FSUB`, `FMUL`, `FDIV`) and int/float numeric
-  conversions remain reserved for a later float-unit integration
+- `FADD`, `FSUB`, and `FMUL` are implemented through the multi-cycle float unit
+- `FDIV` and int/float numeric conversions remain reserved for a later float-unit integration
 
 Current Stage 4 extension on top of the frozen core:
 
@@ -1260,9 +1260,9 @@ Rationale:
 The float unit must support at minimum:
 
 - load/store of `float32`
-- `FADD`, `FSUB`, `FMUL`, `FDIV`
+- `FADD`, `FSUB`, `FMUL`
 - `FEQ`, `FNE`, `FLT`, `FLE`, `FGT`, `FGE`
-- `I32_TO_F32`, `U32_TO_F32`, `F32_TO_I32`
+- `FDIV`, `I32_TO_F32`, `U32_TO_F32`, `F32_TO_I32` remain follow-up work
 
 Recommended behavior:
 
@@ -1522,7 +1522,7 @@ Objective:
 Tasks:
 
 1. Implement `PUSH_F32`, float load/store, and float compares.
-2. Implement `FADD`, `FSUB`, `FMUL`, `FDIV`.
+2. Implement `FADD`, `FSUB`, and `FMUL`; keep `FDIV` as a follow-up.
 3. Implement explicit conversion opcodes.
 4. Define fault behavior for invalid float operations.
 

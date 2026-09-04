@@ -1,0 +1,26 @@
+VAR PUBLIC FLOAT inA
+VAR PUBLIC FLOAT inB
+VAR PUBLIC FLOAT addOut
+VAR PUBLIC FLOAT subOut
+VAR PUBLIC FLOAT mulOut
+
+; Renseigner inA et inB avant execution.
+; Exemple simple: inA = 1.5, inB = 2.0
+; Resultats attendus: addOut = 3.5, subOut = -0.5, mulOut = 3.0
+
+LOAD_F32 inA
+LOAD_F32 inB
+FADD
+STORE_F32 addOut
+
+LOAD_F32 inA
+LOAD_F32 inB
+FSUB
+STORE_F32 subOut
+
+LOAD_F32 inA
+LOAD_F32 inB
+FMUL
+STORE_F32 mulOut
+
+HALT
