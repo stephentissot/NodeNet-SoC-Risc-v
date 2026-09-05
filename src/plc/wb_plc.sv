@@ -304,65 +304,32 @@ module wb_plc_float_cmp_alu(
     localparam [2:0] STACK_TYPE_BOOL = 3'd1;
     localparam [2:0] STACK_TYPE_FLOAT32 = 3'd5;
 
-    function float32_is_nan;
-        input [31:0] raw_value;
-        begin
-            float32_is_nan = (raw_value[30:23] == 8'hFF) && (raw_value[22:0] != 23'd0);
-        end
-    endfunction
-
-    function float32_is_zero;
-        input [31:0] raw_value;
-        begin
-            float32_is_zero = raw_value[30:0] == 31'd0;
-        end
-    endfunction
-
-    function [31:0] float32_ordered_key;
-        input [31:0] raw_value;
-        begin
-            float32_ordered_key = raw_value[31] ? ~raw_value : (raw_value ^ 32'h8000_0000);
-        end
-    endfunction
-
-    function float32_equal;
-        input [31:0] left_value;
-        input [31:0] right_value;
-        begin
-            float32_equal = !float32_is_nan(left_value) &&
-                            !float32_is_nan(right_value) &&
-                            ((left_value == right_value) ||
-                             (float32_is_zero(left_value) && float32_is_zero(right_value)));
-        end
-    endfunction
-
-    function float32_less_than;
-        input [31:0] left_value;
-        input [31:0] right_value;
-        begin
-            float32_less_than = !float32_is_nan(left_value) &&
-                                !float32_is_nan(right_value) &&
-                                !float32_equal(left_value, right_value) &&
-                                (float32_ordered_key(left_value) < float32_ordered_key(right_value));
-        end
-    endfunction
-
-    function float32_less_or_equal;
-        input [31:0] left_value;
-        input [31:0] right_value;
-        begin
-            float32_less_or_equal = !float32_is_nan(left_value) &&
-                                    !float32_is_nan(right_value) &&
-                                    (float32_equal(left_value, right_value) ||
-                                     (float32_ordered_key(left_value) < float32_ordered_key(right_value)));
-        end
-    endfunction
-
     always @* begin
+        reg lhs_nan;
+        reg rhs_nan;
+        reg unordered;
+        reg lhs_zero;
+        reg rhs_zero;
+        reg equal_result;
+        reg less_result;
+        reg less_or_equal_result;
+        reg [31:0] lhs_ordered_key;
+        reg [31:0] rhs_ordered_key;
+
         supported = 1'b1;
         type_ok = 1'b0;
         result_value = 32'd0;
         result_type = STACK_TYPE_NONE;
+        lhs_nan = (lhs_value32[30:23] == 8'hFF) && (lhs_value32[22:0] != 23'd0);
+        rhs_nan = (rhs_value32[30:23] == 8'hFF) && (rhs_value32[22:0] != 23'd0);
+        unordered = lhs_nan || rhs_nan;
+        lhs_zero = (lhs_value32[30:0] == 31'd0);
+        rhs_zero = (rhs_value32[30:0] == 31'd0);
+        lhs_ordered_key = lhs_value32[31] ? ~lhs_value32 : (lhs_value32 ^ 32'h8000_0000);
+        rhs_ordered_key = rhs_value32[31] ? ~rhs_value32 : (rhs_value32 ^ 32'h8000_0000);
+        equal_result = !unordered && ((lhs_value32 == rhs_value32) || (lhs_zero && rhs_zero));
+        less_result = !unordered && !equal_result && (lhs_ordered_key < rhs_ordered_key);
+        less_or_equal_result = !unordered && (equal_result || (lhs_ordered_key < rhs_ordered_key));
 
         case (opcode)
             OPCODE_FEQ,
@@ -374,12 +341,12 @@ module wb_plc_float_cmp_alu(
                 type_ok = (lhs_type == STACK_TYPE_FLOAT32) && (rhs_type == STACK_TYPE_FLOAT32);
                 if (type_ok) begin
                     case (opcode)
-                        OPCODE_FEQ: result_value = float32_equal(lhs_value32, rhs_value32) ? 32'd1 : 32'd0;
-                        OPCODE_FNE: result_value = float32_equal(lhs_value32, rhs_value32) ? 32'd0 : 32'd1;
-                        OPCODE_FLT: result_value = float32_less_than(lhs_value32, rhs_value32) ? 32'd1 : 32'd0;
-                        OPCODE_FLE: result_value = float32_less_or_equal(lhs_value32, rhs_value32) ? 32'd1 : 32'd0;
-                        OPCODE_FGT: result_value = float32_less_than(rhs_value32, lhs_value32) ? 32'd1 : 32'd0;
-                        default:    result_value = float32_less_or_equal(rhs_value32, lhs_value32) ? 32'd1 : 32'd0;
+                        OPCODE_FEQ: result_value = equal_result ? 32'd1 : 32'd0;
+                        OPCODE_FNE: result_value = equal_result ? 32'd0 : 32'd1;
+                        OPCODE_FLT: result_value = less_result ? 32'd1 : 32'd0;
+                        OPCODE_FLE: result_value = less_or_equal_result ? 32'd1 : 32'd0;
+                        OPCODE_FGT: result_value = (!unordered && !equal_result && (rhs_ordered_key < lhs_ordered_key)) ? 32'd1 : 32'd0;
+                        default:    result_value = (!unordered && (equal_result || (rhs_ordered_key < lhs_ordered_key))) ? 32'd1 : 32'd0;
                     endcase
                     result_type = STACK_TYPE_BOOL;
                 end
@@ -413,7 +380,6 @@ module wb_plc_float_op(
     localparam [7:0] OPCODE_FADD = 8'h50;
     localparam [7:0] OPCODE_FSUB = 8'h51;
     localparam [7:0] OPCODE_FMUL = 8'h52;
-    localparam [7:0] OPCODE_FDIV = 8'h53;
 
     localparam [2:0] STACK_TYPE_NONE = 3'd0;
     localparam [2:0] STACK_TYPE_FLOAT32 = 3'd5;
@@ -658,70 +624,6 @@ module wb_plc_float_op(
         end
     endfunction
 
-    function [31:0] float_div_result;
-        input [31:0] left_value;
-        input [31:0] right_value;
-        reg result_sign;
-        reg [7:0] left_exp;
-        reg [7:0] right_exp;
-        reg [7:0] left_eff_exp;
-        reg [7:0] right_eff_exp;
-        reg [22:0] left_frac;
-        reg [22:0] right_frac;
-        reg [23:0] left_mant;
-        reg [23:0] right_mant;
-        reg [23:0] quotient_mant;
-        reg [47:0] quotient_full;
-        integer result_exp;
-        begin
-            result_sign = left_value[31] ^ right_value[31];
-            left_exp = left_value[30:23];
-            right_exp = right_value[30:23];
-            left_frac = left_value[22:0];
-            right_frac = right_value[22:0];
-
-            if (float32_is_nan(left_value) || float32_is_nan(right_value)) begin
-                float_div_result = FLOAT_QNAN;
-            end else if ((float32_is_zero(left_value) && float32_is_zero(right_value)) ||
-                         (float32_is_inf(left_value) && float32_is_inf(right_value))) begin
-                float_div_result = FLOAT_QNAN;
-            end else if (float32_is_inf(left_value)) begin
-                float_div_result = pack_float_inf(result_sign);
-            end else if (float32_is_zero(right_value)) begin
-                float_div_result = pack_float_inf(result_sign);
-            end else if (float32_is_zero(left_value) || float32_is_inf(right_value)) begin
-                float_div_result = pack_float_zero(result_sign);
-            end else begin
-                left_eff_exp = (left_exp == 8'd0) ? 8'd1 : left_exp;
-                right_eff_exp = (right_exp == 8'd0) ? 8'd1 : right_exp;
-                left_mant = (left_exp == 8'd0) ? {1'b0, left_frac} : {1'b1, left_frac};
-                right_mant = (right_exp == 8'd0) ? {1'b0, right_frac} : {1'b1, right_frac};
-
-                quotient_full = ({left_mant, 23'd0}) / right_mant;
-                result_exp = left_eff_exp - right_eff_exp + 127;
-
-                if (quotient_full[24]) begin
-                    quotient_mant = quotient_full[24:1];
-                    result_exp = result_exp + 1;
-                end else begin
-                    quotient_mant = quotient_full[23:0];
-                    if (!quotient_mant[23]) begin
-                        quotient_mant = quotient_mant << 1;
-                        result_exp = result_exp - 1;
-                    end
-                end
-
-                if (quotient_mant == 24'd0 || result_exp <= 0) begin
-                    float_div_result = pack_float_zero(result_sign);
-                end else if (result_exp >= 255) begin
-                    float_div_result = pack_float_inf(result_sign);
-                end else begin
-                    float_div_result = {result_sign, result_exp[7:0], quotient_mant[22:0]};
-                end
-            end
-        end
-    endfunction
-
     always @(posedge clk or posedge rst) begin
         if (rst) begin
             busy <= 1'b0;
@@ -749,8 +651,7 @@ module wb_plc_float_op(
                 done <= 1'b1;
                 supported <= (opcode_latched == OPCODE_FADD) ||
                              (opcode_latched == OPCODE_FSUB) ||
-                             (opcode_latched == OPCODE_FMUL) ||
-                             (opcode_latched == OPCODE_FDIV);
+                             (opcode_latched == OPCODE_FMUL);
                 type_ok <= (lhs_type_latched == STACK_TYPE_FLOAT32) &&
                            (rhs_type_latched == STACK_TYPE_FLOAT32);
                 result_type <= STACK_TYPE_NONE;
@@ -769,10 +670,6 @@ module wb_plc_float_op(
                         end
                         OPCODE_FMUL: begin
                             result_value <= float_mul_result(lhs_value_latched, rhs_value_latched);
-                            result_type <= STACK_TYPE_FLOAT32;
-                        end
-                        OPCODE_FDIV: begin
-                            result_value <= float_div_result(lhs_value_latched, rhs_value_latched);
                             result_type <= STACK_TYPE_FLOAT32;
                         end
                         default: begin
@@ -1109,6 +1006,11 @@ module wb_plc #(
     localparam [6:0] ST_WIDE32_WRITE_VALUE0 = 7'd74;
     localparam [6:0] ST_FLOAT_OP_START = 7'd75;
     localparam [6:0] ST_FLOAT_OP_WAIT = 7'd76;
+    localparam [6:0] ST_SLOT_RESUME = 7'd77;
+
+    localparam [1:0] SLOT_WAIT_NONE = 2'd0;
+    localparam [1:0] SLOT_WAIT_FDIV_START = 2'd1;
+    localparam [1:0] SLOT_WAIT_FDIV_DONE = 2'd2;
 
     reg        engine_enable;
     reg [31:0] scan_interval_cycles;
@@ -1134,8 +1036,14 @@ module wb_plc #(
     reg [31:0] slot_entry_pc;
     reg [31:0] current_pc;
     reg [31:0] instruction_count;
-    reg [127:0] stack_value;
-    reg [11:0]  stack_type;
+    reg [31:0] stack0_value;
+    reg [31:0] stack1_value;
+    reg [31:0] stack2_value;
+    reg [31:0] stack3_value;
+    reg [2:0]  stack0_type;
+    reg [2:0]  stack1_type;
+    reg [2:0]  stack2_type;
+    reg [2:0]  stack3_type;
     reg [2:0]  stack_depth;
     reg [31:0] pending_stack_value;
     reg [31:0] current_immediate_u32;
@@ -1153,40 +1061,31 @@ module wb_plc #(
     reg [31:0] cached_word_addr;
     reg [31:0] cached_word_data;
     reg        float_op_start;
+    reg        fdiv_start;
+    reg [4:0]  fdiv_owner_slot;
+    reg        fdiv_result_valid;
+    reg [4:0]  fdiv_result_slot;
+    reg [31:0] fdiv_result_value_latched;
+    reg [1:0]  slot_wait_state [0:SLOT_COUNT-1];
+    reg [31:0] slot_wait_pc [0:SLOT_COUNT-1];
+    reg [31:0] slot_wait_instruction_count [0:SLOT_COUNT-1];
+    reg [31:0] slot_wait_entry_pc [0:SLOT_COUNT-1];
+    reg [127:0] slot_wait_stack_value [0:SLOT_COUNT-1];
+    reg [11:0] slot_wait_stack_type [0:SLOT_COUNT-1];
+    reg [2:0]  slot_wait_stack_depth [0:SLOT_COUNT-1];
 
     wire wb_hit = wb_cyc_i && wb_stb_i && (wb_adr_i[31:5] == ADDR[31:5]);
     wire busy = (state != ST_IDLE);
     wire clear_fault_request = wb_hit && wb_we_i && (wb_adr_i[4:2] == 3'd0) && wb_sel_i[0] && wb_dat_i[1];
-    wire [2:0] stack_top_index = stack_depth - 3'd1;
-    wire [2:0] stack_next_index = stack_depth - 3'd2;
-    wire [2:0] stack_third_index = stack_depth - 3'd3;
-    wire [31:0] stack_top_value32 = (stack_depth == 3'd0) ? 32'd0
-        : (stack_depth == 3'd1) ? stack_value[31:0]
-        : (stack_depth == 3'd2) ? stack_value[63:32]
-        : (stack_depth == 3'd3) ? stack_value[95:64]
-        : stack_value[127:96];
-    wire [31:0] stack_next_value32 = (stack_depth < 3'd2) ? 32'd0
-        : (stack_depth == 3'd2) ? stack_value[31:0]
-        : (stack_depth == 3'd3) ? stack_value[63:32]
-        : stack_value[95:64];
-    wire [31:0] stack_third_value32 = (stack_depth < 3'd3) ? 32'd0
-        : (stack_depth == 3'd3) ? stack_value[31:0]
-        : stack_value[63:32];
+    wire [31:0] stack_top_value32 = (stack_depth >= 3'd1) ? stack0_value : 32'd0;
+    wire [31:0] stack_next_value32 = (stack_depth >= 3'd2) ? stack1_value : 32'd0;
+    wire [31:0] stack_third_value32 = (stack_depth >= 3'd3) ? stack2_value : 32'd0;
     wire [15:0] stack_top_i16 = stack_top_value32[15:0];
     wire [15:0] stack_next_i16 = stack_next_value32[15:0];
     wire [15:0] stack_third_i16 = stack_third_value32[15:0];
-    wire [2:0] stack_top_type = (stack_depth == 3'd0) ? STACK_TYPE_NONE
-        : (stack_depth == 3'd1) ? stack_type[2:0]
-        : (stack_depth == 3'd2) ? stack_type[5:3]
-        : (stack_depth == 3'd3) ? stack_type[8:6]
-        : stack_type[11:9];
-    wire [2:0] stack_next_type = (stack_depth < 3'd2) ? STACK_TYPE_NONE
-        : (stack_depth == 3'd2) ? stack_type[2:0]
-        : (stack_depth == 3'd3) ? stack_type[5:3]
-        : stack_type[8:6];
-    wire [2:0] stack_third_type = (stack_depth < 3'd3) ? STACK_TYPE_NONE
-        : (stack_depth == 3'd3) ? stack_type[2:0]
-        : stack_type[5:3];
+    wire [2:0] stack_top_type = (stack_depth >= 3'd1) ? stack0_type : STACK_TYPE_NONE;
+    wire [2:0] stack_next_type = (stack_depth >= 3'd2) ? stack1_type : STACK_TYPE_NONE;
+    wire [2:0] stack_third_type = (stack_depth >= 3'd3) ? stack2_type : STACK_TYPE_NONE;
     wire stack_top_bool = stack_top_value32[0] != 1'b0;
     wire stack_next_bool = stack_next_value32[0] != 1'b0;
     wire stack_third_bool = stack_third_value32[0] != 1'b0;
@@ -1216,6 +1115,15 @@ module wb_plc #(
     wire        float_op_type_ok;
     wire [31:0] float_op_result_value;
     wire [2:0]  float_op_result_type;
+    wire        fdiv_busy;
+    wire        fdiv_done;
+    wire [31:0] fdiv_result_value;
+    wire        fdiv_div_by_zero;
+    wire        fdiv_invalid_op;
+    wire        fdiv_overflow;
+    wire        fdiv_underflow;
+    integer slot_init_idx;
+    integer slot_pending_idx;
 
     wb_plc_int_alu int_alu (
         .opcode(current_opcode),
@@ -1296,6 +1204,32 @@ module wb_plc #(
         .result_type(float_op_result_type)
     );
 
+    fdiv_iterative fdiv_unit (
+        .clk(clk),
+        .rst(rst),
+        .start(fdiv_start),
+        .a(stack_next_value32),
+        .b(stack_top_value32),
+        .result(fdiv_result_value),
+        .busy(fdiv_busy),
+        .done(fdiv_done),
+        .div_by_zero(fdiv_div_by_zero),
+        .invalid_op(fdiv_invalid_op),
+        .overflow(fdiv_overflow),
+        .underflow(fdiv_underflow)
+    );
+
+    function has_pending_slot_waits;
+        integer idx;
+        begin
+            has_pending_slot_waits = 1'b0;
+            for (idx = 0; idx < SLOT_COUNT; idx = idx + 1) begin
+                if (slot_wait_state[idx] != SLOT_WAIT_NONE)
+                    has_pending_slot_waits = 1'b1;
+            end
+        end
+    endfunction
+
     function [31:0] slot_control_block_addr;
         input [4:0] slot_id;
         begin
@@ -1323,65 +1257,15 @@ module wb_plc #(
         end
     endfunction
 
-    function [7:0] stack_value_bit_index;
-        input [2:0] stack_index;
+    function [127:0] pack_live_stack_values;
         begin
-            stack_value_bit_index = {stack_index, 5'b00000};
+            pack_live_stack_values = {stack3_value, stack2_value, stack1_value, stack0_value};
         end
     endfunction
 
-    function [4:0] stack_type_bit_index;
-        input [2:0] stack_index;
+    function [11:0] pack_live_stack_types;
         begin
-            stack_type_bit_index = (stack_index * 3'd3);
-        end
-    endfunction
-
-    function [31:0] stack_entry_value32;
-        input [2:0] stack_index;
-        begin
-            case (stack_index)
-                3'd0: stack_entry_value32 = stack_value[31:0];
-                3'd1: stack_entry_value32 = stack_value[63:32];
-                3'd2: stack_entry_value32 = stack_value[95:64];
-                default: stack_entry_value32 = stack_value[127:96];
-            endcase
-        end
-    endfunction
-
-    function stack_entry_bool;
-        input [2:0] stack_index;
-        begin
-            case (stack_index)
-                3'd0: stack_entry_bool = stack_value[0] != 1'b0;
-                3'd1: stack_entry_bool = stack_value[32] != 1'b0;
-                3'd2: stack_entry_bool = stack_value[64] != 1'b0;
-                default: stack_entry_bool = stack_value[96] != 1'b0;
-            endcase
-        end
-    endfunction
-
-    function [15:0] stack_entry_i16;
-        input [2:0] stack_index;
-        begin
-            case (stack_index)
-                3'd0: stack_entry_i16 = stack_value[15:0];
-                3'd1: stack_entry_i16 = stack_value[47:32];
-                3'd2: stack_entry_i16 = stack_value[79:64];
-                default: stack_entry_i16 = stack_value[111:96];
-            endcase
-        end
-    endfunction
-
-    function [2:0] stack_entry_type;
-        input [2:0] stack_index;
-        begin
-            case (stack_index)
-                3'd0: stack_entry_type = stack_type[2:0];
-                3'd1: stack_entry_type = stack_type[5:3];
-                3'd2: stack_entry_type = stack_type[8:6];
-                default: stack_entry_type = stack_type[11:9];
-            endcase
+            pack_live_stack_types = {stack3_type, stack2_type, stack1_type, stack0_type};
         end
     endfunction
 
@@ -1768,6 +1652,119 @@ module wb_plc #(
         end
     endtask
 
+    task automatic clear_live_stack;
+        begin
+            stack0_value <= 32'd0;
+            stack1_value <= 32'd0;
+            stack2_value <= 32'd0;
+            stack3_value <= 32'd0;
+            stack0_type <= STACK_TYPE_NONE;
+            stack1_type <= STACK_TYPE_NONE;
+            stack2_type <= STACK_TYPE_NONE;
+            stack3_type <= STACK_TYPE_NONE;
+        end
+    endtask
+
+    task automatic restore_live_stack;
+        input [127:0] saved_values;
+        input [11:0]  saved_types;
+        begin
+            stack0_value <= saved_values[31:0];
+            stack1_value <= saved_values[63:32];
+            stack2_value <= saved_values[95:64];
+            stack3_value <= saved_values[127:96];
+            stack0_type <= saved_types[2:0];
+            stack1_type <= saved_types[5:3];
+            stack2_type <= saved_types[8:6];
+            stack3_type <= saved_types[11:9];
+        end
+    endtask
+
+    task automatic stack_push;
+        input [31:0] value_in;
+        input [2:0]  type_in;
+        begin
+            stack3_value <= stack2_value;
+            stack2_value <= stack1_value;
+            stack1_value <= stack0_value;
+            stack0_value <= value_in;
+            stack3_type <= stack2_type;
+            stack2_type <= stack1_type;
+            stack1_type <= stack0_type;
+            stack0_type <= type_in;
+            stack_depth <= stack_depth + 3'd1;
+        end
+    endtask
+
+    task automatic stack_drop1;
+        begin
+            stack0_value <= stack1_value;
+            stack1_value <= stack2_value;
+            stack2_value <= stack3_value;
+            stack3_value <= 32'd0;
+            stack0_type <= stack1_type;
+            stack1_type <= stack2_type;
+            stack2_type <= stack3_type;
+            stack3_type <= STACK_TYPE_NONE;
+            stack_depth <= stack_depth - 3'd1;
+        end
+    endtask
+
+    task automatic stack_binary_result;
+        input [31:0] value_in;
+        input [2:0]  type_in;
+        begin
+            stack0_value <= value_in;
+            stack1_value <= stack2_value;
+            stack2_value <= stack3_value;
+            stack3_value <= 32'd0;
+            stack0_type <= type_in;
+            stack1_type <= stack2_type;
+            stack2_type <= stack3_type;
+            stack3_type <= STACK_TYPE_NONE;
+            stack_depth <= stack_depth - 3'd1;
+        end
+    endtask
+
+    task automatic stack_ternary_result;
+        input [31:0] value_in;
+        input [2:0]  type_in;
+        begin
+            stack0_value <= value_in;
+            stack1_value <= stack3_value;
+            stack2_value <= 32'd0;
+            stack3_value <= 32'd0;
+            stack0_type <= type_in;
+            stack1_type <= stack3_type;
+            stack2_type <= STACK_TYPE_NONE;
+            stack3_type <= STACK_TYPE_NONE;
+            stack_depth <= stack_depth - 3'd2;
+        end
+    endtask
+
+    task automatic stack_dup_top;
+        begin
+            stack3_value <= stack2_value;
+            stack2_value <= stack1_value;
+            stack1_value <= stack0_value;
+            stack0_value <= stack0_value;
+            stack3_type <= stack2_type;
+            stack2_type <= stack1_type;
+            stack1_type <= stack0_type;
+            stack0_type <= stack0_type;
+            stack_depth <= stack_depth + 3'd1;
+        end
+    endtask
+
+    task automatic stack_swap_top2;
+        begin
+            stack0_value <= stack1_value;
+            stack1_value <= stack0_value;
+            stack0_type <= stack1_type;
+            stack1_type <= stack0_type;
+        end
+    endtask
+
     task automatic begin_fault;
         input [31:0] code;
         input [31:0] info;
@@ -1840,8 +1837,14 @@ module wb_plc #(
             slot_entry_pc <= 32'd0;
             current_pc <= 32'd0;
             instruction_count <= 32'd0;
-            stack_value <= 128'd0;
-            stack_type <= 12'd0;
+            stack0_value <= 32'd0;
+            stack1_value <= 32'd0;
+            stack2_value <= 32'd0;
+            stack3_value <= 32'd0;
+            stack0_type <= STACK_TYPE_NONE;
+            stack1_type <= STACK_TYPE_NONE;
+            stack2_type <= STACK_TYPE_NONE;
+            stack3_type <= STACK_TYPE_NONE;
             stack_depth <= 3'd0;
             pending_stack_value <= 32'd0;
             current_immediate_u32 <= 32'd0;
@@ -1859,13 +1862,33 @@ module wb_plc #(
             cached_word_addr <= 32'd0;
             cached_word_data <= 32'd0;
             float_op_start <= 1'b0;
+            fdiv_start <= 1'b0;
+            fdiv_owner_slot <= 5'd0;
+            fdiv_result_valid <= 1'b0;
+            fdiv_result_slot <= 5'd0;
+            fdiv_result_value_latched <= 32'd0;
             scan_countdown <= DEFAULT_SCAN_INTERVAL_CYCLES;
             scan_counter <= 32'd0;
             last_fault_code <= 32'd0;
             last_fault_slot <= 8'd0;
+            for (slot_init_idx = 0; slot_init_idx < SLOT_COUNT; slot_init_idx = slot_init_idx + 1) begin
+                slot_wait_state[slot_init_idx] <= SLOT_WAIT_NONE;
+                slot_wait_pc[slot_init_idx] <= 32'd0;
+                slot_wait_instruction_count[slot_init_idx] <= 32'd0;
+                slot_wait_entry_pc[slot_init_idx] <= 32'd0;
+                slot_wait_stack_value[slot_init_idx] <= 128'd0;
+                slot_wait_stack_type[slot_init_idx] <= 12'd0;
+                slot_wait_stack_depth[slot_init_idx] <= 3'd0;
+            end
             finish_bus_cycle();
         end else begin
             float_op_start <= 1'b0;
+            fdiv_start <= 1'b0;
+            if (fdiv_done) begin
+                fdiv_result_valid <= 1'b1;
+                fdiv_result_slot <= fdiv_owner_slot;
+                fdiv_result_value_latched <= fdiv_result_value;
+            end
             if (clear_fault_request) begin
                 last_fault_code <= 32'd0;
                 last_fault_slot <= 8'd0;
@@ -1876,6 +1899,10 @@ module wb_plc #(
                     finish_bus_cycle();
                     if (!engine_enable || !sdram_ready_i) begin
                         scan_countdown <= scan_interval_cycles;
+                    end else if (has_pending_slot_waits() || fdiv_busy || fdiv_result_valid) begin
+                        active_slot <= 5'd0;
+                        control_block_addr <= slot_control_block_addr(5'd0);
+                        state <= ST_READ_CB_MAGIC;
                     end else if (scan_countdown != 32'd0) begin
                         scan_countdown <= scan_countdown - 32'd1;
                     end else begin
@@ -2019,12 +2046,20 @@ module wb_plc #(
                         cb_bytecode_size == 32'd0 ||
                         cb_max_instructions == 32'd0) begin
                         state <= ST_NEXT_SLOT;
+                    end else if (slot_wait_state[active_slot] != SLOT_WAIT_NONE) begin
+                        slot_entry_pc <= slot_wait_entry_pc[active_slot];
+                        current_pc <= slot_wait_pc[active_slot];
+                        instruction_count <= slot_wait_instruction_count[active_slot];
+                        restore_live_stack(slot_wait_stack_value[active_slot], slot_wait_stack_type[active_slot]);
+                        stack_depth <= slot_wait_stack_depth[active_slot];
+                        pending_stack_value <= 32'd0;
+                        cached_word_valid <= 1'b0;
+                        state <= ST_SLOT_RESUME;
                     end else begin
                         slot_entry_pc <= (cb_pc < cb_bytecode_size) ? cb_pc : 32'd0;
                         current_pc <= (cb_pc < cb_bytecode_size) ? cb_pc : 32'd0;
                         instruction_count <= 32'd0;
-                        stack_value <= 128'd0;
-                        stack_type <= 12'd0;
+                        clear_live_stack();
                         stack_depth <= 3'd0;
                         pending_stack_value <= 32'd0;
                         cached_word_valid <= 1'b0;
@@ -2276,9 +2311,7 @@ module wb_plc #(
                     if (stack_depth >= STACK_DEPTH_MAX) begin
                         begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                     end else begin
-                        stack_value[stack_value_bit_index(stack_depth) +: 32] <= sign_extend_i16(current_runtime_index);
-                        stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_INT16;
-                        stack_depth <= stack_depth + 3'd1;
+                        stack_push(sign_extend_i16(current_runtime_index), STACK_TYPE_INT16);
                         state <= ST_FETCH_OPCODE;
                     end
                 end
@@ -2287,14 +2320,12 @@ module wb_plc #(
                     if (stack_depth >= STACK_DEPTH_MAX) begin
                         begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                     end else begin
-                        stack_value[stack_value_bit_index(stack_depth) +: 32] <= current_immediate_u32;
-                        stack_type[stack_type_bit_index(stack_depth) +: 3] <=
+                        stack_push(current_immediate_u32,
                             (current_opcode == OPCODE_PUSH_U32)
                                 ? STACK_TYPE_UINT32
                                 : ((current_opcode == OPCODE_PUSH_I32)
                                     ? STACK_TYPE_INT32
-                                    : STACK_TYPE_FLOAT32);
-                        stack_depth <= stack_depth + 3'd1;
+                                    : STACK_TYPE_FLOAT32));
                         state <= ST_FETCH_OPCODE;
                     end
                 end
@@ -2306,9 +2337,7 @@ module wb_plc #(
                             if (stack_depth >= STACK_DEPTH_MAX) begin
                                 begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth) +: 32] <= 32'd1;
-                                stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_BOOL;
-                                stack_depth <= stack_depth + 3'd1;
+                                stack_push(32'd1, STACK_TYPE_BOOL);
                                 state <= ST_FETCH_OPCODE;
                             end
                         end
@@ -2316,9 +2345,7 @@ module wb_plc #(
                             if (stack_depth >= STACK_DEPTH_MAX) begin
                                 begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth) +: 32] <= 32'd0;
-                                stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_BOOL;
-                                stack_depth <= stack_depth + 3'd1;
+                                stack_push(32'd0, STACK_TYPE_BOOL);
                                 state <= ST_FETCH_OPCODE;
                             end
                         end
@@ -2328,11 +2355,7 @@ module wb_plc #(
                             end else if (stack_depth >= STACK_DEPTH_MAX) begin
                                 begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth) +: 32] <=
-                                    stack_value[stack_value_bit_index(stack_depth - 3'd1) +: 32];
-                                stack_type[stack_type_bit_index(stack_depth) +: 3] <=
-                                    stack_type[stack_type_bit_index(stack_depth - 3'd1) +: 3];
-                                stack_depth <= stack_depth + 3'd1;
+                                stack_dup_top();
                                 state <= ST_FETCH_OPCODE;
                             end
                         end
@@ -2340,7 +2363,7 @@ module wb_plc #(
                             if (stack_depth == 3'd0) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
                             end else begin
-                                stack_depth <= stack_depth - 3'd1;
+                                stack_drop1();
                                 state <= ST_FETCH_OPCODE;
                             end
                         end
@@ -2348,20 +2371,7 @@ module wb_plc #(
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
                             end else begin
-                                case (stack_depth)
-                                    3'd2: begin
-                                        stack_value[63:0] <= {stack_value[31:0], stack_value[63:32]};
-                                        stack_type[5:0] <= {stack_type[2:0], stack_type[5:3]};
-                                    end
-                                    3'd3: begin
-                                        stack_value[95:0] <= {stack_value[63:32], stack_value[95:64], stack_value[31:0]};
-                                        stack_type[8:0] <= {stack_type[5:3], stack_type[8:6], stack_type[2:0]};
-                                    end
-                                    default: begin
-                                        stack_value[127:0] <= {stack_value[95:64], stack_value[127:96], stack_value[63:32], stack_value[31:0]};
-                                        stack_type[11:0] <= {stack_type[8:6], stack_type[11:9], stack_type[5:3], stack_type[2:0]};
-                                    end
-                                endcase
+                                stack_swap_top2();
                                 state <= ST_FETCH_OPCODE;
                             end
                         end
@@ -2377,12 +2387,10 @@ module wb_plc #(
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
                                 if (bool_alu_uses_two_operands) begin
-                                    stack_value[stack_value_bit_index(stack_next_index) +: 32] <= bool_alu_result_value;
-                                    stack_type[stack_type_bit_index(stack_next_index) +: 3] <= bool_alu_result_type;
-                                    stack_depth <= stack_depth - 3'd1;
+                                    stack_binary_result(bool_alu_result_value, bool_alu_result_type);
                                 end else begin
-                                    stack_value[stack_value_bit_index(stack_top_index) +: 32] <= bool_alu_result_value;
-                                    stack_type[stack_type_bit_index(stack_top_index) +: 3] <= bool_alu_result_type;
+                                    stack0_value <= bool_alu_result_value;
+                                    stack0_type <= bool_alu_result_type;
                                 end
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -2398,20 +2406,46 @@ module wb_plc #(
                             end else if (!float_cmp_alu_supported || !float_cmp_alu_type_ok) begin
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_next_index) +: 32] <= float_cmp_alu_result_value;
-                                stack_type[stack_type_bit_index(stack_next_index) +: 3] <= float_cmp_alu_result_type;
-                                stack_depth <= stack_depth - 3'd1;
+                                stack_binary_result(float_cmp_alu_result_value, float_cmp_alu_result_type);
                                 state <= ST_FETCH_OPCODE;
                             end
                         end
                         OPCODE_FADD,
-                        OPCODE_FSUB,
-                        OPCODE_FMUL,
-                        OPCODE_FDIV: begin
+                        OPCODE_FSUB: begin
                             if (stack_depth < 3'd2) begin
                                 begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
                             end else begin
                                 state <= ST_FLOAT_OP_START;
+                            end
+                        end
+                        OPCODE_FMUL: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else begin
+                                state <= ST_FLOAT_OP_START;
+                            end
+                        end
+                        OPCODE_FDIV: begin
+                            if (stack_depth < 3'd2) begin
+                                begin_fault(FAULT_STACK_UNDERFLOW, current_pc - 32'd1);
+                            end else if ((stack_next_type != STACK_TYPE_FLOAT32) ||
+                                         (stack_top_type != STACK_TYPE_FLOAT32)) begin
+                                begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
+                            end else begin
+                                slot_wait_pc[active_slot] <= current_pc;
+                                slot_wait_instruction_count[active_slot] <= instruction_count;
+                                slot_wait_entry_pc[active_slot] <= slot_entry_pc;
+                                slot_wait_stack_value[active_slot] <= pack_live_stack_values();
+                                slot_wait_stack_type[active_slot] <= pack_live_stack_types();
+                                slot_wait_stack_depth[active_slot] <= stack_depth;
+                                if (!fdiv_busy && !fdiv_result_valid) begin
+                                    fdiv_owner_slot <= active_slot;
+                                    fdiv_start <= 1'b1;
+                                    slot_wait_state[active_slot] <= SLOT_WAIT_FDIV_DONE;
+                                end else begin
+                                    slot_wait_state[active_slot] <= SLOT_WAIT_FDIV_START;
+                                end
+                                state <= ST_NEXT_SLOT;
                             end
                         end
                         OPCODE_ADD,
@@ -2429,13 +2463,9 @@ module wb_plc #(
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
                                 if (int_alu_uses_three_operands) begin
-                                    stack_value[stack_value_bit_index(stack_third_index) +: 32] <= int_alu_result_value;
-                                    stack_type[stack_type_bit_index(stack_third_index) +: 3] <= int_alu_result_type;
-                                    stack_depth <= stack_depth - 3'd2;
+                                    stack_ternary_result(int_alu_result_value, int_alu_result_type);
                                 end else begin
-                                    stack_value[stack_value_bit_index(stack_next_index) +: 32] <= int_alu_result_value;
-                                    stack_type[stack_type_bit_index(stack_next_index) +: 3] <= int_alu_result_type;
-                                    stack_depth <= stack_depth - 3'd1;
+                                    stack_binary_result(int_alu_result_value, int_alu_result_type);
                                 end
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -2453,12 +2483,10 @@ module wb_plc #(
                                 begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                             end else begin
                                 if (misc_alu_uses_three_operands) begin
-                                    stack_value[stack_value_bit_index(stack_third_index) +: 32] <= misc_alu_result_value;
-                                    stack_type[stack_type_bit_index(stack_third_index) +: 3] <= misc_alu_result_type;
-                                    stack_depth <= stack_depth - 3'd2;
+                                    stack_ternary_result(misc_alu_result_value, misc_alu_result_type);
                                 end else begin
-                                    stack_value[stack_value_bit_index(stack_top_index) +: 32] <= misc_alu_result_value;
-                                    stack_type[stack_type_bit_index(stack_top_index) +: 3] <= misc_alu_result_type;
+                                    stack0_value <= misc_alu_result_value;
+                                    stack0_type <= misc_alu_result_type;
                                 end
                                 state <= ST_FETCH_OPCODE;
                             end
@@ -2518,12 +2546,38 @@ module wb_plc #(
                         if (!float_op_supported || !float_op_type_ok) begin
                             begin_fault(FAULT_TYPE_MISMATCH, current_pc - 32'd1);
                         end else begin
-                            stack_value[stack_value_bit_index(stack_next_index) +: 32] <= float_op_result_value;
-                            stack_type[stack_type_bit_index(stack_next_index) +: 3] <= float_op_result_type;
-                            stack_depth <= stack_depth - 3'd1;
+                            stack_binary_result(float_op_result_value, float_op_result_type);
                             state <= ST_FETCH_OPCODE;
                         end
                     end
+                end
+
+                ST_SLOT_RESUME: begin
+                    case (slot_wait_state[active_slot])
+                        SLOT_WAIT_FDIV_START: begin
+                            if (!fdiv_busy && !fdiv_result_valid) begin
+                                fdiv_owner_slot <= active_slot;
+                                fdiv_start <= 1'b1;
+                                slot_wait_state[active_slot] <= SLOT_WAIT_FDIV_DONE;
+                            end
+                            state <= ST_NEXT_SLOT;
+                        end
+
+                        SLOT_WAIT_FDIV_DONE: begin
+                            if (fdiv_result_valid && (fdiv_result_slot == active_slot)) begin
+                                stack_binary_result(fdiv_result_value_latched, STACK_TYPE_FLOAT32);
+                                slot_wait_state[active_slot] <= SLOT_WAIT_NONE;
+                                fdiv_result_valid <= 1'b0;
+                                state <= ST_FETCH_OPCODE;
+                            end else begin
+                                state <= ST_NEXT_SLOT;
+                            end
+                        end
+
+                        default: begin
+                            state <= ST_FETCH_OPCODE;
+                        end
+                    endcase
                 end
 
                 ST_BRANCH_EXECUTE: begin
@@ -2545,7 +2599,7 @@ module wb_plc #(
                                          (current_branch_target >= cb_bytecode_size)) begin
                                 begin_fault(FAULT_INVALID_OPCODE, current_pc - 32'd3);
                             end else begin
-                                stack_depth <= stack_depth - 3'd1;
+                                stack_drop1();
                                 if (stack_top_value32 == 32'd0) begin
                                     current_pc <= current_branch_target;
                                 end
@@ -2561,7 +2615,7 @@ module wb_plc #(
                                          (current_branch_target >= cb_bytecode_size)) begin
                                 begin_fault(FAULT_INVALID_OPCODE, current_pc - 32'd3);
                             end else begin
-                                stack_depth <= stack_depth - 3'd1;
+                                stack_drop1();
                                 if (stack_top_value32 != 32'd0) begin
                                     current_pc <= current_branch_target;
                                 end
@@ -2599,7 +2653,7 @@ module wb_plc #(
                                 begin_fault(FAULT_TYPE_MISMATCH, current_immediate_u32);
                             end else begin
                                 pending_stack_value <= stack_top_value32;
-                                stack_depth <= stack_depth - 3'd1;
+                                stack_drop1();
                                 state <= ST_STORE_BOOL_READ_VALUE;
                             end
                         end else if (current_opcode == OPCODE_LOAD_I16) begin
@@ -2611,7 +2665,7 @@ module wb_plc #(
                                 begin_fault(FAULT_TYPE_MISMATCH, current_immediate_u32);
                             end else begin
                                 pending_stack_value <= stack_top_value32;
-                                stack_depth <= stack_depth - 3'd1;
+                                stack_drop1();
                                 state <= ST_INT16_READ_VALUE;
                             end
                         end else if (current_opcode == OPCODE_LOAD_U32 ||
@@ -2625,7 +2679,7 @@ module wb_plc #(
                                 begin_fault(FAULT_TYPE_MISMATCH, current_immediate_u32);
                             end else begin
                                 pending_stack_value <= stack_top_value32;
-                                stack_depth <= stack_depth - 3'd1;
+                                stack_drop1();
                                 state <= ST_WIDE32_READ_VALUE;
                             end
                         end else if (current_opcode == OPCODE_STORE_I32) begin
@@ -2635,7 +2689,7 @@ module wb_plc #(
                                 begin_fault(FAULT_TYPE_MISMATCH, current_immediate_u32);
                             end else begin
                                 pending_stack_value <= stack_top_value32;
-                                stack_depth <= stack_depth - 3'd1;
+                                stack_drop1();
                                 state <= ST_WIDE32_READ_VALUE;
                             end
                         end else if (current_opcode == OPCODE_STORE_F32) begin
@@ -2645,7 +2699,7 @@ module wb_plc #(
                                 begin_fault(FAULT_TYPE_MISMATCH, current_immediate_u32);
                             end else begin
                                 pending_stack_value <= stack_top_value32;
-                                stack_depth <= stack_depth - 3'd1;
+                                stack_drop1();
                                 state <= ST_WIDE32_READ_VALUE;
                             end
                         end else if (current_opcode == OPCODE_INC_INT16 || current_opcode == OPCODE_DEC_INT16) begin
@@ -2664,9 +2718,7 @@ module wb_plc #(
                         if (stack_depth >= STACK_DEPTH_MAX) begin
                             begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                         end else begin
-                            stack_value[stack_value_bit_index(stack_depth) +: 32] <= {31'd0, m_dat_i[0]};
-                            stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_BOOL;
-                            stack_depth <= stack_depth + 3'd1;
+                            stack_push({31'd0, m_dat_i[0]}, STACK_TYPE_BOOL);
                             state <= ST_FETCH_OPCODE;
                         end
                     end
@@ -2706,16 +2758,14 @@ module wb_plc #(
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         value_word1 <= m_dat_i;
-                        stack_value[stack_value_bit_index(stack_depth) +: 32] <= {31'd0,
+                        stack_push({31'd0,
                             (current_opcode == OPCODE_R_TRIG)
                                 ? (((m_dat_i & edge_state_bit_mask(current_runtime_index)) != 32'd0) &&
                                    ((value_word0 & edge_state_bit_mask(current_runtime_index)) == 32'd0) &&
                                    pending_stack_value[0])
                                 : (((m_dat_i & edge_state_bit_mask(current_runtime_index)) != 32'd0) &&
                                    ((value_word0 & edge_state_bit_mask(current_runtime_index)) != 32'd0) &&
-                                   !pending_stack_value[0])};
-                        stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_BOOL;
-                        stack_depth <= stack_depth + 3'd1;
+                                   !pending_stack_value[0])}, STACK_TYPE_BOOL);
                         state <= ST_EDGE_WRITE_PREV_WORD;
                     end
                 end
@@ -2751,7 +2801,7 @@ module wb_plc #(
                         begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                     end else begin
                         pending_stack_value <= stack_top_value32;
-                        stack_depth <= stack_depth - 3'd1;
+                        stack_drop1();
                         state <= ST_TIMER_READ_WORD0;
                     end
                 end
@@ -2798,22 +2848,18 @@ module wb_plc #(
                         if (current_opcode == OPCODE_TON_DONE ||
                             current_opcode == OPCODE_TOF_DONE ||
                             current_opcode == OPCODE_TP_DONE) begin
-                            stack_value[stack_value_bit_index(stack_depth) +: 32] <= {31'd0,
-                                timer_done_live(value_word0, value_word1, m_dat_i, ms_counter)};
-                            stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_BOOL;
-                            stack_depth <= stack_depth + 3'd1;
+                            stack_push({31'd0,
+                                timer_done_live(value_word0, value_word1, m_dat_i, ms_counter)}, STACK_TYPE_BOOL);
                             state <= ST_FETCH_OPCODE;
                         end else if (current_opcode == OPCODE_TON_ELAPSED) begin
-                            stack_value[stack_value_bit_index(stack_depth) +: 32] <=
-                                sign_extend_i16(timer_metric_i16(timer_elapsed_value(value_word0, value_word1, m_dat_i, ms_counter)));
-                            stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_INT16;
-                            stack_depth <= stack_depth + 3'd1;
+                            stack_push(
+                                sign_extend_i16(timer_metric_i16(timer_elapsed_value(value_word0, value_word1, m_dat_i, ms_counter))),
+                                STACK_TYPE_INT16);
                             state <= ST_FETCH_OPCODE;
                         end else if (current_opcode == OPCODE_TON_REMAINING) begin
-                            stack_value[stack_value_bit_index(stack_depth) +: 32] <=
-                                sign_extend_i16(timer_metric_i16(timer_remaining_value(value_word0, value_word1, m_dat_i, ms_counter)));
-                            stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_INT16;
-                            stack_depth <= stack_depth + 3'd1;
+                            stack_push(
+                                sign_extend_i16(timer_metric_i16(timer_remaining_value(value_word0, value_word1, m_dat_i, ms_counter))),
+                                STACK_TYPE_INT16);
                             state <= ST_FETCH_OPCODE;
                         end else begin
                             state <= ST_TIMER_WRITE_WORD0;
@@ -2935,7 +2981,7 @@ module wb_plc #(
                         begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                     end else begin
                         pending_stack_value <= stack_top_value32;
-                        stack_depth <= stack_depth - 3'd1;
+                        stack_drop1();
                         state <= ST_COUNTER_READ_WORD0;
                     end
                 end
@@ -2979,15 +3025,11 @@ module wb_plc #(
                         finish_bus_cycle();
                         value_word2 <= m_dat_i;
                         if (current_opcode == OPCODE_CTU_DONE || current_opcode == OPCODE_CTD_DONE) begin
-                            stack_value[stack_value_bit_index(stack_depth) +: 32] <= {31'd0,
-                                counter_done_live(current_opcode, value_word0[15:0], value_word1[15:0])};
-                            stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_BOOL;
-                            stack_depth <= stack_depth + 3'd1;
+                            stack_push({31'd0,
+                                counter_done_live(current_opcode, value_word0[15:0], value_word1[15:0])}, STACK_TYPE_BOOL);
                             state <= ST_FETCH_OPCODE;
                         end else if (current_opcode == OPCODE_CTU_VALUE || current_opcode == OPCODE_CTD_VALUE) begin
-                            stack_value[stack_value_bit_index(stack_depth) +: 32] <= sign_extend_i16(value_word0[15:0]);
-                            stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_INT16;
-                            stack_depth <= stack_depth + 3'd1;
+                            stack_push(sign_extend_i16(value_word0[15:0]), STACK_TYPE_INT16);
                             state <= ST_FETCH_OPCODE;
                         end else begin
                             state <= ST_COUNTER_WRITE_WORD0;
@@ -3112,9 +3154,7 @@ module wb_plc #(
                             if (stack_depth >= STACK_DEPTH_MAX) begin
                                 begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth) +: 32] <= sign_extend_i16(m_dat_i[15:0]);
-                                stack_type[stack_type_bit_index(stack_depth) +: 3] <= STACK_TYPE_INT16;
-                                stack_depth <= stack_depth + 3'd1;
+                                stack_push(sign_extend_i16(m_dat_i[15:0]), STACK_TYPE_INT16);
                                 state <= ST_FETCH_OPCODE;
                             end
                         end else if (current_opcode == OPCODE_STORE_I16) begin
@@ -3142,14 +3182,12 @@ module wb_plc #(
                             if (stack_depth >= STACK_DEPTH_MAX) begin
                                 begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                             end else begin
-                                stack_value[stack_value_bit_index(stack_depth) +: 32] <= m_dat_i;
-                                stack_type[stack_type_bit_index(stack_depth) +: 3] <=
+                                stack_push(m_dat_i,
                                     (current_opcode == OPCODE_LOAD_U32)
                                         ? STACK_TYPE_UINT32
                                         : ((current_opcode == OPCODE_LOAD_I32)
                                             ? STACK_TYPE_INT32
-                                            : STACK_TYPE_FLOAT32);
-                                stack_depth <= stack_depth + 3'd1;
+                                            : STACK_TYPE_FLOAT32));
                                 state <= ST_FETCH_OPCODE;
                             end
                         end else begin
@@ -3277,7 +3315,13 @@ module wb_plc #(
                 ST_NEXT_SLOT: begin
                     cached_word_valid <= 1'b0;
                     if (active_slot == SLOT_COUNT - 1) begin
-                        state <= ST_IDLE;
+                        if (has_pending_slot_waits() || fdiv_busy || fdiv_result_valid) begin
+                            active_slot <= 5'd0;
+                            control_block_addr <= slot_control_block_addr(5'd0);
+                            state <= ST_READ_CB_MAGIC;
+                        end else begin
+                            state <= ST_IDLE;
+                        end
                     end else begin
                         active_slot <= active_slot + 5'd1;
                         control_block_addr <= slot_control_block_addr(active_slot + 5'd1);

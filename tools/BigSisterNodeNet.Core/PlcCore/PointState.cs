@@ -17,10 +17,10 @@ namespace BigSisterNodeNet.Core.PlcCore
         [JsonProperty("quality")]
         public PointQuality Quality { get; set; } = PointQuality.Unknown;
 
-        [JsonProperty("lastUpdateAgeMs")]
+        [JsonProperty("upMs")]
         public uint LastUpdateAgeMs { get; set; }
 
-        [JsonProperty("lastGoodUpdateAgeMs")]
+        [JsonProperty("goodMs")]
         public uint LastGoodUpdateAgeMs { get; set; }
 
         [JsonProperty("value")]

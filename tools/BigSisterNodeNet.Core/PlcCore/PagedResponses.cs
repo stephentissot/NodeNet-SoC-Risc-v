@@ -12,6 +12,24 @@ namespace BigSisterNodeNet.Core.PlcCore
         public List<string> Features { get; set; } = new List<string>();
     }
 
+    public class PointDefinitionFeatureGroup
+    {
+        [JsonProperty("feature")]
+        public string Feature { get; set; }
+
+        [JsonProperty("points")]
+        public List<PointDefinition> Points { get; set; } = new List<PointDefinition>();
+    }
+
+    public class PointStateFeatureGroup
+    {
+        [JsonProperty("feature")]
+        public string Feature { get; set; }
+
+        [JsonProperty("pointStates")]
+        public List<PointState> PointStates { get; set; } = new List<PointState>();
+    }
+
     public abstract class PagedNodeNetResponse<TItem> : NodeNetMessage
     {
         [JsonProperty("path")]
@@ -51,6 +69,9 @@ namespace BigSisterNodeNet.Core.PlcCore
 
         [JsonProperty("points")]
         public List<PointDefinition> Points { get; set; } = new List<PointDefinition>();
+
+        [JsonProperty("pointFeatures")]
+        public List<PointDefinitionFeatureGroup> PointFeatures { get; set; } = new List<PointDefinitionFeatureGroup>();
     }
 
     public class PointStatesResponse : PagedNodeNetResponse<PointState>
@@ -68,5 +89,8 @@ namespace BigSisterNodeNet.Core.PlcCore
 
         [JsonProperty("pointStates")]
         public List<PointState> PointStates { get; set; } = new List<PointState>();
+
+        [JsonProperty("pointFeatures")]
+        public List<PointStateFeatureGroup> PointFeatures { get; set; } = new List<PointStateFeatureGroup>();
     }
 }

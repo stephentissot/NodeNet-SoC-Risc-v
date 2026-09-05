@@ -3,6 +3,7 @@ using BigSisterNodeNet.Plc;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 
 namespace BigSisterNodeNet.Core.Services
 {
@@ -12,6 +13,7 @@ namespace BigSisterNodeNet.Core.Services
         private static readonly TimeSpan PersistedCommitResponseTimeout = TimeSpan.FromSeconds(20);
         private static readonly TimeSpan DeferredStatusResponseTimeout = TimeSpan.FromSeconds(5);
         private static readonly TimeSpan DeferredStatusObservationWindow = TimeSpan.FromSeconds(12);
+        private static readonly TimeSpan DeferredStatusPollInterval = TimeSpan.FromMilliseconds(500);
 
         private readonly NodeNetCore _nodeNetCore;
         private readonly PlcUploadClient _uploadClient = new PlcUploadClient();
@@ -78,6 +80,24 @@ namespace BigSisterNodeNet.Core.Services
             };
 
             return _nodeNetCore.ExecuteExclusiveTransportSession(transport => DownloadObjectFile(transport, options));
+        }
+
+        public PlcEraseResult EraseProgramSlot(NodeNet_SOC node, ushort slot)
+        {
+            if (node == null)
+            {
+                throw new ArgumentNullException(nameof(node));
+            }
+
+            var options = new PlcUploadOptions
+            {
+                LocalAddress = NodeNetAddress.SerialEndpoint,
+                RemoteAddress = node.Address,
+                SlotId = slot,
+                PersistToFlash = true,
+            };
+
+            return _nodeNetCore.ExecuteExclusiveTransportSession(transport => EraseProgramSlot(transport, options));
         }
 
         private PlcUploadResult UploadObjectFile(Transport.ISerialTransport transport, byte[] objectFileBytes, PlcUploadOptions options)
@@ -165,7 +185,7 @@ namespace BigSisterNodeNet.Core.Services
                     lastResponse = WaitForAcceptedResponse(
                         "plcBytecodeRes",
                         options,
-                        message => MatchesSlotId(message, options.SlotId) && MatchesOffset(message, offset),
+                        message => MatchesReadbackResponse(message, options.SlotId, offset),
                         () => _nodeNetCore.EnqueueOutgoingMessage(CreateMessage(_uploadClient.CreateBytecodeReadRequest(options.SlotId,
                                                                                                                           offset,
                                                                                                                           BytecodeReadChunkSize,
@@ -228,7 +248,7 @@ namespace BigSisterNodeNet.Core.Services
                     lastResponse = WaitForAcceptedResponse(
                         "plcObjectFileRes",
                         options,
-                        message => MatchesSlotId(message, options.SlotId) && MatchesOffset(message, offset),
+                        message => MatchesReadbackResponse(message, options.SlotId, offset),
                         () => _nodeNetCore.EnqueueOutgoingMessage(CreateMessage(_uploadClient.CreateObjectFileReadRequest(options.SlotId,
                                                                                                                             offset,
                                                                                                                             BytecodeReadChunkSize,
@@ -267,6 +287,32 @@ namespace BigSisterNodeNet.Core.Services
             }
         }
 
+        private PlcEraseResult EraseProgramSlot(Transport.ISerialTransport transport, PlcUploadOptions options)
+        {
+            if (transport == null)
+            {
+                throw new ArgumentNullException(nameof(transport));
+            }
+
+            if (!transport.IsOpen)
+            {
+                throw new InvalidOperationException("The NodeNet serial transport must be started before erasing a PLC program.");
+            }
+
+            var response = WaitForAcceptedResponse(
+                "plcEraseRes",
+                options,
+                message => MatchesSlotId(message, options.SlotId),
+                () => _nodeNetCore.EnqueueOutgoingMessage(CreateMessage(_uploadClient.CreateEraseRequest(options.SlotId, options))));
+
+            return new PlcEraseResult
+            {
+                SlotId = options.SlotId,
+                RebootPersistent = _uploadClient.ReadBoolean(response, "rebootPersistent"),
+                Response = response,
+            };
+        }
+
         private IDictionary<string, object> WaitForAcceptedResponse(
             string expectedCommand,
             PlcUploadOptions options,
@@ -291,9 +337,16 @@ namespace BigSisterNodeNet.Core.Services
             var statusOptions = WithResponseTimeout(options, DeferredStatusResponseTimeout);
             var deadline = DateTime.UtcNow + DeferredStatusObservationWindow;
             IDictionary<string, object> lastResponse = null;
+            var nextPollAt = DateTime.UtcNow;
 
             while (DateTime.UtcNow < deadline)
             {
+                var now = DateTime.UtcNow;
+                if (now < nextPollAt)
+                {
+                    Thread.Sleep(nextPollAt - now);
+                }
+
                 try
                 {
                     lastResponse = WaitForAcceptedResponse(
@@ -301,13 +354,20 @@ namespace BigSisterNodeNet.Core.Services
                         statusOptions,
                         message => true,
                         () => _nodeNetCore.EnqueueOutgoingMessage(CreateMessage(_uploadClient.CreateStatusRequest(statusOptions))));
+                    nextPollAt = DateTime.UtcNow + DeferredStatusPollInterval;
                 }
                 catch
                 {
+                    nextPollAt = DateTime.UtcNow + DeferredStatusPollInterval;
                     continue;
                 }
 
                 if (HasDeferredUploadResult(lastResponse, options.SlotId))
+                {
+                    break;
+                }
+
+                if (!IsDeferredUploadInProgress(lastResponse, options.SlotId))
                 {
                     break;
                 }
@@ -365,6 +425,21 @@ namespace BigSisterNodeNet.Core.Services
             return TryReadUInt32(message, "offset", out var messageOffset) && messageOffset == offset;
         }
 
+        private static bool MatchesReadbackResponse(NodeNetMessage message, ushort slotId, uint offset)
+        {
+            if (!MatchesSlotId(message, slotId))
+            {
+                return false;
+            }
+
+            if (MatchesOffset(message, offset))
+            {
+                return true;
+            }
+
+            return !TryReadUInt32(message, "offset", out _);
+        }
+
         private static bool MatchesSlotId(NodeNetMessage message, ushort slotId)
         {
             return TryReadUInt32(message, "slotId", out var messageSlotId) && messageSlotId == slotId;
@@ -394,6 +469,35 @@ namespace BigSisterNodeNet.Core.Services
             catch
             {
                 return false;
+            }
+        }
+
+        private static bool IsDeferredUploadInProgress(IDictionary<string, object> response, ushort slotId)
+        {
+            if (response == null)
+            {
+                return false;
+            }
+
+            if (!response.TryGetValue("autoLoadInProgress", out var inProgressValue) ||
+                inProgressValue == null ||
+                !Convert.ToBoolean(inProgressValue))
+            {
+                return false;
+            }
+
+            if (!response.TryGetValue("autoLoadSlotId", out var slotValue) || slotValue == null)
+            {
+                return true;
+            }
+
+            try
+            {
+                return Convert.ToUInt16(slotValue) == slotId;
+            }
+            catch
+            {
+                return true;
             }
         }
 

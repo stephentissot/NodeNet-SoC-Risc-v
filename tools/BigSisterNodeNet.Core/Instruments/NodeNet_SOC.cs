@@ -85,6 +85,11 @@ namespace BigSisterNodeNet.Core.Instruments
             return PlcProgramUploadServiceLocator.Current?.DownloadProgramObjectFile(this, slot);
         }
 
+        public PlcEraseResult EraseProgramSlot(ushort slot)
+        {
+            return PlcProgramUploadServiceLocator.Current?.EraseProgramSlot(this, slot);
+        }
+
         public bool IsPointDefinitionPathLoaded(string path)
         {
             return _loadedPointDefinitionPaths.Contains(NormalizePath(path));
@@ -135,6 +140,14 @@ namespace BigSisterNodeNet.Core.Instruments
             if (response == null)
             {
                 return Enumerable.Empty<PointDefinition>();
+            }
+
+            if (response.PointFeatures != null && response.PointFeatures.Count > 0)
+            {
+                return response.PointFeatures
+                    .Where(group => group != null)
+                    .SelectMany(group => (group.Points ?? Enumerable.Empty<PointDefinition>())
+                        .Select(definition => ApplyPointDefinitionScope(definition, response.DeviceId, group.Feature)));
             }
 
             if (response.Points != null && response.Points.Count > 0)
@@ -206,12 +219,60 @@ namespace BigSisterNodeNet.Core.Instruments
                 return Enumerable.Empty<PointState>();
             }
 
+            if (response.PointFeatures != null && response.PointFeatures.Count > 0)
+            {
+                return response.PointFeatures
+                    .Where(group => group != null)
+                    .SelectMany(group => (group.PointStates ?? Enumerable.Empty<PointState>())
+                        .Select(state => ApplyPointStateScope(state, response.DeviceId, group.Feature)));
+            }
+
             if (response.PointStates != null && response.PointStates.Count > 0)
             {
                 return response.PointStates;
             }
 
             return response.States ?? Enumerable.Empty<PointState>();
+        }
+
+        private static PointDefinition ApplyPointDefinitionScope(PointDefinition definition, string deviceId, string feature)
+        {
+            if (definition == null)
+            {
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(definition.DeviceId))
+            {
+                definition.DeviceId = deviceId;
+            }
+
+            if (string.IsNullOrWhiteSpace(definition.Feature))
+            {
+                definition.Feature = feature;
+            }
+
+            return definition;
+        }
+
+        private static PointState ApplyPointStateScope(PointState state, string deviceId, string feature)
+        {
+            if (state == null)
+            {
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(state.DeviceId))
+            {
+                state.DeviceId = deviceId;
+            }
+
+            if (string.IsNullOrWhiteSpace(state.Feature))
+            {
+                state.Feature = feature;
+            }
+
+            return state;
         }
 
         private void UpsertPointDefinition(PointDefinition definition)

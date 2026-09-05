@@ -160,6 +160,11 @@ namespace BigSisterNodeNet.Core.Services
             var actualCount = response.Points?.Count ?? 0;
             if (actualCount <= 0)
             {
+                actualCount = response.PointFeatures?.Sum(group => group?.Points?.Count ?? 0) ?? 0;
+            }
+
+            if (actualCount <= 0)
+            {
                 actualCount = response.Definitions?.Count ?? 0;
             }
 
@@ -180,6 +185,11 @@ namespace BigSisterNodeNet.Core.Services
             }
 
             var actualCount = response.PointStates?.Count ?? 0;
+            if (actualCount <= 0)
+            {
+                actualCount = response.PointFeatures?.Sum(group => group?.PointStates?.Count ?? 0) ?? 0;
+            }
+
             if (actualCount <= 0)
             {
                 actualCount = response.States?.Count ?? 0;

@@ -87,6 +87,10 @@ struct PlcRuntimeHeaderV1 {
 
 static_assert(sizeof(PlcPointDescriptorV1) == 20u, "Unexpected descriptor size");
 static_assert(sizeof(PlcRuntimeHeaderV1) == 28u, "Unexpected header size");
+static_assert(offsetof(PlcPointDescriptorV1, point_state_value_offset) == 4u,
+              "Descriptor first word packing changed");
+static_assert(offsetof(PlcRuntimeHeaderV1, descriptor_count) == 8u,
+              "Header first two words packing changed");
 static_assert(kPlcSharedPointStateStride == sizeof(PointState), "PointState stride mismatch");
 static_assert(kPlcSharedPointStateValueOffset == 0u, "PointState value must stay at offset 0");
 static_assert((kPlcSharedPointStateQualityOffset & 0x3u) == 0u,
@@ -372,21 +376,13 @@ private:
             "state",
             "runEnabled",
             "status",
-            "pc",
             "cycleCounter",
             "faultCode",
             "faultInfo",
             "bytecodeSize",
             "loadEpoch",
             "objectSize",
-            "objectChecksum",
-            "linkedChecksum",
-            "source",
-            "programType",
             "paramsSummary",
-            "inputChannel",
-            "outputChannel",
-            "runtimeMapOk",
             "start",
             "stop",
             "reset",
@@ -472,25 +468,29 @@ private:
 
     static void writeDescriptor(volatile PlcPointDescriptorV1& dst, const PlcPointDescriptorV1& src)
     {
-        dst.point_state_index = src.point_state_index;
-        dst.value_type = src.value_type;
-        dst.flags = src.flags;
-        dst.point_state_value_offset = src.point_state_value_offset;
-        dst.point_state_quality_offset = src.point_state_quality_offset;
-        dst.reserved0 = src.reserved0;
-        dst.reserved1 = src.reserved1;
+        volatile uint32_t* dst_words = reinterpret_cast<volatile uint32_t*>(
+            static_cast<uintptr_t>(reinterpret_cast<uintptr_t>(&dst)));
+        dst_words[0] = static_cast<uint32_t>(src.point_state_index) |
+                       (static_cast<uint32_t>(src.value_type) << 16) |
+                       (static_cast<uint32_t>(src.flags) << 24);
+        dst_words[1] = src.point_state_value_offset;
+        dst_words[2] = src.point_state_quality_offset;
+        dst_words[3] = src.reserved0;
+        dst_words[4] = src.reserved1;
     }
 
     static void writeHeaderFields(volatile PlcRuntimeHeaderV1& dst, const PlcRuntimeHeaderV1& src)
     {
-        dst.magic = src.magic;
-        dst.version = src.version;
-        dst.flags = src.flags;
-        dst.descriptor_count = src.descriptor_count;
-        dst.descriptor_base = src.descriptor_base;
-        dst.point_state_base = src.point_state_base;
-        dst.point_state_stride = src.point_state_stride;
-        dst.store_epoch = src.store_epoch;
+        volatile uint32_t* dst_words = reinterpret_cast<volatile uint32_t*>(
+            static_cast<uintptr_t>(reinterpret_cast<uintptr_t>(&dst)));
+        dst_words[0] = src.magic;
+        dst_words[1] = static_cast<uint32_t>(src.version) |
+                       (static_cast<uint32_t>(src.flags) << 16);
+        dst_words[2] = src.descriptor_count;
+        dst_words[3] = src.descriptor_base;
+        dst_words[4] = src.point_state_base;
+        dst_words[5] = src.point_state_stride;
+        dst_words[6] = src.store_epoch;
     }
 
     uint32_t hashCatalogDefinitions(const PointCatalog& catalog) const
@@ -514,15 +514,15 @@ private:
     {
         volatile PlcPointDescriptorV1* descriptors = descriptorPtr();
         const PointDefinition* definitions = catalog.entries();
-        published_count_ = static_cast<uint16_t>(catalog.size());
-        skipped_count_ = 0u;
-
-        for (size_t i = 0; i < PointCatalog::kMaxPoints; ++i) {
-            PlcPointDescriptorV1 empty = {};
-            writeDescriptor(descriptors[i], empty);
+        size_t descriptor_count = catalog.size();
+        if (descriptor_count > PointCatalog::kMaxPoints) {
+            descriptor_count = PointCatalog::kMaxPoints;
         }
 
-        for (size_t i = 0; i < catalog.size(); ++i) {
+        published_count_ = static_cast<uint16_t>(descriptor_count);
+        skipped_count_ = 0u;
+
+        for (size_t i = 0; i < descriptor_count; ++i) {
             const PointDefinition& definition = definitions[i];
             PlcPointDescriptorV1 descriptor = {};
             descriptor.point_state_index = static_cast<uint16_t>(i);

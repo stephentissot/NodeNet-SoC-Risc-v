@@ -1,14 +1,8 @@
-VAR FLOAT leftValue
-VAR FLOAT rightValue
-VAR BOOL equalFlag
-VAR BOOL lessFlag
-VAR BOOL greaterOrEqualFlag
-
-PUSH_F32 -0.0
-STORE_F32 leftValue
-
-PUSH_F32 0.0
-STORE_F32 rightValue
+VAR PUBLIC FLOAT leftValue
+VAR PUBLIC FLOAT rightValue
+VAR PRIVATE BOOL equalFlag
+VAR PRIVATE BOOL lessFlag
+VAR PRIVATE BOOL geFlag
 
 LOAD_F32 leftValue
 LOAD_F32 rightValue
@@ -23,6 +17,6 @@ STORE_BOOL lessFlag
 LOAD_F32 rightValue
 LOAD_F32 leftValue
 FGE
-STORE_BOOL greaterOrEqualFlag
+STORE_BOOL geFlag
 
 HALT

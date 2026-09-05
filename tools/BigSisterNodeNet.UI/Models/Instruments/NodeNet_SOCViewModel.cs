@@ -33,12 +33,14 @@ namespace BigSisterNodeNet.UI.Models.Instruments
         public IRelayCommand UpdatePointDefinitionCommand { get; }
         public IRelayCommand UploadPlcProgramCommand { get; }
         public IRelayCommand DownloadPlcProgramCommand { get; }
+        public IRelayCommand ErasePlcProgramCommand { get; }
 
         private int _selectedPlcSlot;
         private string _plcProgramSource;
         private string _plcStatusMessage;
         private bool _isUploadingPlcProgram;
         private bool _isDownloadingPlcProgram;
+        private bool _isErasingPlcProgram;
 
         private PointDefinitionEditorViewModel _settingsEditor;
         public PointDefinitionEditorViewModel SettingsEditor
@@ -109,7 +111,7 @@ namespace BigSisterNodeNet.UI.Models.Instruments
             private set => SetProperty(ref _plcStatusMessage, value);
         }
 
-        public string PlcHintMessage => "Upload et download utilisent objectFileV1. Les uploads sont persistés en flash pour reprise au cold boot de tous les slots. Si un slot est vide, Download renvoie simplement indisponible. Les noms VAR réservés du runtime de slot sont rejetés à l'assemblage.";
+        public string PlcHintMessage => "Upload, download et erase utilisent objectFileV1. Les uploads sont persistés en flash pour reprise au cold boot de tous les slots. Erase vide le slot sélectionné en runtime et en flash. Si un slot est vide, Download renvoie simplement indisponible. Les noms VAR réservés du runtime de slot sont rejetés à l'assemblage.";
 
         public bool IsUploadingPlcProgram
         {
@@ -118,8 +120,8 @@ namespace BigSisterNodeNet.UI.Models.Instruments
             {
                 if (SetProperty(ref _isUploadingPlcProgram, value))
                 {
-                    UploadPlcProgramCommand.NotifyCanExecuteChanged();
                     DownloadPlcProgramCommand.NotifyCanExecuteChanged();
+                    ErasePlcProgramCommand.NotifyCanExecuteChanged();
                     OnPropertyChanged(nameof(IsPlcProgramBusy));
                 }
             }
@@ -132,14 +134,28 @@ namespace BigSisterNodeNet.UI.Models.Instruments
             {
                 if (SetProperty(ref _isDownloadingPlcProgram, value))
                 {
-                    UploadPlcProgramCommand.NotifyCanExecuteChanged();
                     DownloadPlcProgramCommand.NotifyCanExecuteChanged();
+                    ErasePlcProgramCommand.NotifyCanExecuteChanged();
                     OnPropertyChanged(nameof(IsPlcProgramBusy));
                 }
             }
         }
 
-        public bool IsPlcProgramBusy => IsUploadingPlcProgram || IsDownloadingPlcProgram;
+        public bool IsErasingPlcProgram
+        {
+            get => _isErasingPlcProgram;
+            private set
+            {
+                if (SetProperty(ref _isErasingPlcProgram, value))
+                {
+                    DownloadPlcProgramCommand.NotifyCanExecuteChanged();
+                    ErasePlcProgramCommand.NotifyCanExecuteChanged();
+                    OnPropertyChanged(nameof(IsPlcProgramBusy));
+                }
+            }
+        }
+
+        public bool IsPlcProgramBusy => IsUploadingPlcProgram || IsDownloadingPlcProgram || IsErasingPlcProgram;
 
         public NodeNet_SOCViewModel(NodeNet_SOC node) : base(node)
         {
@@ -147,7 +163,7 @@ namespace BigSisterNodeNet.UI.Models.Instruments
             BrowsePath = node?.DeviceId ?? string.Empty;
             SelectedPlcSlot = 0;
             PlcProgramSource = string.Empty;
-            PlcStatusMessage = "Prêt à uploader ou télécharger un programme PLC sur le slot sélectionné.";
+            PlcStatusMessage = "Prêt à uploader, télécharger ou effacer un programme PLC sur le slot sélectionné.";
             BrowsePathCommand = new RelayCommand(BrowsePathDefinitions);
             BrowseRootCommand = new RelayCommand(BrowseRoot);
             BrowseTreeNodeCommand = new RelayCommand<string>(BrowseTreeNode);
@@ -159,8 +175,9 @@ namespace BigSisterNodeNet.UI.Models.Instruments
             DeletePointCommand = new RelayCommand<PointDefinitionTreeNode>(DeletePoint);
             ReadStatesCommand = new RelayCommand(ReadStates);
             UpdatePointDefinitionCommand = new RelayCommand(UpdatePointDefinition, CanUpdatePointDefinition);
-            UploadPlcProgramCommand = new RelayCommand(UploadPlcProgram, CanUploadPlcProgram);
+            UploadPlcProgramCommand = new RelayCommand(UploadPlcProgram);
             DownloadPlcProgramCommand = new RelayCommand(DownloadPlcProgram, CanDownloadPlcProgram);
+            ErasePlcProgramCommand = new RelayCommand(ErasePlcProgram, CanErasePlcProgram);
             RefreshCollections();
         }
 
@@ -246,12 +263,12 @@ namespace BigSisterNodeNet.UI.Models.Instruments
         {
         }
 
-        private bool CanUploadPlcProgram()
+        private bool CanDownloadPlcProgram()
         {
-            return !IsPlcProgramBusy && !string.IsNullOrWhiteSpace(PlcProgramSource);
+            return !IsPlcProgramBusy;
         }
 
-        private bool CanDownloadPlcProgram()
+        private bool CanErasePlcProgram()
         {
             return !IsPlcProgramBusy;
         }
@@ -314,6 +331,33 @@ namespace BigSisterNodeNet.UI.Models.Instruments
             finally
             {
                 IsDownloadingPlcProgram = false;
+            }
+        }
+
+        private async void ErasePlcProgram()
+        {
+            if (_nodeNetSoc == null)
+            {
+                PlcStatusMessage = "Aucun nœud NodeNet SoC sélectionné.";
+                return;
+            }
+
+            try
+            {
+                IsErasingPlcProgram = true;
+                PlcStatusMessage = $"Effacement du slot {SelectedPlcSlot} en cours...";
+
+                var result = await Task.Run(() => _nodeNetSoc.EraseProgramSlot((ushort)SelectedPlcSlot));
+                PlcProgramSource = string.Empty;
+                PlcStatusMessage = PlcUploadClient.BuildUiEraseStatusMessage((ushort)SelectedPlcSlot, result?.Response);
+            }
+            catch (Exception ex)
+            {
+                PlcStatusMessage = ex.Message;
+            }
+            finally
+            {
+                IsErasingPlcProgram = false;
             }
         }
 

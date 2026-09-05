@@ -204,6 +204,13 @@ class NodeNetCore
             bool restore_slot_running = false;
         } _pendingPlcAutoLoad;
 
+        struct PendingPlcErase {
+            bool active = false;
+            uint16_t slot_id = 0u;
+            bool persist_to_flash = false;
+            bool restore_engine_enabled = false;
+        } _pendingPlcErase;
+
         struct PlcAutoLoadDiagnostics {
             bool valid = false;
             uint16_t slot_id = 0u;
@@ -214,6 +221,8 @@ class NodeNetCore
             uint16_t failing_symbol_index = 0xFFFFu;
             uint16_t failing_relocation_index = 0xFFFFu;
         } _lastPlcAutoLoadDiagnostics;
+        bool _plcAutoLoadInProgress = false;
+        uint16_t _plcAutoLoadInProgressSlotId = 0u;
 
         uint32_t _nextPlcUploadId = 1u;
 
@@ -290,6 +299,9 @@ class NodeNetCore
         // Builds and returns a PLC object file ready to load or persist.
         bool handlePlcObjectFileRequest(const JsonDocument& request, JsonDocument& response);
 
+        // Erases one PLC slot from runtime and persisted storage.
+        bool handlePlcEraseRequest(const JsonDocument& request, JsonDocument& response);
+
         // Expands a built-in device template into concrete point definitions.
         bool handleDeviceTemplateLoadRequest(const JsonDocument& request, JsonDocument& response);
 
@@ -323,6 +335,9 @@ class NodeNetCore
 
         // Serializes the current PLC upload status into a response document.
         void fillPlcUploadStatus(JsonDocument& response, bool include_header) const;
+
+        // Completes a deferred PLC slot erase after the response has been emitted.
+        void processPendingPlcErase();
 
         // Completes a deferred auto-load after the upload commit response has been emitted.
         void processPendingPlcAutoLoad();

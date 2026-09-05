@@ -232,7 +232,6 @@ public:
              relocation_index < object_image.relocation_count;
              ++relocation_index) {
             const PlcObjectRelocationRecordV1& relocation = object_image.relocations[relocation_index];
-            const PlcObjectSymbolRecordV1& source_symbol = object_image.symbols[relocation.symbol_index];
             result.failing_relocation_index = relocation_index;
 
             if (relocation.symbol_index >= object_image.symbol_count) {
@@ -240,6 +239,8 @@ public:
                 result.failing_symbol_index = relocation.symbol_index;
                 return result;
             }
+
+            const PlcObjectSymbolRecordV1& source_symbol = object_image.symbols[relocation.symbol_index];
 
             const size_t patch_size = relocationPatchSize(relocation.relocation_kind);
             if (patch_size == 0u) {
