@@ -1712,6 +1712,7 @@ bool NodeNetCore::isInitialized()
 
 void NodeNetCore::refreshScreen()
 {
+    oled::refreshScreenIfDue(millis(), addr);
 }
 
 bool NodeNetCore::upsertPointDefinition(const PointDefinition& definition)
@@ -3631,6 +3632,7 @@ erase_cleanup:
         plc_engine_set_enabled(true);
     }
     _pendingPlcErase = {};
+    refreshScreen();
 }
 
 bool NodeNetCore::handlePlcUploadBeginRequest(const JsonDocument& request, JsonDocument& response)
@@ -3922,6 +3924,7 @@ void NodeNetCore::processPendingPlcAutoLoad()
         if (restore_engine_enabled) {
             plc_engine_set_enabled(true);
         }
+        refreshScreen();
         return;
     }
 
@@ -3961,6 +3964,7 @@ void NodeNetCore::processPendingPlcAutoLoad()
         plc_engine_set_enabled(true);
     }
     _plcAutoLoadInProgress = false;
+    refreshScreen();
 }
 
 bool NodeNetCore::handlePlcUploadDataMessage(const QueuedMessage& msg)

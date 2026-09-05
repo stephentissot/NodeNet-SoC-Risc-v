@@ -1794,29 +1794,47 @@ Stage 10 completion criteria:
 - the user can recover from an intentionally faulting program by loading a valid replacement without needing an FPGA reflash or power cycle
 - all known lifecycle-related simplifications and limits are written down next to the validation guidance that exercises them
 
-### Stage 12: Bit Extraction And Compact Output Mapping
+### Stage 12: Numeric Conversion, Bit Extraction, And Stage 11 Close-Out
 
 Recommended implementation set:
 
+- `I32_TO_F32`
+- `U32_TO_F32`
+- `F32_TO_I32`
+- `F32_TO_U32`
 - `TEST_BIT_U32 bit_imm5`
 - `U32_AND`
 - `SHR_U32 bitcount_imm5`
 - `SHL_U32 bitcount_imm5`
 
+Stage 11 carry-over to close explicitly:
+
+- deferred `plcEraseReq` completion must refresh the OLED slot-status screen immediately; current hardware behavior can leave a stale `R` visible after an erased slot becomes empty
+- `LOAD_F32`/`STORE_F32` with `FADD`, `FSUB`, `FMUL`, and `FDIV` has been validated on hardware across varied cases; keep only regression coverage and documentation sync for this slice
+- validate the float compare family on hardware: `FEQ`, `FNE`, `FLT`, `FLE`, `FGT`, `FGE`
+- confirm which documented float opcodes are truly implemented versus intentionally deferred, then write the result next to the validation programs instead of leaving it implicit
+
 Why this stage is useful:
 
+- it completes the first practical bridge between existing integer-heavy point data and float math slots
 - it unlocks compact integer-to-binary output mapping without needing huge branch tables
 - it keeps the ISA HDL-friendly by favoring narrow, deterministic primitives over wide control flow
-- it covers common industrial patterns such as counters, alarm masks, packed status words, and bitfield decoding
+- it covers common industrial patterns such as counters, alarm masks, packed status words, simple engineering-unit conversion, and bitfield decoding
 
 Minimum practical goal:
 
+- the smallest useful conversion subset for immediate field use is `I32_TO_F32` plus `F32_TO_I32`
+- with those two opcodes, a slot can read integer process values, apply float-domain math, and hand results back to integer sinks without firmware help
 - the smallest useful subset for immediate field use is `TEST_BIT_U32 bit_imm5`
 - with that one opcode, a slot can expose the low 8 bits of a `UINT32` counter onto `output1..output8`
 - `U32_AND` and shifts remain valuable follow-ons for broader masking and packing logic
 
 Execution contract:
 
+- `I32_TO_F32` consumes one `INT32` from the stack and pushes one `FLOAT`
+- `U32_TO_F32` consumes one `UINT32` from the stack and pushes one `FLOAT`
+- `F32_TO_I32` consumes one `FLOAT` and pushes one `INT32`; NaN, Inf, and out-of-range values must fault deterministically rather than saturating silently
+- `F32_TO_U32` consumes one `FLOAT` and pushes one `UINT32`; NaN, Inf, negative, and out-of-range values must fault deterministically rather than saturating silently
 - `TEST_BIT_U32 bit_imm5` consumes one `UINT32` from the stack and pushes one `BOOL` that reflects the selected bit
 - `U32_AND` consumes the top two `UINT32` values and pushes one `UINT32` result
 - `SHR_U32 bitcount_imm5` consumes one `UINT32` and pushes the logical right-shifted `UINT32` result
@@ -1825,10 +1843,13 @@ Execution contract:
 
 Validation targets:
 
+- convert a small signed `INT32` ramp to `FLOAT`, apply arithmetic, then convert back to `INT32` and verify exact round-trip behavior inside the exact `float32` integer range
+- verify `F32_TO_I32` and `F32_TO_U32` deterministic fault behavior for NaN, Inf, negative-to-unsigned, and out-of-range inputs
 - increment a `UINT32` counter on `R_TRIG input1`
 - wrap the counter from `255` back to `0`
 - drive `output1` from bit `0` through `output8` from bit `7`
 - verify that a stable high input does not retrigger the count and does not corrupt the exposed bit pattern
+- erase a loaded-and-running slot and verify the OLED slot-status screen leaves `R` immediately for `-` without requiring a reboot, another command, or a manual screen change
 
 Candidate follow-on after Stage 10:
 
