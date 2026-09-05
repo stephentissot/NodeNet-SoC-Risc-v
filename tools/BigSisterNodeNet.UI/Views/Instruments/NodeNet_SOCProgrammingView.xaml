@@ -20,6 +20,7 @@
                 <ColumnDefinition Width="120"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
@@ -37,12 +38,17 @@
                     Command="{Binding UploadPlcProgramCommand}"
                     Padding="18,6"
                     Margin="0,0,12,0"/>
-                <Button Grid.Column="3"
+            <Button Grid.Column="3"
                     Content="Download"
                     Command="{Binding DownloadPlcProgramCommand}"
                     Padding="18,6"
                     Margin="0,0,12,0"/>
-                <TextBlock Grid.Column="4"
+            <Button Grid.Column="4"
+                    Content="Erase"
+                    Command="{Binding ErasePlcProgramCommand}"
+                    Padding="18,6"
+                    Margin="0,0,12,0"/>
+            <TextBlock Grid.Column="5"
                        VerticalAlignment="Center"
                        Foreground="{DynamicResource MaterialDesign.Brush.Foreground}"
                        TextWrapping="Wrap"

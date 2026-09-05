@@ -246,7 +246,7 @@ public:
         const uintptr_t control_block_limit = static_cast<uintptr_t>(slotControlBlockRegionBase() +
                                                                     (static_cast<uint32_t>(kPlcSlotCountV1) * sizeof(PlcProgramControlBlockV1)));
         return static_cast<uintptr_t>(kPlcSlotBytecodeRegionBaseV1) >=
-                   static_cast<uintptr_t>(kPlcRuntimeStatusBase + kPlcRuntimeStatusWindowSize) &&
+                   static_cast<uintptr_t>(kPlcRuntimeDescriptorBase + kPlcRuntimeDescriptorWindowSize) &&
                static_cast<uintptr_t>(kPlcSlotBytecodeRegionBaseV1 + kPlcSlotBytecodeRegionSizeV1) <= sdram_limit &&
                static_cast<uintptr_t>(kPlcSlotObjectRegionBaseV1 + kPlcSlotObjectRegionSizeV1) <= sdram_limit &&
                control_block_limit <= control_limit &&
@@ -375,6 +375,13 @@ public:
         auto* slot_manifest = reinterpret_cast<PlcSlotManifestV1*>(static_cast<uintptr_t>(slotManifestAddress(slot_id)));
         slot_manifest->params_base = layout.params_base;
         slot_manifest->params_size = params_size;
+        if (params_bytes != nullptr && params_size >= sizeof(PlcSlotParamsHeaderV1)) {
+            const auto* params_header = reinterpret_cast<const PlcSlotParamsHeaderV1*>(params_bytes);
+            if (params_header->magic == kPlcSlotParamsMagicV1 &&
+                params_header->version == kPlcRuntimeAbiV1Version) {
+                slot_manifest->load_epoch = params_header->load_epoch;
+            }
+        }
 
         auto* control_block = reinterpret_cast<PlcProgramControlBlockV1*>(static_cast<uintptr_t>(slotControlAddress(slot_id)));
         control_block->params_base = layout.params_base;
@@ -453,8 +460,7 @@ public:
             return result;
         }
 
-        if (parse_result.header.runtime_header_addr != kPlcRuntimeHeaderAddr ||
-            parse_result.header.abi_version != kPlcRuntimeAbiV1Version) {
+        if (parse_result.header.abi_version != kPlcRuntimeAbiV1Version) {
             result.status = kPlcSlotLoadAbiMismatch;
             return result;
         }
@@ -621,6 +627,13 @@ public:
         return true;
     }
 
+    static bool stageObjectFileSnapshot(uint16_t slot_id,
+                                        const uint8_t* object_file_bytes,
+                                        uint32_t object_size)
+    {
+        return writeObjectFileSnapshot(slot_id, object_file_bytes, object_size);
+    }
+
 private:
     static bool opcodeHasU16Operand(uint8_t opcode)
     {
@@ -629,6 +642,12 @@ private:
                opcode == 0x12u ||
                opcode == 0x13u ||
                opcode == 0x14u ||
+               opcode == 0x15u ||
+               opcode == 0x16u ||
+               opcode == 0x17u ||
+               opcode == 0x18u ||
+               opcode == 0x19u ||
+               opcode == 0x1Au ||
                opcode == 0x20u ||
                opcode == 0x21u ||
                opcode == 0x2Cu ||
@@ -650,6 +669,13 @@ private:
                opcode == 0x41u ||
                opcode == 0x42u ||
                opcode == 0x43u;
+    }
+
+    static bool opcodeHasU32Immediate(uint8_t opcode)
+    {
+        return opcode == 0x1Bu ||
+               opcode == 0x1Cu ||
+               opcode == 0x1Du;
     }
 
     static bool opcodeHasTimerStartOperand(uint8_t opcode)
@@ -684,6 +710,15 @@ private:
                opcode == 0x0Au ||
                opcode == 0x0Bu ||
                opcode == 0x0Cu ||
+               opcode == 0x15u ||
+               opcode == 0x16u ||
+               opcode == 0x17u ||
+               opcode == 0x18u ||
+               opcode == 0x19u ||
+               opcode == 0x1Au ||
+               opcode == 0x1Bu ||
+               opcode == 0x1Cu ||
+               opcode == 0x1Du ||
                opcode == 0x22u ||
                opcode == 0x23u ||
                opcode == 0x24u ||
@@ -718,13 +753,34 @@ private:
                opcode == 0x41u ||
                opcode == 0x42u ||
                opcode == 0x43u ||
-               opcodeHasU16Operand(opcode);
+               opcode == 0x44u ||
+               opcode == 0x45u ||
+               opcode == 0x46u ||
+               opcode == 0x47u ||
+               opcode == 0x48u ||
+               opcode == 0x49u ||
+               opcode == 0x4Au ||
+               opcode == 0x4Bu ||
+               opcode == 0x4Cu ||
+               opcode == 0x4Du ||
+               opcode == 0x4Eu ||
+               opcode == 0x4Fu ||
+               opcode == 0x50u ||
+               opcode == 0x51u ||
+               opcode == 0x52u ||
+               opcode == 0x53u ||
+               opcodeHasU16Operand(opcode) ||
+               opcodeHasU32Immediate(opcode);
     }
 
     static uint32_t instructionSizeForOpcode(uint8_t opcode)
     {
         if (opcodeHasTimerStartOperand(opcode)) {
             return 7u;
+        }
+
+        if (opcodeHasU32Immediate(opcode)) {
+            return 5u;
         }
 
         if (opcodeHasCounterCountOperand(opcode)) {
@@ -939,7 +995,7 @@ private:
                 return false;
             }
 
-            if (publisher.runtimeIndexForCatalogIndex(catalog_index) == PlcRuntimePublisherV1::kInvalidPointIndex) {
+            if (publisher.pointStateIndexForCatalogIndex(catalog_index) == PlcRuntimePublisherV1::kInvalidPointStateIndex) {
                 return false;
             }
         }
@@ -987,7 +1043,7 @@ private:
                                             SymbolReader read_symbol)
     {
         PointCatalog& mutable_catalog = const_cast<PointCatalog&>(catalog);
-        PointDefinition* expected_definitions = PointCatalog::slotVariableDefinitionScratch();
+        PointDefinition* expected_definitions = PointCatalog::slotVariableDefinitionScratch(symbol_count);
         if (expected_definitions == nullptr) {
             return false;
         }
@@ -1027,7 +1083,7 @@ private:
 
             const size_t runtime_catalog_index = catalog.findIndex(expected.id);
             if (runtime_catalog_index >= catalog.size() ||
-                publisher.runtimeIndexForCatalogIndex(runtime_catalog_index) == PlcRuntimePublisherV1::kInvalidPointIndex) {
+                publisher.pointStateIndexForCatalogIndex(runtime_catalog_index) == PlcRuntimePublisherV1::kInvalidPointStateIndex) {
                 needs_publish = true;
             }
         }
@@ -1231,12 +1287,9 @@ private:
             "faultCode",
             "faultInfo",
             "bytecodeSize",
-            "source",
-            "programType",
+            "loadEpoch",
+            "objectSize",
             "paramsSummary",
-            "inputChannel",
-            "outputChannel",
-            "runtimeMapOk",
             "start",
             "stop",
             "reset",
@@ -1274,8 +1327,7 @@ private:
     {
         if (header.magic != kPlcObjectFileMagicV1 ||
             header.version != kPlcObjectFileVersionV1 ||
-            header.abi_version != kPlcRuntimeAbiV1Version ||
-            header.runtime_header_addr != kPlcRuntimeHeaderAddr) {
+            header.abi_version != kPlcRuntimeAbiV1Version) {
             return kPlcSlotLoadParseFailed;
         }
         if (header.total_size < sizeof(PlcObjectFileHeaderV1) ||
@@ -1421,7 +1473,9 @@ private:
 
             applyRelocation(linked_code_out + relocation.code_offset,
                             relocation.relocation_kind,
-                            link_result.runtime_point_index);
+                            relocation.relocation_kind == kPlcRelocationPointStateIndexU16Le
+                                ? static_cast<uint32_t>(link_result.point_state_index)
+                                : link_result.point_state_value_offset);
             ++result.resolved_relocation_count;
         }
 
@@ -1434,31 +1488,31 @@ private:
     static size_t relocationPatchSize(uint8_t relocation_kind)
     {
         switch (relocation_kind) {
-        case kPlcRelocationPointIndexU16Le:
+        case kPlcRelocationPointStateIndexU16Le:
             return 2u;
-        case kPlcRelocationPointIndexU32Le:
+        case kPlcRelocationPointStateValueOffsetU32Le:
             return 4u;
         default:
             return 0u;
         }
     }
 
-    static void applyRelocation(uint8_t* dst, uint8_t relocation_kind, uint16_t runtime_point_index)
+    static void applyRelocation(uint8_t* dst, uint8_t relocation_kind, uint32_t patch_value)
     {
         if (dst == nullptr) {
             return;
         }
 
         switch (relocation_kind) {
-        case kPlcRelocationPointIndexU16Le:
-            dst[0] = static_cast<uint8_t>(runtime_point_index & 0xFFu);
-            dst[1] = static_cast<uint8_t>((runtime_point_index >> 8) & 0xFFu);
+        case kPlcRelocationPointStateIndexU16Le:
+            dst[0] = static_cast<uint8_t>(patch_value & 0xFFu);
+            dst[1] = static_cast<uint8_t>((patch_value >> 8) & 0xFFu);
             break;
-        case kPlcRelocationPointIndexU32Le:
-            dst[0] = static_cast<uint8_t>(runtime_point_index & 0xFFu);
-            dst[1] = static_cast<uint8_t>((runtime_point_index >> 8) & 0xFFu);
-            dst[2] = 0u;
-            dst[3] = 0u;
+        case kPlcRelocationPointStateValueOffsetU32Le:
+            dst[0] = static_cast<uint8_t>(patch_value & 0xFFu);
+            dst[1] = static_cast<uint8_t>((patch_value >> 8) & 0xFFu);
+            dst[2] = static_cast<uint8_t>((patch_value >> 16) & 0xFFu);
+            dst[3] = static_cast<uint8_t>((patch_value >> 24) & 0xFFu);
             break;
         default:
             break;

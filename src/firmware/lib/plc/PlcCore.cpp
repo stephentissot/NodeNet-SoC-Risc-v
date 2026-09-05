@@ -5,12 +5,24 @@
 #include "bigsister.h"
 #include "nodenetLogger.h"
 #include "plc_loader_v1.h"
-#include "plc_runtime_abi.h"
 
 namespace {
 
 float apply_numeric_scale(float value, const PointDefinition& definition) {
     return value * definition.scale;
+}
+
+uint32_t float_bits(float value)
+{
+    uint32_t raw = 0u;
+    std::memcpy(&raw, &value, sizeof(raw));
+    return raw;
+}
+
+void u32_to_registers(uint32_t value, uint16_t (&registers)[2])
+{
+    registers[0] = static_cast<uint16_t>((value >> 16) & 0xFFFFu);
+    registers[1] = static_cast<uint16_t>(value & 0xFFFFu);
 }
 
 static bool modbus_table_is_bitwise(ModbusTable table)
@@ -51,12 +63,9 @@ static bool is_dynamic_slot_variable_point(const PointDefinition& definition)
         "faultCode",
         "faultInfo",
         "bytecodeSize",
-        "source",
-        "programType",
+        "loadEpoch",
+        "objectSize",
         "paramsSummary",
-        "inputChannel",
-        "outputChannel",
-        "runtimeMapOk",
         "start",
         "stop",
         "reset",
@@ -115,15 +124,11 @@ void PlcCore::begin(PointCatalog* point_catalog, ModbusMaster* modbus0, NodeLogg
     active_batch_last_poll_ms_ = 0u;
     active_batch_max_poll_gap_ms_ = 0u;
     active_batch_poll_calls_ = 0u;
+    next_output_apply_index_ = 0u;
     std::memset(batches_, 0, sizeof(batches_));
     std::memset(batch_members_, 0, sizeof(batch_members_));
     std::memset(active_bit_values_, 0, sizeof(active_bit_values_));
     std::memset(active_register_values_, 0, sizeof(active_register_values_));
-}
-
-void PlcCore::attachRuntimePublisher(const PlcRuntimePublisherV1* publisher)
-{
-    runtime_publisher_ = publisher;
 }
 
 void PlcCore::setModbusBatchMaxGap(uint16_t max_gap)
@@ -137,13 +142,92 @@ void PlcCore::loop() {
         return;
     }
 
-    const uint32_t now_ms = millis();
-    consumeRuntimeWrites(now_ms);
     if (poll_state_ == PollState::Idle) {
         rebuildPollPlanIfNeeded();
+        if (applyNextWritablePointState(millis())) {
+            return;
+        }
     }
     pollNextPoint();
-    syncRuntimeSnapshot(now_ms);
+}
+
+bool PlcCore::applyNextWritablePointState(uint32_t now_ms)
+{
+    if (point_catalog_ == nullptr || poll_state_ != PollState::Idle) {
+        return false;
+    }
+
+    const size_t point_count = point_catalog_->size();
+    if (point_count == 0u) {
+        return false;
+    }
+
+    const PointDefinition* definitions = point_catalog_->entries();
+    const PointState* states = point_catalog_->states();
+    const PointCommandState* command_states = point_catalog_->commandStates();
+
+    for (size_t attempts = 0u; attempts < point_count; ++attempts) {
+        const size_t catalog_index = next_output_apply_index_;
+        next_output_apply_index_ = (next_output_apply_index_ + 1u) % point_count;
+
+        const PointDefinition& definition = definitions[catalog_index];
+        const PointState& state = states[catalog_index];
+        const PointCommandState& command_state = command_states[catalog_index];
+        const bool writable_output = definition.direction == PointDirection::Output ||
+                                     definition.direction == PointDirection::InOut;
+
+        if (!writable_output) {
+            continue;
+        }
+        if (state.quality != PointQuality::Good) {
+            continue;
+        }
+        if (state.last_update_ms == 0u && state.last_good_update_ms == 0u) {
+            continue;
+        }
+
+        bool needs_apply = false;
+        switch (definition.value_type) {
+        case PointValueType::Bool:
+            needs_apply = command_state.command_quality != PointCommandQuality::Acked ||
+                          command_state.last_commanded_value.b != state.value.b;
+            break;
+        case PointValueType::Uint16:
+            needs_apply = command_state.command_quality != PointCommandQuality::Acked ||
+                          command_state.last_commanded_value.u16 != state.value.u16;
+            break;
+        case PointValueType::Int16:
+            needs_apply = command_state.command_quality != PointCommandQuality::Acked ||
+                          command_state.last_commanded_value.i16 != state.value.i16;
+            break;
+        case PointValueType::Uint32:
+            needs_apply = command_state.command_quality != PointCommandQuality::Acked ||
+                          command_state.last_commanded_value.u32 != state.value.u32;
+            break;
+        case PointValueType::Int32:
+            needs_apply = command_state.command_quality != PointCommandQuality::Acked ||
+                          command_state.last_commanded_value.i32 != state.value.i32;
+            break;
+        case PointValueType::Float:
+            needs_apply = command_state.command_quality != PointCommandQuality::Acked ||
+                          float_bits(command_state.last_commanded_value.f32) != float_bits(state.value.f32);
+            break;
+        case PointValueType::Enum:
+            needs_apply = command_state.command_quality != PointCommandQuality::Acked ||
+                          command_state.last_commanded_value.enum_value != state.value.enum_value;
+            break;
+        default:
+            break;
+        }
+
+        if (!needs_apply) {
+            continue;
+        }
+
+        return applyWritablePointState(catalog_index, now_ms);
+    }
+
+    return false;
 }
 
 bool PlcCore::pollTransactionActive() const
@@ -151,76 +235,207 @@ bool PlcCore::pollTransactionActive() const
     return poll_state_ == PollState::WaitingBatchResult;
 }
 
-void PlcCore::syncRuntimeSnapshot(uint32_t now_ms)
+bool PlcCore::applyWritablePointState(size_t catalog_index, uint32_t now_ms)
 {
-    if (runtime_publisher_ == nullptr) {
-        return;
-    }
-
-    (void)const_cast<PlcRuntimePublisherV1*>(runtime_publisher_)->publish(*point_catalog_, now_ms);
-}
-
-void PlcCore::consumeRuntimeWrites(uint32_t now_ms)
-{
-    if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
-        return;
-    }
-
-    uint16_t queued_runtime_index = PlcRuntimePublisherV1::kInvalidPointIndex;
-    while (runtime_publisher_->popRuntimeWriteIndex(queued_runtime_index)) {
-        (void)consumeRuntimeWriteIndex(queued_runtime_index, now_ms);
-    }
-}
-
-bool PlcCore::consumeRuntimeWriteIndex(uint16_t runtime_index, uint32_t now_ms)
-{
-    if (point_catalog_ == nullptr || runtime_publisher_ == nullptr ||
-        runtime_index == PlcRuntimePublisherV1::kInvalidPointIndex) {
-        return false;
-    }
-
-    const size_t catalog_index = runtime_publisher_->catalogIndexForRuntimeIndex(runtime_index);
-    if (catalog_index >= point_catalog_->size()) {
+    if (point_catalog_ == nullptr || catalog_index >= point_catalog_->size()) {
         return false;
     }
 
     const PointDefinition& definition = point_catalog_->entries()[catalog_index];
-    const PointState& shared_state = point_catalog_->states()[catalog_index];
-    const uint32_t effective_now_ms = shared_state.last_update_ms != 0u
-        ? shared_state.last_update_ms
-        : now_ms;
-    bool consumed = false;
+    const PointState& current_state = point_catalog_->states()[catalog_index];
+    const bool internal_slot_variable = is_dynamic_slot_variable_point(definition);
+    if (!internal_slot_variable &&
+        definition.direction != PointDirection::Output &&
+        definition.direction != PointDirection::InOut) {
+        return false;
+    }
+
+    PointCommandState command_state = point_catalog_->commandStates()[catalog_index];
+    PointState next_state = current_state;
+    next_state.last_update_ms = now_ms;
+    bool supported = false;
+    bool ok = false;
 
     switch (definition.value_type) {
-    case PointValueType::Bool: {
-        const bool value = shared_state.value.b;
-        consumed = commitRuntimeBool(runtime_index, value, effective_now_ms);
+    case PointValueType::Bool:
+        if (definition.backend == PointBackend::Modbus &&
+            modbus0_ != nullptr &&
+            definition.ref.modbus.port_index == 0u &&
+            definition.ref.modbus.table == ModbusTable::Coils &&
+            (definition.ref.modbus.access == ModbusAccess::Write ||
+             definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
+            const bool already_applied = command_state.command_quality == PointCommandQuality::Acked &&
+                                         command_state.last_commanded_value.b == current_state.value.b &&
+                                         current_state.quality == PointQuality::Good &&
+                                         point_catalog_->states()[catalog_index].value.b == current_state.value.b;
+            ok = already_applied ||
+                 modbus0_->writeSingleCoil(definition.ref.modbus.slave_address,
+                                           definition.ref.modbus.address,
+                                           current_state.value.b);
+            supported = true;
+        } else if (definition.backend == PointBackend::Local) {
+            ok = true;
+            supported = true;
+        }
+        command_state.last_commanded_value.b = current_state.value.b;
+        next_state.value.b = current_state.value.b;
+        break;
+
+    case PointValueType::Uint16:
+        if (definition.backend == PointBackend::Modbus &&
+            modbus0_ != nullptr &&
+            definition.ref.modbus.port_index == 0u &&
+            definition.ref.modbus.table == ModbusTable::HoldingRegisters &&
+            definition.ref.modbus.register_count == 1u &&
+            (definition.ref.modbus.access == ModbusAccess::Write ||
+             definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
+            ok = modbus0_->writeSingleRegister(definition.ref.modbus.slave_address,
+                                               definition.ref.modbus.address,
+                                               current_state.value.u16);
+            supported = true;
+        } else if (definition.backend == PointBackend::Local) {
+            ok = true;
+            supported = true;
+        }
+        command_state.last_commanded_value.u16 = current_state.value.u16;
+        next_state.value.u16 = current_state.value.u16;
+        break;
+
+    case PointValueType::Int16:
+        if (definition.backend == PointBackend::Modbus &&
+            modbus0_ != nullptr &&
+            definition.ref.modbus.port_index == 0u &&
+            definition.ref.modbus.table == ModbusTable::HoldingRegisters &&
+            definition.ref.modbus.register_count == 1u &&
+            (definition.ref.modbus.access == ModbusAccess::Write ||
+             definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
+            ok = modbus0_->writeSingleRegister(definition.ref.modbus.slave_address,
+                                               definition.ref.modbus.address,
+                                               static_cast<uint16_t>(current_state.value.i16));
+            supported = true;
+        } else if (definition.backend == PointBackend::Local) {
+            ok = true;
+            supported = true;
+        }
+        command_state.last_commanded_value.i16 = current_state.value.i16;
+        next_state.value.i16 = current_state.value.i16;
+        break;
+
+    case PointValueType::Enum:
+        if (definition.backend == PointBackend::Modbus &&
+            modbus0_ != nullptr &&
+            definition.ref.modbus.port_index == 0u &&
+            definition.ref.modbus.table == ModbusTable::HoldingRegisters &&
+            definition.ref.modbus.register_count == 1u &&
+            (definition.ref.modbus.access == ModbusAccess::Write ||
+             definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
+            ok = modbus0_->writeSingleRegister(definition.ref.modbus.slave_address,
+                                               definition.ref.modbus.address,
+                                               static_cast<uint16_t>(current_state.value.enum_value));
+            supported = true;
+        } else if (definition.backend == PointBackend::Local) {
+            ok = true;
+            supported = true;
+        }
+        command_state.last_commanded_value.enum_value = current_state.value.enum_value;
+        next_state.value.enum_value = current_state.value.enum_value;
+        break;
+
+    case PointValueType::Uint32: {
+        if (definition.backend == PointBackend::Modbus &&
+            modbus0_ != nullptr &&
+            definition.ref.modbus.port_index == 0u &&
+            definition.ref.modbus.table == ModbusTable::HoldingRegisters &&
+            definition.ref.modbus.register_count == 2u &&
+            (definition.ref.modbus.access == ModbusAccess::Write ||
+             definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
+            uint16_t registers[2] = {};
+            u32_to_registers(current_state.value.u32, registers);
+            ok = modbus0_->writeMultipleRegisters(definition.ref.modbus.slave_address,
+                                                  definition.ref.modbus.address,
+                                                  2u,
+                                                  registers);
+            supported = true;
+        } else if (definition.backend == PointBackend::Local) {
+            ok = true;
+            supported = true;
+        }
+        command_state.last_commanded_value.u32 = current_state.value.u32;
+        next_state.value.u32 = current_state.value.u32;
         break;
     }
 
-    case PointValueType::Uint16: {
-        const uint16_t value = shared_state.value.u16;
-        consumed = commitRuntimeUint16(runtime_index, value, effective_now_ms);
+    case PointValueType::Int32: {
+        if (definition.backend == PointBackend::Modbus &&
+            modbus0_ != nullptr &&
+            definition.ref.modbus.port_index == 0u &&
+            definition.ref.modbus.table == ModbusTable::HoldingRegisters &&
+            definition.ref.modbus.register_count == 2u &&
+            (definition.ref.modbus.access == ModbusAccess::Write ||
+             definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
+            uint16_t registers[2] = {};
+            u32_to_registers(static_cast<uint32_t>(current_state.value.i32), registers);
+            ok = modbus0_->writeMultipleRegisters(definition.ref.modbus.slave_address,
+                                                  definition.ref.modbus.address,
+                                                  2u,
+                                                  registers);
+            supported = true;
+        } else if (definition.backend == PointBackend::Local) {
+            ok = true;
+            supported = true;
+        }
+        command_state.last_commanded_value.i32 = current_state.value.i32;
+        next_state.value.i32 = current_state.value.i32;
         break;
     }
 
-    case PointValueType::Int16: {
-        const int16_t value = shared_state.value.i16;
-        consumed = commitRuntimeInt16(runtime_index, value, effective_now_ms);
-        break;
-    }
-
-    case PointValueType::Enum: {
-        const int32_t value = shared_state.value.enum_value;
-        consumed = commitRuntimeEnum(runtime_index, value, effective_now_ms);
+    case PointValueType::Float: {
+        if (definition.backend == PointBackend::Modbus &&
+            modbus0_ != nullptr &&
+            definition.ref.modbus.port_index == 0u &&
+            definition.ref.modbus.table == ModbusTable::HoldingRegisters &&
+            definition.ref.modbus.register_count == 2u &&
+            (definition.ref.modbus.access == ModbusAccess::Write ||
+             definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
+            uint16_t registers[2] = {};
+            u32_to_registers(float_bits(current_state.value.f32), registers);
+            ok = modbus0_->writeMultipleRegisters(definition.ref.modbus.slave_address,
+                                                  definition.ref.modbus.address,
+                                                  2u,
+                                                  registers);
+            supported = true;
+        } else if (definition.backend == PointBackend::Local) {
+            ok = true;
+            supported = true;
+        }
+        command_state.last_commanded_value.f32 = current_state.value.f32;
+        next_state.value.f32 = current_state.value.f32;
         break;
     }
 
     default:
-        break;
+        return false;
     }
 
-    return consumed;
+    if (!supported) {
+        return false;
+    }
+
+    command_state.last_command_ts_ms = now_ms;
+    command_state.pending = false;
+    if (ok) {
+        command_state.command_quality = PointCommandQuality::Acked;
+        command_state.last_ack_ts_ms = now_ms;
+        next_state.quality = PointQuality::Good;
+        next_state.last_good_update_ms = now_ms;
+    } else {
+        command_state.command_quality = PointCommandQuality::ProtocolError;
+        next_state.quality = PointQuality::BadWriteRejected;
+    }
+
+    const bool state_ok = point_catalog_->updateState(definition.id, next_state);
+    const bool command_ok = point_catalog_->updateCommandState(definition.id, command_state);
+    return ok && state_ok && command_ok;
 }
 
 uint32_t PlcCore::computeModbusPlanHash() const
@@ -366,250 +581,6 @@ void PlcCore::rebuildPollPlan()
         ++member_cursor;
         ++batch.member_count;
     }
-}
-
-bool PlcCore::commitRuntimeBool(uint16_t runtime_index, bool value, uint32_t now_ms)
-{
-    if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
-        return false;
-    }
-
-    const size_t catalog_index = runtime_publisher_->catalogIndexForRuntimeIndex(runtime_index);
-    if (catalog_index >= point_catalog_->size()) {
-        return false;
-    }
-
-    const PointDefinition& definition = point_catalog_->entries()[catalog_index];
-    const PointState& current_state = point_catalog_->states()[catalog_index];
-    const bool internal_slot_variable = is_dynamic_slot_variable_point(definition);
-    if (definition.value_type != PointValueType::Bool ||
-        (!internal_slot_variable &&
-         definition.direction != PointDirection::Output &&
-         definition.direction != PointDirection::InOut)) {
-        return false;
-    }
-
-    PointCommandState command_state = point_catalog_->commandStates()[catalog_index];
-    bool ok = false;
-    if (definition.backend == PointBackend::Modbus &&
-        modbus0_ != nullptr &&
-        definition.ref.modbus.port_index == 0u &&
-        definition.ref.modbus.table == ModbusTable::Coils &&
-        (definition.ref.modbus.access == ModbusAccess::Write ||
-         definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
-        const bool already_applied = command_state.command_quality == PointCommandQuality::Acked &&
-                                     command_state.last_commanded_value.b == value &&
-                                     current_state.quality == PointQuality::Good &&
-                                     current_state.value.b == value;
-        if (already_applied) {
-            ok = true;
-        } else {
-            ok = modbus0_->writeSingleCoil(definition.ref.modbus.slave_address,
-                                           definition.ref.modbus.address,
-                                           value);
-        }
-    } else if (definition.backend == PointBackend::Local) {
-        ok = true;
-    }
-
-    command_state.last_commanded_value.b = value;
-    command_state.last_command_ts_ms = now_ms;
-    command_state.pending = false;
-
-    PointState next_state = point_catalog_->states()[catalog_index];
-    next_state.value.b = value;
-    next_state.last_update_ms = now_ms;
-
-    if (ok) {
-        command_state.command_quality = PointCommandQuality::Acked;
-        command_state.last_ack_ts_ms = now_ms;
-        next_state.quality = PointQuality::Good;
-        next_state.last_good_update_ms = now_ms;
-    } else {
-        command_state.command_quality = PointCommandQuality::ProtocolError;
-        next_state.quality = PointQuality::BadWriteRejected;
-    }
-
-    const bool state_ok = point_catalog_->updateState(definition.id, next_state);
-    const bool command_ok = point_catalog_->updateCommandState(definition.id, command_state);
-    return ok && state_ok && command_ok;
-}
-
-bool PlcCore::commitRuntimeUint16(uint16_t runtime_index, uint16_t value, uint32_t now_ms)
-{
-    if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
-        return false;
-    }
-
-    const size_t catalog_index = runtime_publisher_->catalogIndexForRuntimeIndex(runtime_index);
-    if (catalog_index >= point_catalog_->size()) {
-        return false;
-    }
-
-    const PointDefinition& definition = point_catalog_->entries()[catalog_index];
-    const bool internal_slot_variable = is_dynamic_slot_variable_point(definition);
-    if (definition.value_type != PointValueType::Uint16 ||
-        (!internal_slot_variable &&
-         definition.direction != PointDirection::Output &&
-         definition.direction != PointDirection::InOut)) {
-        return false;
-    }
-
-    bool ok = false;
-    if (definition.backend == PointBackend::Modbus &&
-        modbus0_ != nullptr &&
-        definition.ref.modbus.port_index == 0u &&
-        definition.ref.modbus.table == ModbusTable::HoldingRegisters &&
-        definition.ref.modbus.register_count == 1u &&
-        (definition.ref.modbus.access == ModbusAccess::Write ||
-         definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
-        ok = modbus0_->writeSingleRegister(definition.ref.modbus.slave_address,
-                                           definition.ref.modbus.address,
-                                           value);
-    } else if (definition.backend == PointBackend::Local) {
-        ok = true;
-    }
-
-    PointCommandState command_state = point_catalog_->commandStates()[catalog_index];
-    command_state.last_commanded_value.u16 = value;
-    command_state.last_command_ts_ms = now_ms;
-    command_state.pending = false;
-
-    PointState next_state = point_catalog_->states()[catalog_index];
-    next_state.value.u16 = value;
-    next_state.last_update_ms = now_ms;
-
-    if (ok) {
-        command_state.command_quality = PointCommandQuality::Acked;
-        command_state.last_ack_ts_ms = now_ms;
-        next_state.quality = PointQuality::Good;
-        next_state.last_good_update_ms = now_ms;
-    } else {
-        command_state.command_quality = PointCommandQuality::ProtocolError;
-        next_state.quality = PointQuality::BadWriteRejected;
-    }
-
-    const bool state_ok = point_catalog_->updateState(definition.id, next_state);
-    const bool command_ok = point_catalog_->updateCommandState(definition.id, command_state);
-    return ok && state_ok && command_ok;
-}
-
-bool PlcCore::commitRuntimeInt16(uint16_t runtime_index, int16_t value, uint32_t now_ms)
-{
-    if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
-        return false;
-    }
-
-    const size_t catalog_index = runtime_publisher_->catalogIndexForRuntimeIndex(runtime_index);
-    if (catalog_index >= point_catalog_->size()) {
-        return false;
-    }
-
-    const PointDefinition& definition = point_catalog_->entries()[catalog_index];
-    const bool internal_slot_variable = is_dynamic_slot_variable_point(definition);
-    if (definition.value_type != PointValueType::Int16 ||
-        (!internal_slot_variable &&
-         definition.direction != PointDirection::Output &&
-         definition.direction != PointDirection::InOut)) {
-        return false;
-    }
-
-    bool ok = false;
-    if (definition.backend == PointBackend::Modbus &&
-        modbus0_ != nullptr &&
-        definition.ref.modbus.port_index == 0u &&
-        definition.ref.modbus.table == ModbusTable::HoldingRegisters &&
-        definition.ref.modbus.register_count == 1u &&
-        (definition.ref.modbus.access == ModbusAccess::Write ||
-         definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
-        ok = modbus0_->writeSingleRegister(definition.ref.modbus.slave_address,
-                                           definition.ref.modbus.address,
-                                           static_cast<uint16_t>(value));
-    } else if (definition.backend == PointBackend::Local) {
-        ok = true;
-    }
-
-    PointCommandState command_state = point_catalog_->commandStates()[catalog_index];
-    command_state.last_commanded_value.i16 = value;
-    command_state.last_command_ts_ms = now_ms;
-    command_state.pending = false;
-
-    PointState next_state = point_catalog_->states()[catalog_index];
-    next_state.value.i16 = value;
-    next_state.last_update_ms = now_ms;
-
-    if (ok) {
-        command_state.command_quality = PointCommandQuality::Acked;
-        command_state.last_ack_ts_ms = now_ms;
-        next_state.quality = PointQuality::Good;
-        next_state.last_good_update_ms = now_ms;
-    } else {
-        command_state.command_quality = PointCommandQuality::ProtocolError;
-        next_state.quality = PointQuality::BadWriteRejected;
-    }
-
-    const bool state_ok = point_catalog_->updateState(definition.id, next_state);
-    const bool command_ok = point_catalog_->updateCommandState(definition.id, command_state);
-    return ok && state_ok && command_ok;
-}
-
-bool PlcCore::commitRuntimeEnum(uint16_t runtime_index, int32_t value, uint32_t now_ms)
-{
-    if (point_catalog_ == nullptr || runtime_publisher_ == nullptr) {
-        return false;
-    }
-
-    const size_t catalog_index = runtime_publisher_->catalogIndexForRuntimeIndex(runtime_index);
-    if (catalog_index >= point_catalog_->size()) {
-        return false;
-    }
-
-    const PointDefinition& definition = point_catalog_->entries()[catalog_index];
-    const bool internal_slot_variable = is_dynamic_slot_variable_point(definition);
-    if (definition.value_type != PointValueType::Enum ||
-        (!internal_slot_variable &&
-         definition.direction != PointDirection::Output &&
-         definition.direction != PointDirection::InOut)) {
-        return false;
-    }
-
-    bool ok = false;
-    if (definition.backend == PointBackend::Modbus &&
-        modbus0_ != nullptr &&
-        definition.ref.modbus.port_index == 0u &&
-        definition.ref.modbus.table == ModbusTable::HoldingRegisters &&
-        definition.ref.modbus.register_count == 1u &&
-        (definition.ref.modbus.access == ModbusAccess::Write ||
-         definition.ref.modbus.access == ModbusAccess::ReadWrite)) {
-        ok = modbus0_->writeSingleRegister(definition.ref.modbus.slave_address,
-                                           definition.ref.modbus.address,
-                                           static_cast<uint16_t>(value));
-    } else if (definition.backend == PointBackend::Local) {
-        ok = true;
-    }
-
-    PointCommandState command_state = point_catalog_->commandStates()[catalog_index];
-    command_state.last_commanded_value.enum_value = value;
-    command_state.last_command_ts_ms = now_ms;
-    command_state.pending = false;
-
-    PointState next_state = point_catalog_->states()[catalog_index];
-    next_state.value.enum_value = value;
-    next_state.last_update_ms = now_ms;
-
-    if (ok) {
-        command_state.command_quality = PointCommandQuality::Acked;
-        command_state.last_ack_ts_ms = now_ms;
-        next_state.quality = PointQuality::Good;
-        next_state.last_good_update_ms = now_ms;
-    } else {
-        command_state.command_quality = PointCommandQuality::ProtocolError;
-        next_state.quality = PointQuality::BadWriteRejected;
-    }
-
-    const bool state_ok = point_catalog_->updateState(definition.id, next_state);
-    const bool command_ok = point_catalog_->updateCommandState(definition.id, command_state);
-    return ok && state_ok && command_ok;
 }
 
 void PlcCore::pollNextPoint()

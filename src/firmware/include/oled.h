@@ -21,10 +21,10 @@ inline constexpr uint8_t kSlotIconHeight = 12;
 inline constexpr uint8_t kSlotIconX = 108;
 inline constexpr uint8_t kSlotIconY = 0;
 inline constexpr uint32_t kSlotRefreshMs = 250u;
-inline constexpr uint32_t kRunningBlinkPeriodMs = 1000u;
 
 inline u8g2_t device = {};
 inline bool ready = false;
+inline bool oledDirty = false;
 inline char console[kConsoleLines][kConsoleCols + 1] = {};
 inline uint8_t console_count = 0u;
 
@@ -62,6 +62,15 @@ struct PlcSlotIconStatus {
 inline PlcSlotIconStatus slot_icons[kSlotIconCount] = {};
 inline ScreenId screen = ScreenId::BootConsole;
 inline uint32_t slot_refresh_deadline_ms = 0u;
+
+struct SlotStatusSnapshot {
+    bool valid = false;
+    bool engine_enabled = false;
+    uint8_t loaded_slot_count = 0u;
+    char slot_states[kPlcSlotCountV1] = {};
+};
+
+inline SlotStatusSnapshot slot_status_snapshot = {};
 
 inline char slotHexDigit(uint8_t value)
 {
@@ -154,7 +163,6 @@ inline bool refreshPlcSlotIcon(uint8_t display_index)
     }
 
     PlcSlotIconStatus next = icon;
-    const bool running_blink_on = ((millis() / kRunningBlinkPeriodMs) & 0x1u) == 0u;
     const auto* control_block = reinterpret_cast<const PlcProgramControlBlockV1*>(
         static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(icon.slot_id)));
 
@@ -176,7 +184,7 @@ inline bool refreshPlcSlotIcon(uint8_t display_index)
             next.activity_pulse = false;
         } else if (control_block->status == 2u) {
             next.state = PlcSlotIconState::Running;
-            next.activity_pulse = running_blink_on;
+            next.activity_pulse = true;
         } else {
             next.state = PlcSlotIconState::Loaded;
             next.activity_pulse = false;
@@ -242,12 +250,7 @@ inline char plcSlotStateGlyphRaw(uint8_t slot_id)
 
 inline char plcSlotStateGlyph(uint8_t slot_id)
 {
-    const char raw = plcSlotStateGlyphRaw(slot_id);
-    if (raw != 'R') {
-        return raw;
-    }
-
-    return ((millis() / kRunningBlinkPeriodMs) & 0x1u) == 0u ? 'R' : ' ';
+    return plcSlotStateGlyphRaw(slot_id);
 }
 
 inline uint8_t loadedSlotCount()
@@ -259,6 +262,45 @@ inline uint8_t loadedSlotCount()
         }
     }
     return count;
+}
+
+inline void captureSlotStatusSnapshot(SlotStatusSnapshot& snapshot)
+{
+    snapshot.valid = true;
+    snapshot.engine_enabled = plcEngineEnabled();
+    snapshot.loaded_slot_count = 0u;
+    for (uint16_t slot_id = 0u; slot_id < kPlcSlotCountV1; ++slot_id) {
+        const char state = plcSlotStateGlyphRaw(static_cast<uint8_t>(slot_id));
+        snapshot.slot_states[slot_id] = state;
+        if (state != '-') {
+            snapshot.loaded_slot_count += 1u;
+        }
+    }
+}
+
+inline bool slotStatusSnapshotEquals(const SlotStatusSnapshot& lhs, const SlotStatusSnapshot& rhs)
+{
+    if (lhs.valid != rhs.valid ||
+        lhs.engine_enabled != rhs.engine_enabled ||
+        lhs.loaded_slot_count != rhs.loaded_slot_count) {
+        return false;
+    }
+
+    return std::memcmp(lhs.slot_states, rhs.slot_states, sizeof(lhs.slot_states)) == 0;
+}
+
+inline void updateSlotStatusDirtyFlag()
+{
+    if (!ready || screen != ScreenId::SlotStatus) {
+        return;
+    }
+
+    SlotStatusSnapshot next = {};
+    captureSlotStatusSnapshot(next);
+    if (!slotStatusSnapshotEquals(slot_status_snapshot, next)) {
+        slot_status_snapshot = next;
+        oledDirty = true;
+    }
 }
 
 inline void formatBootStepLines(const char* step,
@@ -320,7 +362,9 @@ inline void drawSlotStatusScreen(uint8_t nodenet_addr)
                         "PLC:%s NN:%02X %u/16",
                         plcEngineEnabled() ? "ON" : "OFF",
                         static_cast<unsigned>(nodenet_addr),
-                        static_cast<unsigned>(loadedSlotCount()));
+                        static_cast<unsigned>(slot_status_snapshot.valid
+                                                  ? slot_status_snapshot.loaded_slot_count
+                                                  : loadedSlotCount()));
     u8g2_SetDrawColor(&device, 1);
     u8g2_DrawBox(&device, 0, 0, 128, 12);
     u8g2_SetDrawColor(&device, 0);
@@ -344,6 +388,7 @@ inline void drawSlotStatusScreen(uint8_t nodenet_addr)
     }
 
     u8g2_SendBuffer(&device);
+    oledDirty = false;
 }
 
 inline void showBootProgress(const char* step, uint8_t percent)
@@ -388,23 +433,26 @@ inline void showBootProgress(const char* step, uint8_t percent)
     (void)std::snprintf(line, sizeof(line), "%3u%%", static_cast<unsigned>(percent));
     u8g2_DrawStr(&device, 48, 62, line);
     u8g2_SendBuffer(&device);
+    oledDirty = false;
 }
 
 inline void showSlotStatusScreen(uint8_t nodenet_addr)
 {
     screen = ScreenId::SlotStatus;
-    slot_refresh_deadline_ms = millis();
+    slot_status_snapshot = {};
+    captureSlotStatusSnapshot(slot_status_snapshot);
+    oledDirty = true;
     drawSlotStatusScreen(nodenet_addr);
 }
 
 inline void refreshScreenIfDue(uint32_t now_ms, uint8_t nodenet_addr)
 {
+    (void)now_ms;
     if (screen == ScreenId::SlotStatus) {
-        if (static_cast<int32_t>(now_ms - slot_refresh_deadline_ms) < 0) {
-            return;
+        updateSlotStatusDirtyFlag();
+        if (oledDirty) {
+            drawSlotStatusScreen(nodenet_addr);
         }
-        drawSlotStatusScreen(nodenet_addr);
-        slot_refresh_deadline_ms = now_ms + kSlotRefreshMs;
         return;
     }
 
@@ -420,6 +468,8 @@ inline bool init(uint8_t addr7 = 0x3C)
     u8g2_ClearBuffer(&device);
     u8g2_SendBuffer(&device);
     ready = true;
+    oledDirty = false;
+    slot_status_snapshot = {};
     slot_refresh_deadline_ms = millis();
     return true;
 }

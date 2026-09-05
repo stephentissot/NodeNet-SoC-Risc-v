@@ -33,11 +33,8 @@ static const PointState* point_state_storage_const() {
     return reinterpret_cast<const PointState*>(static_cast<uintptr_t>(kPointStateSdramBase));
 }
 
-static SDRAM_DATA PointDefinition g_slot_variable_scratch_definitions[PointCatalog::kMaxPoints];
-static SDRAM_DATA PointDefinition g_point_catalog_scratch_entries[PointCatalog::kMaxPoints];
-static SDRAM_DATA PointCommandState g_point_catalog_scratch_command_states[PointCatalog::kMaxPoints];
-static SDRAM_DATA PointCatalog::PlcPointMeta g_point_catalog_scratch_plc_meta[PointCatalog::kMaxPoints];
-static SDRAM_DATA PointState g_point_catalog_scratch_states[PointCatalog::kMaxPoints];
+static PointDefinition* g_slot_variable_scratch_definitions = nullptr;
+static size_t g_slot_variable_scratch_capacity = 0u;
 
 static bool is_ascii_digit(char c) {
     return c >= '0' && c <= '9';
@@ -101,12 +98,9 @@ static bool is_transient_slot_variable(const PointIdentity& id) {
         "faultCode",
         "faultInfo",
         "bytecodeSize",
-        "source",
-        "programType",
+        "loadEpoch",
+        "objectSize",
         "paramsSummary",
-        "inputChannel",
-        "outputChannel",
-        "runtimeMapOk",
         "start",
         "stop",
         "reset",
@@ -381,7 +375,6 @@ static bool deserialize_persisted_entry(PointDefinition& definition, JsonVariant
 
 PointCatalog::PointCatalog() {
     resetIndex();
-    resetDirtyStateTracking();
 }
 
 void PointCatalog::clear() {
@@ -395,7 +388,6 @@ void PointCatalog::clear() {
     std::memset(browse_devices_, 0, sizeof(browse_devices_));
     std::memset(browse_feature_indices_, 0, sizeof(browse_feature_indices_));
     resetIndex();
-    requestRuntimeFullSync();
 }
 
 size_t PointCatalog::size() const {
@@ -414,7 +406,24 @@ const PointCommandState* PointCatalog::commandStates() const {
     return command_states_;
 }
 
-PointDefinition* PointCatalog::slotVariableDefinitionScratch() {
+PointDefinition* PointCatalog::slotVariableDefinitionScratch(size_t required_count) {
+    if (required_count == 0u) {
+        required_count = 1u;
+    }
+
+    if (g_slot_variable_scratch_capacity < required_count) {
+        PointDefinition* next = static_cast<PointDefinition*>(
+            realloc(g_slot_variable_scratch_definitions, sizeof(PointDefinition) * required_count));
+        if (next == nullptr) {
+            return nullptr;
+        }
+        g_slot_variable_scratch_definitions = next;
+        g_slot_variable_scratch_capacity = required_count;
+    }
+
+    std::memset(g_slot_variable_scratch_definitions,
+                0,
+                sizeof(PointDefinition) * g_slot_variable_scratch_capacity);
     return g_slot_variable_scratch_definitions;
 }
 
@@ -457,13 +466,21 @@ const PointCatalog::BrowseDeviceMeta& PointCatalog::browseDeviceMeta(size_t inde
 }
 
 const char* PointCatalog::browseFeatureName(const BrowseDeviceMeta& meta, size_t feature_offset) const {
-    const size_t feature_index = static_cast<size_t>(meta.feature_start) + feature_offset;
-    if (feature_offset >= meta.feature_count || feature_index >= browse_feature_count_) {
+    if (feature_offset >= meta.feature_count) {
         return nullptr;
     }
 
-    const uint16_t catalog_index = browse_feature_indices_[feature_index];
-    return catalog_index < count_ ? entries_[catalog_index].id.feature : nullptr;
+    const size_t feature_index = static_cast<size_t>(meta.feature_start) + feature_offset;
+    if (feature_index >= browse_feature_count_) {
+        return nullptr;
+    }
+
+    const size_t catalog_index = browse_feature_indices_[feature_index];
+    if (catalog_index >= count_) {
+        return nullptr;
+    }
+
+    return entries_[catalog_index].id.feature;
 }
 
 PointState* PointCatalog::findState(const PointIdentity& id) {
@@ -487,7 +504,7 @@ const PointCommandState* PointCatalog::findCommandState(const PointIdentity& id)
 }
 
 void PointCatalog::beginBatchUpdate() {
-    ++batch_update_depth_;
+    batch_update_depth_ += 1u;
 }
 
 void PointCatalog::endBatchUpdate() {
@@ -495,33 +512,23 @@ void PointCatalog::endBatchUpdate() {
         return;
     }
 
-    --batch_update_depth_;
-    if (batch_update_depth_ != 0u) {
-        return;
-    }
-
-    if (batch_browse_rebuild_pending_) {
-        rebuildBrowseIndex();
+    batch_update_depth_ -= 1u;
+    if (batch_update_depth_ == 0u && batch_browse_rebuild_pending_) {
         batch_browse_rebuild_pending_ = false;
-    }
-
-    if (batch_runtime_full_sync_pending_) {
-        requestRuntimeFullSync();
-        batch_runtime_full_sync_pending_ = false;
+        rebuildBrowseIndex();
     }
 }
 
 bool PointCatalog::upsert(const PointDefinition& definition) {
     const size_t existing_index = lookupIndex(definition.id);
     if (existing_index < count_) {
-        copyDefinition(entries_[existing_index], definition);
+        entries_[existing_index] = definition;
         plc_point_meta_[existing_index] = classifyPlcPointMeta(definition);
+        rebuildIndex();
         if (batch_update_depth_ != 0u) {
             batch_browse_rebuild_pending_ = true;
-            batch_runtime_full_sync_pending_ = true;
         } else {
             rebuildBrowseIndex();
-            requestRuntimeFullSync();
         }
         return true;
     }
@@ -530,18 +537,16 @@ bool PointCatalog::upsert(const PointDefinition& definition) {
         return false;
     }
 
-    copyDefinition(entries_[count_], definition);
-    point_state_storage()[count_] = {};
+    entries_[count_] = definition;
     command_states_[count_] = {};
     plc_point_meta_[count_] = classifyPlcPointMeta(definition);
-    insertIndex(entries_[count_].id, count_);
+    point_state_storage()[count_] = {};
     count_ += 1u;
+    rebuildIndex();
     if (batch_update_depth_ != 0u) {
         batch_browse_rebuild_pending_ = true;
-        batch_runtime_full_sync_pending_ = true;
     } else {
         rebuildBrowseIndex();
-        requestRuntimeFullSync();
     }
     return true;
 }
@@ -552,21 +557,25 @@ bool PointCatalog::remove(const PointIdentity& id) {
         return false;
     }
 
-    for (size_t move = index + 1u; move < count_; ++move) {
-        entries_[move - 1u] = entries_[move];
-        point_state_storage()[move - 1u] = point_state_storage()[move];
-        command_states_[move - 1u] = command_states_[move];
-        plc_point_meta_[move - 1u] = plc_point_meta_[move];
+    const size_t moved_count = count_ - index - 1u;
+    if (moved_count != 0u) {
+        std::memmove(&entries_[index], &entries_[index + 1u], moved_count * sizeof(PointDefinition));
+        std::memmove(&command_states_[index], &command_states_[index + 1u], moved_count * sizeof(PointCommandState));
+        std::memmove(&plc_point_meta_[index], &plc_point_meta_[index + 1u], moved_count * sizeof(PlcPointMeta));
+        std::memmove(&point_state_storage()[index], &point_state_storage()[index + 1u], moved_count * sizeof(PointState));
     }
 
     entries_[count_ - 1u] = {};
-    point_state_storage()[count_ - 1u] = {};
     command_states_[count_ - 1u] = {};
     plc_point_meta_[count_ - 1u] = {};
+    point_state_storage()[count_ - 1u] = {};
     count_ -= 1u;
     rebuildIndex();
-    rebuildBrowseIndex();
-    requestRuntimeFullSync();
+    if (batch_update_depth_ != 0u) {
+        batch_browse_rebuild_pending_ = true;
+    } else {
+        rebuildBrowseIndex();
+    }
     return true;
 }
 
@@ -579,62 +588,87 @@ bool PointCatalog::replaceSlotVariableDefinitions(uint16_t slot_id,
         return false;
     }
 
-    std::memset(g_point_catalog_scratch_entries, 0, sizeof(g_point_catalog_scratch_entries));
-    std::memset(g_point_catalog_scratch_command_states, 0, sizeof(g_point_catalog_scratch_command_states));
-    std::memset(g_point_catalog_scratch_plc_meta, 0, sizeof(g_point_catalog_scratch_plc_meta));
-    std::memset(g_point_catalog_scratch_states, 0, sizeof(g_point_catalog_scratch_states));
-
-    size_t preserved_count = 0u;
     size_t existing_slot_var_count = 0u;
+    size_t matched_definition_count = 0u;
+    bool layout_changed = false;
     for (size_t index = 0u; index < count_; ++index) {
-        if (is_slot_variable_point(entries_[index], plc_point_meta_[index], slot_id)) {
-            ++existing_slot_var_count;
+        if (!is_slot_variable_point(entries_[index], plc_point_meta_[index], slot_id)) {
             continue;
         }
 
-        g_point_catalog_scratch_entries[preserved_count] = entries_[index];
-        g_point_catalog_scratch_command_states[preserved_count] = command_states_[index];
-        g_point_catalog_scratch_plc_meta[preserved_count] = plc_point_meta_[index];
-        g_point_catalog_scratch_states[preserved_count] = point_state_storage()[index];
-        ++preserved_count;
+        if (matched_definition_count >= definition_count ||
+            !point_definitions_equal(entries_[index], definitions[matched_definition_count])) {
+            layout_changed = true;
+        }
+        ++existing_slot_var_count;
+        ++matched_definition_count;
     }
 
-    if ((preserved_count + definition_count) > kMaxPoints) {
+    if ((count_ - existing_slot_var_count + definition_count) > kMaxPoints) {
         return false;
     }
 
-    bool layout_changed = existing_slot_var_count != definition_count;
-    for (size_t definition_index = 0u; definition_index < definition_count; ++definition_index) {
-        const PointDefinition& definition = definitions[definition_index];
-        const size_t next_index = preserved_count + definition_index;
-        g_point_catalog_scratch_entries[next_index] = definition;
-        g_point_catalog_scratch_plc_meta[next_index] = classifyPlcPointMeta(definition);
-
-        const size_t existing_index = lookupIndex(definition.id);
-        if (existing_index < count_) {
-            g_point_catalog_scratch_states[next_index] = point_state_storage()[existing_index];
-            g_point_catalog_scratch_command_states[next_index] = command_states_[existing_index];
-            if (!layout_changed && !point_definitions_equal(entries_[existing_index], definition)) {
-                layout_changed = true;
-            }
-        } else {
-            layout_changed = true;
-        }
-    }
-
+    layout_changed = layout_changed || (existing_slot_var_count != definition_count);
     if (!layout_changed) {
-        changed_out = false;
         return true;
     }
 
-    std::memcpy(entries_, g_point_catalog_scratch_entries, sizeof(entries_));
-    std::memcpy(command_states_, g_point_catalog_scratch_command_states, sizeof(command_states_));
-    std::memcpy(plc_point_meta_, g_point_catalog_scratch_plc_meta, sizeof(plc_point_meta_));
-    std::memcpy(point_state_storage(), g_point_catalog_scratch_states, sizeof(g_point_catalog_scratch_states));
-    count_ = preserved_count + definition_count;
+    size_t compacted_count = 0u;
+    for (size_t index = 0u; index < count_; ++index) {
+        if (is_slot_variable_point(entries_[index], plc_point_meta_[index], slot_id)) {
+            continue;
+        }
+
+        if (compacted_count != index) {
+            entries_[compacted_count] = entries_[index];
+            command_states_[compacted_count] = command_states_[index];
+            plc_point_meta_[compacted_count] = plc_point_meta_[index];
+            point_state_storage()[compacted_count] = point_state_storage()[index];
+        }
+        ++compacted_count;
+    }
+
+    size_t insert_position = compacted_count;
+    for (size_t index = 0u; index < compacted_count; ++index) {
+        if (plc_point_meta_[index].has_slot &&
+            plc_point_meta_[index].point_kind == PlcPointKind::SlotOther &&
+            plc_point_meta_[index].slot_id > slot_id) {
+            insert_position = index;
+            break;
+        }
+    }
+
+    if (insert_position < compacted_count && definition_count != 0u) {
+        const size_t moved_count = compacted_count - insert_position;
+        std::memmove(&entries_[insert_position + definition_count],
+                     &entries_[insert_position],
+                     moved_count * sizeof(PointDefinition));
+        std::memmove(&command_states_[insert_position + definition_count],
+                     &command_states_[insert_position],
+                     moved_count * sizeof(PointCommandState));
+        std::memmove(&plc_point_meta_[insert_position + definition_count],
+                     &plc_point_meta_[insert_position],
+                     moved_count * sizeof(PlcPointMeta));
+        std::memmove(&point_state_storage()[insert_position + definition_count],
+                     &point_state_storage()[insert_position],
+                     moved_count * sizeof(PointState));
+    }
+
+    for (size_t definition_index = 0u; definition_index < definition_count; ++definition_index) {
+        const size_t next_index = insert_position + definition_index;
+        entries_[next_index] = definitions[definition_index];
+        command_states_[next_index] = {};
+        plc_point_meta_[next_index] = classifyPlcPointMeta(definitions[definition_index]);
+        point_state_storage()[next_index] = {};
+    }
+
+    count_ = compacted_count + definition_count;
     rebuildIndex();
-    rebuildBrowseIndex();
-    requestRuntimeFullSync();
+    if (batch_update_depth_ != 0u) {
+        batch_browse_rebuild_pending_ = true;
+    } else {
+        rebuildBrowseIndex();
+    }
     changed_out = true;
     return true;
 }
@@ -646,7 +680,6 @@ bool PointCatalog::updateState(const PointIdentity& id, const PointState& state)
     }
 
     point_state_storage()[index] = state;
-    markStateDirty(index);
     return true;
 }
 
@@ -706,25 +739,15 @@ bool PointCatalog::loadFromJson(const char* json) {
 }
 
 bool PointCatalog::popDirtyStateIndex(size_t& index_out) {
-    if (dirty_state_queue_count_ == 0u) {
-        return false;
-    }
-
-    const uint16_t index = dirty_state_queue_[dirty_state_queue_head_];
-    dirty_state_queue_head_ = (dirty_state_queue_head_ + 1u) % kDirtyStateQueueCapacity;
-    --dirty_state_queue_count_;
-    setDirtyStateFlag(index, false);
-    index_out = index;
+    (void)index_out;
     return true;
 }
 
 bool PointCatalog::runtimeFullSyncRequired() const {
-    return runtime_full_sync_required_;
+    return false;
 }
 
 void PointCatalog::acknowledgeRuntimeFullSync() {
-    runtime_full_sync_required_ = false;
-    resetDirtyStateTracking();
 }
 
 bool PointCatalog::saveToJson(char* out, size_t out_size) const {
@@ -751,56 +774,23 @@ bool PointCatalog::saveToJson(char* out, size_t out_size) const {
 }
 
 void PointCatalog::resetDirtyStateTracking() {
-    std::memset(dirty_state_queue_, 0, sizeof(dirty_state_queue_));
-    std::memset(dirty_state_flags_, 0, sizeof(dirty_state_flags_));
-    dirty_state_queue_head_ = 0u;
-    dirty_state_queue_tail_ = 0u;
-    dirty_state_queue_count_ = 0u;
 }
 
 void PointCatalog::requestRuntimeFullSync() {
-    runtime_full_sync_required_ = true;
-    resetDirtyStateTracking();
 }
 
 void PointCatalog::markStateDirty(size_t index) {
-    if (runtime_full_sync_required_ || index >= kMaxPoints || dirtyStateFlag(index)) {
-        return;
-    }
-
-    if (dirty_state_queue_count_ >= kDirtyStateQueueCapacity) {
-        requestRuntimeFullSync();
-        return;
-    }
-
-    dirty_state_queue_[dirty_state_queue_tail_] = static_cast<uint16_t>(index);
-    dirty_state_queue_tail_ = (dirty_state_queue_tail_ + 1u) % kDirtyStateQueueCapacity;
-    ++dirty_state_queue_count_;
-    setDirtyStateFlag(index, true);
+    (void)index;
 }
 
 bool PointCatalog::dirtyStateFlag(size_t index) const {
-    if (index >= kMaxPoints) {
-        return false;
-    }
-
-    const size_t byte_index = index / 8u;
-    const uint8_t bit_mask = static_cast<uint8_t>(1u << (index % 8u));
-    return (dirty_state_flags_[byte_index] & bit_mask) != 0u;
+    (void)index;
+    return false;
 }
 
 void PointCatalog::setDirtyStateFlag(size_t index, bool dirty) {
-    if (index >= kMaxPoints) {
-        return;
-    }
-
-    const size_t byte_index = index / 8u;
-    const uint8_t bit_mask = static_cast<uint8_t>(1u << (index % 8u));
-    if (dirty) {
-        dirty_state_flags_[byte_index] |= bit_mask;
-    } else {
-        dirty_state_flags_[byte_index] &= static_cast<uint8_t>(~bit_mask);
-    }
+    (void)index;
+    (void)dirty;
 }
 
 bool PointCatalog::identitiesEqual(const PointIdentity& lhs, const PointIdentity& rhs) {

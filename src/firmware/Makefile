@@ -74,11 +74,13 @@ FLASHDB_CORE_OBJS=$(BUILD)/fdb.o $(BUILD)/fdb_kvdb.o $(BUILD)/fdb_utils.o
 SDRAM_DIR=lib/sdram
 SDRAM_SRC=$(SDRAM_DIR)/sdram.cpp
 SDRAM_OBJ=$(BUILD)/sdram_lib.o
+SYSCALL_STUBS_SRC=syscalls.cpp
+SYSCALL_STUBS_OBJ=$(BUILD)/syscalls.o
 NODENET_DIR=lib/nodenet
 NODENET_SRC=lib/nodenet/nodenet.cpp
 NODENET_OBJ=$(BUILD)/nodenet.o
 
-DEPS=$(BUILD)/start.d $(BUILD)/app_start.d $(BUILD)/boot_start.d $(MAIN_OBJ:.o=.d) $(NODENET_OBJ:.o=.d) $(NODENETCORE_OBJ:.o=.d) $(PLC_CATALOG_OBJ:.o=.d) $(PLC_CORE_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(BUILD)/Serial.d $(BUILD)/ModbusMaster.d $(BUILD)/flash.d $(BUILD)/flashdb_port.d $(SDRAM_OBJ:.o=.d) $(BUILD)/fdb.d $(BUILD)/fdb_kvdb.d $(BUILD)/fdb_utils.d $(U8G2_OBJS:.o=.d)
+DEPS=$(BUILD)/start.d $(BUILD)/app_start.d $(BUILD)/boot_start.d $(MAIN_OBJ:.o=.d) $(NODENET_OBJ:.o=.d) $(NODENETCORE_OBJ:.o=.d) $(PLC_CATALOG_OBJ:.o=.d) $(PLC_CORE_OBJ:.o=.d) $(BUILD)/u8g2_hal.d $(BUILD)/memoryLab.d $(BUILD)/i2c.d $(BUILD)/Serial.d $(BUILD)/ModbusMaster.d $(BUILD)/flash.d $(BUILD)/flashdb_port.d $(SDRAM_OBJ:.o=.d) $(SYSCALL_STUBS_OBJ:.o=.d) $(BUILD)/fdb.d $(BUILD)/fdb_kvdb.d $(BUILD)/fdb_utils.d $(U8G2_OBJS:.o=.d)
 
 CFLAGS=-march=rv32im -mabi=ilp32 \
        -Wall \
@@ -146,11 +148,11 @@ APP_ELF = $(BUILD)/$(APP_TARGET).elf
 APP_BIN = $(BUILD)/$(APP_TARGET).bin
 APP_IMG = $(BUILD)/$(APP_TARGET).img
 
-all: $(BUILD)/$(TARGET).hex firmware-stats
+all: firmware-image firmware-app-stats
 
-.PHONY: bootloader-build firmware-app-build firmware-image
+.PHONY: bootloader-build firmware-app-build firmware-image legacy-firmware-build
 
-.PHONY: firmware-stats
+.PHONY: firmware-stats firmware-app-stats
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -158,7 +160,7 @@ $(BUILD):
 $(U8G2_CACHE):
 	mkdir -p $@
 
-$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(NODENET_OBJ) $(NODENETCORE_OBJ) $(PLC_CATALOG_OBJ) $(PLC_CORE_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(MODBUS_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_OBJ) $(U8G2_LIB) | $(BUILD)
+$(BUILD)/$(TARGET).elf: $(BUILD)/start.o $(MAIN_OBJ) $(NODENET_OBJ) $(NODENETCORE_OBJ) $(PLC_CATALOG_OBJ) $(PLC_CORE_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(MODBUS_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_OBJ) $(SYSCALL_STUBS_OBJ) $(U8G2_LIB) | $(BUILD)
 	$(CROSS)g++ $(LDFLAGS) $^ -o $@
 
 $(BUILD)/start.o: start.S | $(BUILD)
@@ -212,6 +214,9 @@ $(BUILD)/fdb_utils.o: $(FLASHDB_SRC_DIR)/fdb_utils.c | $(BUILD)
 $(SDRAM_OBJ): $(SDRAM_SRC) | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
+$(SYSCALL_STUBS_OBJ): $(SYSCALL_STUBS_SRC) | $(BUILD)
+	$(CROSS)g++ -x c++ $(CXXFLAGS) -c $< -o $@
+
 # u8g2 C sources are cached outside $(BUILD) so a normal clean does not force
 # recompiling the whole graphics library on the next firmware rebuild.
 $(U8G2_CACHE)/%.o: $(U8G2_DIR)/%.c | $(U8G2_CACHE)
@@ -229,7 +234,9 @@ $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 $(FW_BIN): $(BUILD)/$(TARGET).elf
 	$(CROSS)objcopy -O binary $< $@
 
-$(APP_ELF): $(APP_START_OBJ) $(MAIN_OBJ) $(NODENET_OBJ) $(NODENETCORE_OBJ) $(PLC_CATALOG_OBJ) $(PLC_CORE_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(MODBUS_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_OBJ) $(U8G2_LIB) | $(BUILD)
+legacy-firmware-build: $(BUILD)/$(TARGET).hex firmware-stats
+
+$(APP_ELF): $(APP_START_OBJ) $(MAIN_OBJ) $(NODENET_OBJ) $(NODENETCORE_OBJ) $(PLC_CATALOG_OBJ) $(PLC_CORE_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SERIAL_OBJ) $(MODBUS_OBJ) $(FLASH_OBJ) $(FLASHDB_PORT_OBJ) $(FLASHDB_CORE_OBJS) $(SDRAM_OBJ) $(SYSCALL_STUBS_OBJ) $(U8G2_LIB) | $(BUILD)
 	$(CROSS)g++ -march=rv32im -mabi=ilp32 -T $(APP_LINKER) -nostartfiles -Wl,--gc-sections --specs=nano.specs --specs=nosys.specs $^ -o $@
 
 $(APP_START_OBJ): $(APP_START_SRC) | $(BUILD)
@@ -249,13 +256,21 @@ firmware-app-build: $(APP_ELF)
 
 firmware-image: $(APP_IMG)
 
+firmware-app-stats: $(APP_ELF)
+	@set -- $$($(CROSS)size $(APP_ELF) | tail -n 1); \
+		text=$$1; data=$$2; bss=$$3; \
+		total=$$((text + data + bss)); sdram_total=8388608; \
+		sdram_pct=$$(awk "BEGIN { printf \"%.2f\", ($$total*100)/$$sdram_total }"); \
+		echo "[APP] ELF text/data/bss: $$text/$$data/$$bss bytes"; \
+		echo "[APP] SDRAM footprint (.text + .data + .bss): $$total / $$sdram_total bytes ($$sdram_pct%)"
+
 $(BOOT_OBJ): $(BOOT_SRC) | $(BUILD)
 	$(CROSS)g++ $(CXXFLAGS) -c $< -o $@
 
 $(BOOT_START_OBJ): $(BOOT_START_SRC) | $(BUILD)
 	$(CROSS)gcc $(CFLAGS) -c $< -o $@
 
-$(BOOT_ELF): $(BOOT_START_OBJ) $(BOOT_OBJ) $(BOOT_FLASH_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(U8G2_LIB) | $(BUILD)
+$(BOOT_ELF): $(BOOT_START_OBJ) $(BOOT_OBJ) $(BOOT_FLASH_OBJ) $(BUILD)/u8g2_hal.o $(I2C_OBJ) $(SYSCALL_STUBS_OBJ) $(U8G2_LIB) | $(BUILD)
 	$(CROSS)g++ $(BOOT_LDFLAGS) $^ -o $@
 
 $(BOOT_HEX): $(BOOT_ELF)

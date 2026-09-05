@@ -74,9 +74,9 @@ module wb_flash #(
     reg [8:0] page_buf_count;
     reg       page_buf_overflow;
 
-    reg [7:0] tx_mem [0:TX_MAX_BYTES-1];
     reg [8:0] tx_len;
     reg [8:0] tx_idx;
+    reg [7:0] tx_stream_byte;
 
     reg [8:0] read_sink_count;
 
@@ -118,6 +118,69 @@ module wb_flash #(
     );
 
     assign spi_cs_n_o = spi_cs_n;
+
+    always @* begin
+        tx_stream_byte = 8'h00;
+
+        case (op_phase)
+            PH_WREN: begin
+                tx_stream_byte = CMD_WREN;
+            end
+
+            PH_CMD: begin
+                case (op_kind)
+                    OP_READ: begin
+                        case (tx_idx)
+                            9'd0: tx_stream_byte = CMD_READ;
+                            9'd1: tx_stream_byte = address[23:16];
+                            9'd2: tx_stream_byte = address[15:8];
+                            9'd3: tx_stream_byte = address[7:0];
+                            default: tx_stream_byte = 8'h00;
+                        endcase
+                    end
+
+                    OP_UID: begin
+                        tx_stream_byte = (tx_idx == 9'd0) ? CMD_RDUID : 8'h00;
+                    end
+
+                    OP_WRITE: begin
+                        case (tx_idx)
+                            9'd0: tx_stream_byte = CMD_PP;
+                            9'd1: tx_stream_byte = address[23:16];
+                            9'd2: tx_stream_byte = address[15:8];
+                            9'd3: tx_stream_byte = address[7:0];
+                            default: tx_stream_byte = page_buffer[tx_idx - 9'd4];
+                        endcase
+                    end
+
+                    OP_ERASE: begin
+                        case (tx_idx)
+                            9'd0: tx_stream_byte = CMD_SE;
+                            9'd1: tx_stream_byte = address[23:16];
+                            9'd2: tx_stream_byte = address[15:8];
+                            9'd3: tx_stream_byte = address[7:0];
+                            default: tx_stream_byte = 8'h00;
+                        endcase
+                    end
+
+                    default: begin
+                        tx_stream_byte = 8'h00;
+                    end
+                endcase
+            end
+
+            PH_POLL: begin
+                case (tx_idx)
+                    9'd0: tx_stream_byte = CMD_RDSR;
+                    default: tx_stream_byte = 8'h00;
+                endcase
+            end
+
+            default: begin
+                tx_stream_byte = 8'h00;
+            end
+        endcase
+    end
 
     always @(posedge clk_i) begin
         if (rst_i) begin
@@ -163,13 +226,6 @@ module wb_flash #(
 
                                 if (dat_i[0]) begin
                                     // READ page: 0x03 + A23..A0 + 256 dummy bytes
-                                    tx_mem[0] <= CMD_READ;
-                                    tx_mem[1] <= address[23:16];
-                                    tx_mem[2] <= address[15:8];
-                                    tx_mem[3] <= address[7:0];
-                                    for (integer i = 0; i < PAGE_SIZE; i = i + 1) begin
-                                        tx_mem[4 + i] <= 8'h00;
-                                    end
                                     tx_len <= 9'd260;
                                     tx_idx <= 9'd0;
                                     read_sink_count <= 9'd0;
@@ -181,19 +237,6 @@ module wb_flash #(
                                     state <= ST_SEND;
                                 end else if (dat_i[3]) begin
                                     // Read 64-bit factory unique ID: 0x4B + 4 dummy bytes + 8 UID bytes
-                                    tx_mem[0] <= CMD_RDUID;
-                                    tx_mem[1] <= 8'h00;
-                                    tx_mem[2] <= 8'h00;
-                                    tx_mem[3] <= 8'h00;
-                                    tx_mem[4] <= 8'h00;
-                                    tx_mem[5] <= 8'h00;
-                                    tx_mem[6] <= 8'h00;
-                                    tx_mem[7] <= 8'h00;
-                                    tx_mem[8] <= 8'h00;
-                                    tx_mem[9] <= 8'h00;
-                                    tx_mem[10] <= 8'h00;
-                                    tx_mem[11] <= 8'h00;
-                                    tx_mem[12] <= 8'h00;
                                     tx_len <= 9'd13;
                                     tx_idx <= 9'd0;
                                     read_sink_count <= 9'd0;
@@ -205,7 +248,6 @@ module wb_flash #(
                                     state <= ST_SEND;
                                 end else if (dat_i[1]) begin
                                     // WRITE page: WREN, then PP + A23..A0 + 256 data, then poll busy
-                                    tx_mem[0] <= CMD_WREN;
                                     tx_len <= 9'd1;
                                     tx_idx <= 9'd0;
                                     read_sink_count <= 9'd0;
@@ -217,7 +259,6 @@ module wb_flash #(
                                     state <= ST_SEND;
                                 end else if (dat_i[2]) begin
                                     // ERASE sector: WREN, then 0x20 + A23..A0, then poll busy
-                                    tx_mem[0] <= CMD_WREN;
                                     tx_len <= 9'd1;
                                     tx_idx <= 9'd0;
                                     read_sink_count <= 9'd0;
@@ -291,7 +332,7 @@ module wb_flash #(
             end
 
             if (send_req && tx_ready && (tx_idx < tx_len)) begin
-                tx_byte_reg <= tx_mem[tx_idx];
+                tx_byte_reg <= tx_stream_byte;
                 tx_dv <= 1'b1;
                 tx_idx <= tx_idx + 9'd1;
                 send_started <= 1'b1;
@@ -356,13 +397,6 @@ module wb_flash #(
                     end else if (op_kind == OP_WRITE) begin
                         // Stage progression: WREN -> PP frame -> RDSR polling.
                         if (op_phase == PH_WREN) begin
-                            tx_mem[0] <= CMD_PP;
-                            tx_mem[1] <= address[23:16];
-                            tx_mem[2] <= address[15:8];
-                            tx_mem[3] <= address[7:0];
-                            for (integer j = 0; j < PAGE_SIZE; j = j + 1) begin
-                                tx_mem[4 + j] <= page_buffer[j];
-                            end
                             tx_len <= 9'd260;
                             tx_idx <= 9'd0;
                             read_sink_count <= 9'd0;
@@ -377,10 +411,6 @@ module wb_flash #(
                     end else if (op_kind == OP_ERASE) begin
                         // Stage progression: WREN -> SE frame -> RDSR polling.
                         if (op_phase == PH_WREN) begin
-                            tx_mem[0] <= CMD_SE;
-                            tx_mem[1] <= address[23:16];
-                            tx_mem[2] <= address[15:8];
-                            tx_mem[3] <= address[7:0];
                             tx_len <= 9'd4;
                             tx_idx <= 9'd0;
                             read_sink_count <= 9'd0;
@@ -396,9 +426,6 @@ module wb_flash #(
                 end
 
                 ST_POLL_REQ: begin
-                    tx_mem[0] <= CMD_RDSR;
-                    tx_mem[1] <= 8'h00;
-                    tx_mem[2] <= 8'h00;
                     tx_len <= 9'd3;
                     tx_idx <= 9'd0;
                     read_sink_count <= 9'd0;

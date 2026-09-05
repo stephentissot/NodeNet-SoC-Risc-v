@@ -27,7 +27,7 @@ namespace BigSisterNodeNet.Plc
             return DisassembleBytecode(codeBytes, null);
         }
 
-        public static string DisassembleBytecode(byte[] codeBytes, Func<ushort, string> operandFormatter)
+        public static string DisassembleBytecode(byte[] codeBytes, Func<uint, string> operandFormatter)
         {
             if (codeBytes == null)
             {
@@ -154,13 +154,13 @@ namespace BigSisterNodeNet.Plc
 
             builder.Append(BuildInstructionListing(result.CodeBytes,
                                                    result.Relocations,
-                                                   symbolIndex => ResolveObjectSymbolName(result.Symbols, symbolIndex)));
+                                                   symbolIndex => ResolveObjectSymbolName(result.Symbols, checked((ushort)symbolIndex))));
             return builder.ToString().TrimEnd();
         }
 
         private static string BuildInstructionListing(byte[] codeBytes,
                                                       IList<PlcAssemblyRelocation> relocations,
-                                                      Func<ushort, string> operandFormatter)
+                                                      Func<uint, string> operandFormatter)
         {
             var builder = new StringBuilder();
             var relocationByOffset = new Dictionary<uint, PlcAssemblyRelocation>();
@@ -243,6 +243,56 @@ namespace BigSisterNodeNet.Plc
                         pc += 1;
                         break;
 
+                    case PlcMachineCodeAssembler.FloatEqualOpcode:
+                        builder.AppendLine("FEQ");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.FloatNotEqualOpcode:
+                        builder.AppendLine("FNE");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.FloatLessThanOpcode:
+                        builder.AppendLine("FLT");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.FloatLessOrEqualOpcode:
+                        builder.AppendLine("FLE");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.FloatGreaterThanOpcode:
+                        builder.AppendLine("FGT");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.FloatGreaterOrEqualOpcode:
+                        builder.AppendLine("FGE");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.FloatAddOpcode:
+                        builder.AppendLine("FADD");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.FloatSubOpcode:
+                        builder.AppendLine("FSUB");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.FloatMulOpcode:
+                        builder.AppendLine("FMUL");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.FloatDivOpcode:
+                        builder.AppendLine("FDIV");
+                        pc += 1;
+                        break;
+
                     case PlcMachineCodeAssembler.AddOpcode:
                         builder.AppendLine("ADD");
                         pc += 1;
@@ -290,6 +340,36 @@ namespace BigSisterNodeNet.Plc
 
                     case PlcMachineCodeAssembler.SelectOpcode:
                         builder.AppendLine("SEL");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.SignExtendInt16ToInt32Opcode:
+                        builder.AppendLine("SX_I16_TO_I32");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.TruncateInt32ToInt16Opcode:
+                        builder.AppendLine("TRUNC_I32_TO_I16");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.BoolToUInt32Opcode:
+                        builder.AppendLine("BOOL_TO_U32");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.BoolToInt32Opcode:
+                        builder.AppendLine("BOOL_TO_I32");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.UInt32ToBoolOpcode:
+                        builder.AppendLine("U32_TO_BOOL");
+                        pc += 1;
+                        break;
+
+                    case PlcMachineCodeAssembler.Int32ToBoolOpcode:
+                        builder.AppendLine("I32_TO_BOOL");
                         pc += 1;
                         break;
 
@@ -426,19 +506,39 @@ namespace BigSisterNodeNet.Plc
                         pc += 3;
                         break;
 
+                    case PlcMachineCodeAssembler.PushUInt32Opcode:
+                    case PlcMachineCodeAssembler.PushInt32Opcode:
+                    case PlcMachineCodeAssembler.PushFloat32Opcode:
+                        if ((pc + 4) >= codeBytes.Length)
+                        {
+                            throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
+                        }
+
+                        builder.Append(FormatOpcode(opcode))
+                               .Append(' ')
+                               .AppendLine(FormatImmediate32(opcode, ReadUInt32(codeBytes, pc + 1)));
+                        pc += 5;
+                        break;
+
                     case PlcMachineCodeAssembler.LoadPointBoolOpcode:
                     case PlcMachineCodeAssembler.StorePointBoolOpcode:
                     case PlcMachineCodeAssembler.LoadPointInt16Opcode:
                     case PlcMachineCodeAssembler.StorePointInt16Opcode:
+                    case PlcMachineCodeAssembler.LoadPointUInt32Opcode:
+                    case PlcMachineCodeAssembler.StorePointUInt32Opcode:
+                    case PlcMachineCodeAssembler.LoadPointInt32Opcode:
+                    case PlcMachineCodeAssembler.StorePointInt32Opcode:
+                    case PlcMachineCodeAssembler.LoadPointFloat32Opcode:
+                    case PlcMachineCodeAssembler.StorePointFloat32Opcode:
                     case PlcMachineCodeAssembler.IncrementPointIntOpcode:
                     case PlcMachineCodeAssembler.DecrementPointIntOpcode:
-                        if ((pc + 2) >= codeBytes.Length)
+                        if ((pc + 4) >= codeBytes.Length)
                         {
                             throw new PlcObjectFileParseException($"Truncated operand for opcode 0x{opcode:X2} at offset {pc}.");
                         }
 
                         var operandOffset = (uint)(pc + 1);
-                        var operandValue = ReadUInt16(codeBytes, pc + 1);
+                        var operandValue = ReadUInt32(codeBytes, pc + 1);
                         string operandText;
                         if (relocationByOffset.TryGetValue(operandOffset, out var relocation))
                         {
@@ -456,7 +556,7 @@ namespace BigSisterNodeNet.Plc
                            builder.Append(FormatOpcode(opcode))
                                .Append(' ')
                                .AppendLine(operandText);
-                        pc += 3;
+                        pc += 5;
                         break;
 
                     default:
@@ -516,11 +616,26 @@ namespace BigSisterNodeNet.Plc
                                  value == PlcMachineCodeAssembler.NotOpcode ||
                                  value == PlcMachineCodeAssembler.EqOpcode ||
                                  value == PlcMachineCodeAssembler.NeOpcode ||
+                                 value == PlcMachineCodeAssembler.FloatEqualOpcode ||
+                                 value == PlcMachineCodeAssembler.FloatNotEqualOpcode ||
+                                 value == PlcMachineCodeAssembler.FloatLessThanOpcode ||
+                                 value == PlcMachineCodeAssembler.FloatLessOrEqualOpcode ||
+                                 value == PlcMachineCodeAssembler.FloatGreaterThanOpcode ||
+                                 value == PlcMachineCodeAssembler.FloatGreaterOrEqualOpcode ||
                                  value == PlcMachineCodeAssembler.PushInt16Opcode ||
+                                 value == PlcMachineCodeAssembler.PushUInt32Opcode ||
+                                 value == PlcMachineCodeAssembler.PushInt32Opcode ||
+                                 value == PlcMachineCodeAssembler.PushFloat32Opcode ||
                    value == PlcMachineCodeAssembler.LoadPointBoolOpcode ||
                    value == PlcMachineCodeAssembler.StorePointBoolOpcode ||
                                      value == PlcMachineCodeAssembler.LoadPointInt16Opcode ||
                                      value == PlcMachineCodeAssembler.StorePointInt16Opcode ||
+                                     value == PlcMachineCodeAssembler.LoadPointUInt32Opcode ||
+                                     value == PlcMachineCodeAssembler.StorePointUInt32Opcode ||
+                                     value == PlcMachineCodeAssembler.LoadPointInt32Opcode ||
+                                     value == PlcMachineCodeAssembler.StorePointInt32Opcode ||
+                                     value == PlcMachineCodeAssembler.LoadPointFloat32Opcode ||
+                                     value == PlcMachineCodeAssembler.StorePointFloat32Opcode ||
                    value == PlcMachineCodeAssembler.IncrementPointIntOpcode ||
                                      value == PlcMachineCodeAssembler.DecrementPointIntOpcode ||
                                      value == PlcMachineCodeAssembler.AddOpcode ||
@@ -533,6 +648,12 @@ namespace BigSisterNodeNet.Plc
                                      value == PlcMachineCodeAssembler.MaxOpcode ||
                                      value == PlcMachineCodeAssembler.ClampOpcode ||
                                      value == PlcMachineCodeAssembler.SelectOpcode ||
+                                     value == PlcMachineCodeAssembler.SignExtendInt16ToInt32Opcode ||
+                                     value == PlcMachineCodeAssembler.TruncateInt32ToInt16Opcode ||
+                                     value == PlcMachineCodeAssembler.BoolToUInt32Opcode ||
+                                     value == PlcMachineCodeAssembler.BoolToInt32Opcode ||
+                                     value == PlcMachineCodeAssembler.UInt32ToBoolOpcode ||
+                                     value == PlcMachineCodeAssembler.Int32ToBoolOpcode ||
                                      value == PlcMachineCodeAssembler.JumpOpcode ||
                                      value == PlcMachineCodeAssembler.JumpIfZeroOpcode ||
                                      value == PlcMachineCodeAssembler.JumpIfNotZeroOpcode ||
@@ -589,8 +710,26 @@ namespace BigSisterNodeNet.Plc
                     return "EQ";
                 case PlcMachineCodeAssembler.NeOpcode:
                     return "NE";
+                case PlcMachineCodeAssembler.FloatEqualOpcode:
+                    return "FEQ";
+                case PlcMachineCodeAssembler.FloatNotEqualOpcode:
+                    return "FNE";
+                case PlcMachineCodeAssembler.FloatLessThanOpcode:
+                    return "FLT";
+                case PlcMachineCodeAssembler.FloatLessOrEqualOpcode:
+                    return "FLE";
+                case PlcMachineCodeAssembler.FloatGreaterThanOpcode:
+                    return "FGT";
+                case PlcMachineCodeAssembler.FloatGreaterOrEqualOpcode:
+                    return "FGE";
                 case PlcMachineCodeAssembler.PushInt16Opcode:
                     return "PUSH_I16";
+                case PlcMachineCodeAssembler.PushUInt32Opcode:
+                    return "PUSH_U32";
+                case PlcMachineCodeAssembler.PushInt32Opcode:
+                    return "PUSH_I32";
+                case PlcMachineCodeAssembler.PushFloat32Opcode:
+                    return "PUSH_F32";
                 case PlcMachineCodeAssembler.LoadPointBoolOpcode:
                     return "LOAD_BOOL";
                 case PlcMachineCodeAssembler.StorePointBoolOpcode:
@@ -599,6 +738,18 @@ namespace BigSisterNodeNet.Plc
                     return "LOAD_I16";
                 case PlcMachineCodeAssembler.StorePointInt16Opcode:
                     return "STORE_I16";
+                case PlcMachineCodeAssembler.LoadPointUInt32Opcode:
+                    return "LOAD_U32";
+                case PlcMachineCodeAssembler.StorePointUInt32Opcode:
+                    return "STORE_U32";
+                case PlcMachineCodeAssembler.LoadPointInt32Opcode:
+                    return "LOAD_I32";
+                case PlcMachineCodeAssembler.StorePointInt32Opcode:
+                    return "STORE_I32";
+                case PlcMachineCodeAssembler.LoadPointFloat32Opcode:
+                    return "LOAD_F32";
+                case PlcMachineCodeAssembler.StorePointFloat32Opcode:
+                    return "STORE_F32";
                 case PlcMachineCodeAssembler.IncrementPointIntOpcode:
                     return "INC_INT";
                 case PlcMachineCodeAssembler.DecrementPointIntOpcode:
@@ -623,6 +774,18 @@ namespace BigSisterNodeNet.Plc
                     return "CLAMP";
                 case PlcMachineCodeAssembler.SelectOpcode:
                     return "SEL";
+                case PlcMachineCodeAssembler.SignExtendInt16ToInt32Opcode:
+                    return "SX_I16_TO_I32";
+                case PlcMachineCodeAssembler.TruncateInt32ToInt16Opcode:
+                    return "TRUNC_I32_TO_I16";
+                case PlcMachineCodeAssembler.BoolToUInt32Opcode:
+                    return "BOOL_TO_U32";
+                case PlcMachineCodeAssembler.BoolToInt32Opcode:
+                    return "BOOL_TO_I32";
+                case PlcMachineCodeAssembler.UInt32ToBoolOpcode:
+                    return "U32_TO_BOOL";
+                case PlcMachineCodeAssembler.Int32ToBoolOpcode:
+                    return "I32_TO_BOOL";
                 case PlcMachineCodeAssembler.JumpOpcode:
                     return "JMP";
                 case PlcMachineCodeAssembler.JumpIfZeroOpcode:
@@ -690,6 +853,22 @@ namespace BigSisterNodeNet.Plc
         private static string FormatInt16Literal(ushort rawValue)
         {
             return ((short)rawValue).ToString();
+        }
+
+        private static string FormatImmediate32(byte opcode, uint rawValue)
+        {
+            if (opcode == PlcMachineCodeAssembler.PushFloat32Opcode)
+            {
+                return BitConverter.ToSingle(BitConverter.GetBytes(rawValue), 0)
+                    .ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            if (opcode == PlcMachineCodeAssembler.PushInt32Opcode)
+            {
+                return unchecked((int)rawValue).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            return rawValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
         private static string FormatValueType(byte rawType)

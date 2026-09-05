@@ -64,6 +64,8 @@ SECTIONS
         _sdram_end = .;
     } > SDRAM
 
+    ASSERT(_sdram_end <= 0x20100000, "SDRAM image exceeds reserved PLC runtime base at 0x20100000")
+
     /* Keep the C heap after the reserved .sdram pool/scratch area when the
      * application itself executes from SDRAM. Otherwise malloc/realloc-based
      * JsonDocument instances can overwrite g_sdram_json_pool and corrupt the

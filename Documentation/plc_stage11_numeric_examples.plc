@@ -1,0 +1,33 @@
+VAR PUBLIC UINT32 u32Value
+VAR PUBLIC DINT i32Value
+VAR PUBLIC INT i16RoundTrip
+VAR PUBLIC BOOL allOk
+
+; Compact stage11 regression: keep only 4 slot vars to stay under the catalog cap.
+; U32 path: bool -> u32, add, compare.
+PUSH_TRUE
+BOOL_TO_U32
+PUSH_U32 99
+ADD
+STORE_U32 u32Value
+
+LOAD_U32 u32Value
+PUSH_U32 100
+EQ
+
+; I32 path: i16 sign-extension, equality on DINT, round-trip to i16.
+PUSH_I16 -123
+SX_I16_TO_I32
+ DUP
+STORE_I32 i32Value
+
+ DUP
+TRUNC_I32_TO_I16
+STORE_I16 i16RoundTrip
+
+PUSH_I32 -123
+EQ
+AND
+STORE_BOOL allOk
+
+HALT

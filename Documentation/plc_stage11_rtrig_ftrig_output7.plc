@@ -1,0 +1,21 @@
+PARAM POINT_ID input2
+PARAM POINT_ID input3
+PARAM POINT_ID output7
+
+; Reusable Stage 11 edge-trigger example.
+; Bind input2/input3/output7 to the real PointState-backed BOOL points at load time.
+; If both edges are seen in the same scan, the falling-edge branch runs last and output7 ends false.
+
+R_TRIG input2
+JZ check_falling_edge
+PUSH_TRUE
+STORE_BOOL output7
+
+check_falling_edge:
+F_TRIG input3
+JZ done
+PUSH_FALSE
+STORE_BOOL output7
+
+done:
+HALT

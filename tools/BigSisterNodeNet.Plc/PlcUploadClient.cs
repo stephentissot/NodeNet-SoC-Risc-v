@@ -32,6 +32,13 @@ namespace BigSisterNodeNet.Plc
         public IDictionary<string, object> FinalResponse { get; set; }
     }
 
+    public sealed class PlcEraseResult
+    {
+        public ushort SlotId { get; set; }
+        public bool RebootPersistent { get; set; }
+        public IDictionary<string, object> Response { get; set; }
+    }
+
     public sealed class PlcDeviceErrorException : InvalidOperationException
     {
         public PlcDeviceErrorException(string message,
@@ -194,6 +201,23 @@ namespace BigSisterNodeNet.Plc
             };
         }
 
+        public IDictionary<string, object> CreateEraseRequest(ushort slotId, PlcUploadOptions options)
+        {
+            if (options == null)
+            {
+                throw new ArgumentNullException(nameof(options));
+            }
+
+            return new Dictionary<string, object>
+            {
+                ["cmd"] = "plcEraseReq",
+                ["from"] = options.LocalAddress,
+                ["to"] = options.RemoteAddress,
+                ["slotId"] = slotId,
+                ["persistToFlash"] = options.PersistToFlash,
+            };
+        }
+
         public byte[] BuildDataFrame(uint uploadId, uint offset, byte[] payloadSource, int payloadOffset, int payloadCount)
         {
             var frame = new byte[16 + payloadCount];
@@ -308,9 +332,14 @@ namespace BigSisterNodeNet.Plc
                 return $"Upload terminé sur le slot {slotId}. Auto-load différé en attente. {persistenceText}";
             }
 
-            if (!ReadResponseBoolean(uploadStatusResponse, "lastAutoLoadValid"))
+            if (ReadResponseBoolean(uploadStatusResponse, "autoLoadInProgress"))
             {
                 return $"Upload terminé sur le slot {slotId}. Auto-load différé en cours. {persistenceText}";
+            }
+
+            if (!ReadResponseBoolean(uploadStatusResponse, "lastAutoLoadValid"))
+            {
+                return $"Upload terminé sur le slot {slotId}. Auto-load différé terminé sans diagnostic final. {persistenceText}";
             }
 
             var autoLoadSlotId = ReadResponseUInt16(uploadStatusResponse, "lastAutoLoadSlotId");
@@ -326,6 +355,18 @@ namespace BigSisterNodeNet.Plc
             }
 
             return $"Upload terminé sur le slot {slotId}, mais l'auto-load différé a échoué: {DescribeAutoLoadFailure(uploadStatusResponse)} {persistenceText}";
+        }
+
+        public static string BuildUiEraseStatusMessage(ushort slotId, IDictionary<string, object> response)
+        {
+            if (ReadResponseBoolean(response, "erasePending"))
+            {
+                return $"Effacement du slot {slotId} accepté. Finalisation différée en cours.";
+            }
+
+            var rebootPersistent = ReadResponseBoolean(response, "rebootPersistent");
+            var persistenceText = rebootPersistent ? "Suppression persistée pour reboot." : "Suppression runtime uniquement.";
+            return $"Slot {slotId} effacé. {persistenceText}";
         }
 
         public static string DescribeAutoLoadFailure(IDictionary<string, object> response)

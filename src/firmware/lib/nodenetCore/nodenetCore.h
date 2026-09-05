@@ -13,6 +13,7 @@
 #include "NodeNetCommands.h"
 #include "PlcCore.h"
 #include "PointCatalog.h"
+#include "plc_loader_v1.h"
 #include "flash.h"
 #include "flashdb_port.h"
 
@@ -155,7 +156,9 @@ class NodeNetCore
         PointCatalog _pointCatalog;
         bool _pointCatalogAutosaveEnabled = true;
         bool _pointCatalogDirty = false;
-        uint32_t _lastPlcBuiltinPointPublishMs = 0u;
+        uint32_t _lastObservedPlcRuntimeStoreEpoch = 0u;
+        bool _pendingPlcRuntimeMapRefresh = false;
+        bool _pendingPlcRuntimeMapRestoreEngine = false;
         bool _persistedPlcEngineEnabled = false;
         uint32_t _persistedPlcSlotRunMask = 0u;
         MessageQueue<kInputQueueCapacity> _inputQueue;
@@ -201,6 +204,13 @@ class NodeNetCore
             bool restore_slot_running = false;
         } _pendingPlcAutoLoad;
 
+        struct PendingPlcErase {
+            bool active = false;
+            uint16_t slot_id = 0u;
+            bool persist_to_flash = false;
+            bool restore_engine_enabled = false;
+        } _pendingPlcErase;
+
         struct PlcAutoLoadDiagnostics {
             bool valid = false;
             uint16_t slot_id = 0u;
@@ -211,6 +221,8 @@ class NodeNetCore
             uint16_t failing_symbol_index = 0xFFFFu;
             uint16_t failing_relocation_index = 0xFFFFu;
         } _lastPlcAutoLoadDiagnostics;
+        bool _plcAutoLoadInProgress = false;
+        uint16_t _plcAutoLoadInProgressSlotId = 0u;
 
         uint32_t _nextPlcUploadId = 1u;
 
@@ -287,6 +299,9 @@ class NodeNetCore
         // Builds and returns a PLC object file ready to load or persist.
         bool handlePlcObjectFileRequest(const JsonDocument& request, JsonDocument& response);
 
+        // Erases one PLC slot from runtime and persisted storage.
+        bool handlePlcEraseRequest(const JsonDocument& request, JsonDocument& response);
+
         // Expands a built-in device template into concrete point definitions.
         bool handleDeviceTemplateLoadRequest(const JsonDocument& request, JsonDocument& response);
 
@@ -321,6 +336,9 @@ class NodeNetCore
         // Serializes the current PLC upload status into a response document.
         void fillPlcUploadStatus(JsonDocument& response, bool include_header) const;
 
+        // Completes a deferred PLC slot erase after the response has been emitted.
+        void processPendingPlcErase();
+
         // Completes a deferred auto-load after the upload commit response has been emitted.
         void processPendingPlcAutoLoad();
 
@@ -341,7 +359,13 @@ class NodeNetCore
         // Refreshes built-in node points that come from local configuration state.
         void publishBuiltinPointStates();
 
-        // Refreshes built-in PLC points that come from slot status and runtime diagnostics.
-        void publishBuiltinPlcPointStates(bool include_all_slots);
+        bool buildVirtualPlcPointState(const PointDefinition& definition,
+                           const PointCatalog::PlcPointMeta& plc_meta,
+                           uint32_t now_ms,
+                           PointState& state) const;
+
+        void clearPlcSlotRuntimeDiagnostics();
+        void refreshLoadedMirrorProgramRuntimeMapsIfNeeded();
+        bool refreshMirrorProgramRuntimeMap(uint16_t slot_id, uint32_t runtime_store_epoch);
 
 };

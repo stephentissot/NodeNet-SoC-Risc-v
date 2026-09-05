@@ -40,20 +40,20 @@ int main(void)
     oled::showBootProgress("Node services", 10u);
     nodeNetCore.begin();
     PlcRuntimePublisherV1 plcRuntimePublisher;
-    oled::showBootProgress("PLC runtime ABI", 35u);
+    oled::showBootProgress("PLC slot linker", 35u);
     const bool plcRuntimeAbiReady = plcRuntimePublisher.begin();
     if (plcRuntimeAbiReady) {
         const uint32_t boot_now_ms = millis();
         oled::showBootProgress("Clear volatile state", 45u);
         PlcSlotLoaderV1::clearVolatileState();
-        oled::showBootProgress("Attach PLC runtime", 55u);
+        oled::showBootProgress("Attach PLC linker", 55u);
         nodeNetCore.attachPlcRuntimePublisher(&plcRuntimePublisher);
-        oled::showBootProgress("Publish runtime map", 65u);
+        oled::showBootProgress("Prepare PLC slots", 65u);
         (void)plcRuntimePublisher.publish(nodeNetCore.pointCatalog(), boot_now_ms);
         nodeNetCore.restorePersistedPlcSlots();
         oled::showBootProgress("Startup complete", 100u);
     } else {
-        oled::showBootProgress("PLC ABI unavailable", 100u);
+        oled::showBootProgress("PLC linker unavailable", 100u);
     }
 
     if (plcRuntimeAbiReady) {
