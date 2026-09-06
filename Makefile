@@ -17,6 +17,13 @@ else ifneq ($(wildcard .venv/bin/python),)
 PYTHON := .venv/bin/python
 endif
 FW_STRICT_VERIFY ?= 0
+ESP32_DIR ?= src/firmwareEsp32
+PIO ?= pio
+ifneq ($(wildcard $(subst \,/,$(USERPROFILE))/.platformio/penv/Scripts/platformio.exe),)
+PIO := $(subst \,/,$(USERPROFILE))/.platformio/penv/Scripts/platformio.exe
+else ifneq ($(wildcard $(HOME)/.platformio/penv/Scripts/platformio.exe),)
+PIO := $(HOME)/.platformio/penv/Scripts/platformio.exe
+endif
 
 FIRMWARE_HEX=src/firmware/build/boot_stage0.hex
 FIRMWARE_IMAGE=src/firmware/build/nodenet_riscv_app.img
@@ -88,7 +95,7 @@ SOURCES += $(LITEDRAM_RTL)
 SOURCES := $(sort $(SOURCES))
 
 
-.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw-check-image flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc plc-package plc-mirror-package plc-package-check plc-package-build-check plc-mirror-package-check flash-plc-package flash-plc-package-write bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only litedram-gen litedram-copy litedram-refresh
+.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw-check-image flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc plc-package plc-mirror-package plc-package-check plc-package-build-check plc-mirror-package-check flash-plc-package flash-plc-package-write bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only litedram-gen litedram-copy litedram-refresh esp32 esp32Flash monitor
 
 all: firmware-build $(BUILD)/$(TOP).bit
 
@@ -159,6 +166,15 @@ lab-fw: lab
 # Default firmware build uses src/firmware/main.cpp.
 firmware-build:
 	$(MAKE) -C src/firmware bootloader-build ROM_CAPACITY_BYTES=$(ROM_BYTES)
+
+esp32:
+	cd $(ESP32_DIR) && "$(PIO)" run
+
+esp32Flash:
+	cd $(ESP32_DIR) && "$(PIO)" run -t upload
+
+monitor:
+	cd $(ESP32_DIR) && "$(PIO)" device monitor
 
 firmware-image:
 	$(MAKE) -C src/firmware firmware-image ROM_CAPACITY_BYTES=$(ROM_BYTES)

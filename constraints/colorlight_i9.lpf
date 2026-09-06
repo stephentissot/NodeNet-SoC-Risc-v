@@ -53,6 +53,26 @@ IOBUF PORT "flash_mosi" IO_TYPE=LVCMOS33;
 # IOBUF PORT "eth0_rst_n" IO_TYPE=LVCMOS33;
 # ... (Add remaining IOBUF commands as needed)
 
+# ESP32 SPI bridge on external port B6
+LOCATE COMP "esp32_spi_sck_i" SITE "J16";
+IOBUF PORT "esp32_spi_sck_i" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "esp32_spi_mosi_i" SITE "J18";
+IOBUF PORT "esp32_spi_mosi_i" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "esp32_spi_miso_o" SITE "P16";
+IOBUF PORT "esp32_spi_miso_o" IO_TYPE=LVCMOS33 DRIVE=8;
+
+LOCATE COMP "esp32_spi_cs_n_i" SITE "N4";
+IOBUF PORT "esp32_spi_cs_n_i" IO_TYPE=LVCMOS33;
+
+LOCATE COMP "esp32_spi_irq_o" SITE "M3";
+IOBUF PORT "esp32_spi_irq_o" IO_TYPE=LVCMOS33 DRIVE=8;
+
+# Optional future sideband line
+# LOCATE COMP "esp32_spi_sideband_io" SITE "T3";
+# IOBUF PORT "esp32_spi_sideband_io" IO_TYPE=LVCMOS33 DRIVE=8;
+
 # SDRAM (M12L64322A — 512K × 32 × 4 banks = 8MB)
 # Source: https://github.com/wuxx/Colorlight-FPGA-Projects/blob/master/colorlight_i9_v7.2.md
 # Note: CS_N=GND, CKE=VCC, DQM[3:0]=GND on PCB (not connected to FPGA)

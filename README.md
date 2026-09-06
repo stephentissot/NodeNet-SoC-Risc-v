@@ -40,6 +40,7 @@ PLC documentation index:
 - Command surface and JSON examples: [README_NODENET_PLC_COMMANDS.md](README_NODENET_PLC_COMMANDS.md)
 - PLC VM runtime architecture and ABI: [Documentation/plc_vm_spec_v1.md](Documentation/plc_vm_spec_v1.md)
 - PLC assembly / object-file format: [Documentation/plc_assembly_spec_v1.md](Documentation/plc_assembly_spec_v1.md)
+- ESP32 SPI bridge pinout and PlatformIO notes: [Documentation/esp32_spi_bridge_notes.md](Documentation/esp32_spi_bridge_notes.md)
 - Firmware runtime and flash layout: [src/firmware/README.md](src/firmware/README.md)
 - Stage0 boot flow and runtime handoff: [src/firmware/README_BOOT.md](src/firmware/README_BOOT.md)
 - NodeNet transport details: [src/wbDevices/README_NODENET.md](src/wbDevices/README_NODENET.md)

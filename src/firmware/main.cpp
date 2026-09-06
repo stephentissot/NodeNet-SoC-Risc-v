@@ -11,8 +11,33 @@
 #include "i2c.h"
 #include "version.h"
 #include "lib/nodenet/nodenet.h"
+#include "spi_mailbox.h"
 
 #include "nodenetCore.h"
+
+namespace {
+
+void handleSpiMailboxHelloWorld(SpiMailbox& mailbox)
+{
+    static constexpr uint8_t kHelloWorld[] = "Hello World";
+    static uint8_t request_buffer[SpiMailbox::kMaxPayloadSize] = {};
+
+    if (!mailbox.HasMessage() || !mailbox.TxReady()) {
+        return;
+    }
+
+    uint16_t request_length = 0u;
+    if (!mailbox.ReadMessage(request_buffer,
+                             SpiMailbox::kMaxPayloadSize,
+                             &request_length)) {
+        return;
+    }
+
+    (void)request_length;
+    (void)mailbox.SendMessage(kHelloWorld, sizeof(kHelloWorld) - 1u);
+}
+
+}
 
 int main(void)
 {
@@ -37,6 +62,7 @@ int main(void)
 
 
     static NodeNetCore nodeNetCore(&myNodeNet);
+    static SpiMailbox spiMailbox;
     oled::showBootProgress("Node services", 10u);
     nodeNetCore.begin();
     PlcRuntimePublisherV1 plcRuntimePublisher;
@@ -61,6 +87,7 @@ int main(void)
     }
 
     while (1) {
+        handleSpiMailboxHelloWorld(spiMailbox);
         nodeNetCore.loop();
         const uint32_t now_ms = millis();
         if (!nodeNetCore.hasActiveRealtimeWork()) {

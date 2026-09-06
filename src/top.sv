@@ -28,7 +28,13 @@ module top (
     output wire        sdram_we_n,
     // I2C0 (open-drain): SCL=D18, SDA=D17; external 4.7 kΩ pullup to 3.3 V required
     inout  wire        i2c0_scl,
-    inout  wire        i2c0_sda
+    inout  wire        i2c0_sda,
+    // ESP32 SPI mailbox bridge
+    input  wire        esp32_spi_sck_i,
+    input  wire        esp32_spi_mosi_i,
+    output wire        esp32_spi_miso_o,
+    input  wire        esp32_spi_cs_n_i,
+    output wire        esp32_spi_irq_o
 );
 
     wire sys_clk;
@@ -50,6 +56,7 @@ module top (
     localparam [31:0] NODENET_BASE = 32'h1000_6000;  // NodeNet485 Wishbone slave (1 Mb/s RS-485)
     localparam [31:0] FLASH_BASE  = 32'h1000_7000;  // W25Q64 SPI flash (8 MB)
     localparam [31:0] PLC_BASE    = 32'h1000_8000;  // PLC hardware engine control/status
+    localparam [31:0] SPI_SLAVE_BASE = 32'h1000_9000;  // ESP32 SPI mailbox bridge
     localparam [31:0] SDRAM_BASE  = 32'h2000_0000;  // 8MB: 0x20000000–0x207FFFFF
 
     // Hold reset active for a short deterministic startup window after PLL lock.
@@ -109,6 +116,8 @@ module top (
     wire        flash_ack;
     wire [31:0] plc_dat;
     wire        plc_ack;
+    wire [31:0] spi_slave_dat;
+    wire        spi_slave_ack;
     wire        flash_spi_clk;
     wire [31:0] sdram_dat;
     wire        sdram_ack;
@@ -205,6 +214,7 @@ module top (
     wire wb_nodenet_sel;
     wire wb_flash_sel;
     wire wb_plc_sel;
+    wire wb_spi_slave_sel;
     wire wb_sdram_sel;
 
     assign wb_rom_sel    = wb_cyc && wb_stb && (wb_adr[31:16] == ROM_BASE[31:16]);
@@ -222,6 +232,7 @@ module top (
     assign wb_nodenet_sel = wb_cyc && wb_stb && (wb_adr[31:12] == NODENET_BASE[31:12]);
     assign wb_flash_sel  = wb_cyc && wb_stb && (wb_adr[31:12] == FLASH_BASE[31:12]);
     assign wb_plc_sel    = wb_cyc && wb_stb && (wb_adr[31:12] == PLC_BASE[31:12]);
+    assign wb_spi_slave_sel = wb_cyc && wb_stb && (wb_adr[31:12] == SPI_SLAVE_BASE[31:12]);
     assign wb_sdram_sel  = wb_cyc && wb_stb && (wb_adr[31:23] == SDRAM_BASE[31:23]);
 
     // assign wb_dat_i = wb_rom_sel     ? rom_dat     :
@@ -252,6 +263,7 @@ module top (
                       wb_i2c0_sel    ? i2c0_dat    :
                       wb_flash_sel   ? flash_dat   :
                       wb_plc_sel     ? plc_dat     :
+                      wb_spi_slave_sel ? spi_slave_dat :
                       wb_led_d2_sel  ? led_d2_dat  :
                       wb_led0_sel    ? led0_dat    :
                       wb_led1_sel    ? led1_dat    :
@@ -269,6 +281,7 @@ module top (
                     (wb_i2c0_sel    && i2c0_ack)    ||
                     (wb_flash_sel   && flash_ack)   ||
                     (wb_plc_sel     && plc_ack)     ||
+                    (wb_spi_slave_sel && spi_slave_ack) ||
                     (wb_led_d2_sel  && led_d2_ack)  ||
                     (wb_led0_sel    && led0_ack)    ||
                     (wb_led1_sel    && led1_ack)    ||
@@ -648,6 +661,29 @@ module top (
         .m_stb_o(plc_master_stb),
         .m_dat_i(plc_master_rsp_dat),
         .m_ack_i(plc_master_rsp_ack)
+    );
+
+    wb_spi_slave #(
+        .ADDR(SPI_SLAVE_BASE),
+        .MAILBOX_BYTES(64)
+    ) spi_slave0 (
+        .clk_i(sys_clk),
+        .rst_i(reset),
+
+        .wb_adr_i(wb_adr),
+        .wb_dat_i(wb_dat_o),
+        .wb_sel_i(wb_sel),
+        .wb_we_i(wb_we),
+        .wb_cyc_i(wb_spi_slave_sel),
+        .wb_stb_i(wb_spi_slave_sel),
+        .wb_dat_o(spi_slave_dat),
+        .wb_ack_o(spi_slave_ack),
+
+        .spi_sck_i(esp32_spi_sck_i),
+        .spi_mosi_i(esp32_spi_mosi_i),
+        .spi_cs_n_i(esp32_spi_cs_n_i),
+        .spi_miso_o(esp32_spi_miso_o),
+        .spi_irq_o(esp32_spi_irq_o)
     );
 
     wb_sdram_rr_arbiter sdram_arbiter (
