@@ -41,8 +41,28 @@ constexpr uint8_t kCmdFrameRateCtrl = 0xC6;
 constexpr uint8_t kCmdPowerCtrl1 = 0xD0;
 constexpr uint8_t kCmdPositiveGamma = 0xE0;
 constexpr uint8_t kCmdNegativeGamma = 0xE1;
+constexpr size_t kPixelChunkBytes = 512;
+constexpr uint8_t kMadCtlMy = 0x80;
+constexpr uint8_t kMadCtlMx = 0x40;
+constexpr uint8_t kMadCtlMv = 0x20;
+constexpr uint8_t kMadCtlBgr = 0x08;
 
 spi_device_handle_t g_display_device = nullptr;
+
+uint8_t build_madctl()
+{
+    uint8_t value = kMadCtlBgr;
+    if (app_config::kDisplaySwapXY) {
+        value |= kMadCtlMv;
+    }
+    if (app_config::kDisplayMirrorX) {
+        value |= kMadCtlMx;
+    }
+    if (app_config::kDisplayMirrorY) {
+        value |= kMadCtlMy;
+    }
+    return value;
+}
 
 esp_err_t reset_panel()
 {
@@ -149,7 +169,7 @@ esp_err_t init_panel_registers()
     vTaskDelay(pdMS_TO_TICKS(120));
     ESP_RETURN_ON_ERROR(write_command(kCmdNormalOn), kLogTag, "NORON failed");
     ESP_RETURN_ON_ERROR(write_command(kCmdMadCtl), kLogTag, "MADCTL failed");
-    ESP_RETURN_ON_ERROR(write_data8(0x08), kLogTag, "MADCTL data failed");
+    ESP_RETURN_ON_ERROR(write_data8(build_madctl()), kLogTag, "MADCTL data failed");
     ESP_RETURN_ON_ERROR(write_command(kCmdDisplayFunction), kLogTag, "B6 failed");
     ESP_RETURN_ON_ERROR(write_data8(0x0A), kLogTag, "B6 data0 failed");
     ESP_RETURN_ON_ERROR(write_data8(0x82), kLogTag, "B6 data1 failed");
@@ -196,9 +216,7 @@ esp_err_t init_panel_registers()
 
 esp_err_t fill_solid(uint16_t color)
 {
-    // Keep transfers small on the non-DMA SPI path; larger buffers can be
-    // rejected as invalid by spi_device_transmit() on ESP32.
-    std::array<uint8_t, 32> chunk = {};
+    std::array<uint8_t, kPixelChunkBytes> chunk = {};
     for (size_t index = 0; index < chunk.size(); index += 2) {
         chunk[index] = static_cast<uint8_t>(color >> 8);
         chunk[index + 1] = static_cast<uint8_t>(color & 0xFFu);
@@ -221,6 +239,33 @@ esp_err_t fill_solid(uint16_t color)
     return ESP_OK;
 }
 
+esp_err_t push_rgb565_pixels(const uint16_t* pixels, size_t pixel_count)
+{
+    if ((pixels == nullptr) || (pixel_count == 0)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    std::array<uint8_t, kPixelChunkBytes> chunk = {};
+    size_t pixel_index = 0;
+    while (pixel_index < pixel_count) {
+        const size_t pixels_per_chunk = chunk.size() / 2;
+        const size_t chunk_pixels = ((pixel_count - pixel_index) > pixels_per_chunk)
+                                      ? pixels_per_chunk
+                                      : (pixel_count - pixel_index);
+
+        for (size_t index = 0; index < chunk_pixels; ++index) {
+            const uint16_t color = pixels[pixel_index + index];
+            chunk[index * 2] = static_cast<uint8_t>(color >> 8);
+            chunk[index * 2 + 1] = static_cast<uint8_t>(color & 0xFFu);
+        }
+
+        ESP_RETURN_ON_ERROR(write_data(chunk.data(), chunk_pixels * 2), kLogTag, "RGB565 data failed");
+        pixel_index += chunk_pixels;
+    }
+
+    return ESP_OK;
+}
+
 } // namespace
 
 esp_err_t init()
@@ -229,7 +274,7 @@ esp_err_t init()
     ESP_RETURN_ON_ERROR(ensure_bus_and_device(), kLogTag, "display SPI setup failed");
 
     ESP_LOGI(kLogTag,
-             "ESP-IDF ST7789 bring-up pins sclk=%d mosi=%d cs=%d dc=%d rst=%d spi_hz=%d window=%dx%d offset=(%d,%d)",
+             "ESP-IDF ST7789 bring-up pins sclk=%d mosi=%d cs=%d dc=%d rst=%d spi_hz=%d window=%dx%d offset=(%d,%d) swap_xy=%d mirror_x=%d mirror_y=%d madctl=0x%02x",
              app_config::kSpiSck,
              app_config::kSpiMosi,
              app_config::kDisplayCs,
@@ -239,21 +284,42 @@ esp_err_t init()
              app_config::kDisplayWidth,
              app_config::kDisplayHeight,
              app_config::kDisplayXGap,
-             app_config::kDisplayYGap);
+             app_config::kDisplayYGap,
+             app_config::kDisplaySwapXY,
+             app_config::kDisplayMirrorX,
+             app_config::kDisplayMirrorY,
+             build_madctl());
 
     ESP_RETURN_ON_ERROR(init_panel_registers(), kLogTag, "panel init failed");
     ESP_RETURN_ON_ERROR(fill_solid(0x0000), kLogTag, "fill black failed");
-    vTaskDelay(pdMS_TO_TICKS(800));
-    ESP_RETURN_ON_ERROR(fill_solid(0xF800), kLogTag, "fill red failed");
-    vTaskDelay(pdMS_TO_TICKS(800));
-    ESP_RETURN_ON_ERROR(fill_solid(0x07E0), kLogTag, "fill green failed");
-    vTaskDelay(pdMS_TO_TICKS(800));
-    ESP_RETURN_ON_ERROR(fill_solid(0x001F), kLogTag, "fill blue failed");
-    vTaskDelay(pdMS_TO_TICKS(800));
-    ESP_RETURN_ON_ERROR(fill_solid(0xFFFF), kLogTag, "fill white failed");
 
     ESP_LOGI(kLogTag, "ESP-IDF ST7789 bring-up complete");
     return ESP_OK;
+}
+
+esp_err_t fill_screen(uint16_t color)
+{
+    return fill_solid(color);
+}
+
+esp_err_t blit_rgb565(uint16_t x, uint16_t y, uint16_t width, uint16_t height, const uint16_t* pixels, size_t pixel_count)
+{
+    if ((width == 0) || (height == 0) || (pixels == nullptr)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const size_t expected_pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height);
+    if (pixel_count != expected_pixel_count) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    if ((static_cast<uint32_t>(x) + static_cast<uint32_t>(width) > app_config::kDisplayWidth) ||
+        (static_cast<uint32_t>(y) + static_cast<uint32_t>(height) > app_config::kDisplayHeight)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ESP_RETURN_ON_ERROR(set_address_window(x, y, width, height), kLogTag, "set_address_window failed");
+    return push_rgb565_pixels(pixels, pixel_count);
 }
 
 } // namespace display_st7789

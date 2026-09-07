@@ -25,6 +25,10 @@ constexpr uint8_t kOpcodeReadResponse = 0x03;
 constexpr uint8_t kOpcodeWriteControl = 0x04;
 constexpr uint16_t kControlClearIrq = 1u << 2;
 constexpr size_t kMaxMailboxPayload = 128;
+constexpr uint8_t kBootPercentLinkReady = 25u;
+constexpr uint8_t kBootPercentCapsReady = 45u;
+constexpr uint8_t kBootPercentSnapshotBase = 45u;
+constexpr uint8_t kBootPercentSnapshotSpan = 54u;
 DMA_ATTR uint8_t g_mailbox_tx_buffer[3 + kMaxMailboxPayload] = {};
 DMA_ATTR uint8_t g_mailbox_rx_buffer[3 + kMaxMailboxPayload] = {};
 spi_device_handle_t g_fpga_device = nullptr;
@@ -57,6 +61,27 @@ uint16_t compute_max_state_records()
 bool is_snapshot_in_progress()
 {
     return g_caps_response_seen && !g_states_response_seen;
+}
+
+uint8_t compute_snapshot_percent()
+{
+    if (!g_caps_response_seen) {
+        return kBootPercentLinkReady;
+    }
+
+    if (g_states_response_seen) {
+        return 100u;
+    }
+
+    if ((g_point_count == 0u) || ((!g_states_request_sent) && (g_snapshot_record_count == 0u))) {
+        return kBootPercentCapsReady;
+    }
+
+    const uint32_t completed = static_cast<uint32_t>(g_snapshot_record_count);
+    const uint32_t total = (g_point_count == 0u) ? 1u : static_cast<uint32_t>(g_point_count);
+    const uint32_t scaled = (completed * kBootPercentSnapshotSpan) / total;
+    const uint32_t percent = static_cast<uint32_t>(kBootPercentSnapshotBase) + scaled;
+    return static_cast<uint8_t>((percent >= 100u) ? 99u : percent);
 }
 
 constexpr uint16_t status_bit(uint16_t status, uint8_t bit)
@@ -493,8 +518,6 @@ esp_err_t poll()
         ++g_frame_count;
         ++g_snapshot_chunk_count;
         g_snapshot_record_count = static_cast<uint16_t>(g_snapshot_record_count + prefix.returned_record_count);
-        std::fputc('.', stdout);
-        std::fflush(stdout);
 
         g_states_request_sent = false;
         if ((prefix.more != 0u) && (prefix.returned_record_count == 0u)) {
@@ -508,8 +531,6 @@ esp_err_t poll()
         if (prefix.more != 0u) {
         } else {
             g_states_response_seen = true;
-            std::fputc('\n', stdout);
-            std::fflush(stdout);
             ESP_LOGI(kLogTag,
                      "Completed plcLink states snapshot total=%u chunks=%u records=%u seq=%lu",
                      static_cast<unsigned>(prefix.total_point_count),
@@ -526,6 +547,30 @@ bool is_busy()
 {
     return (g_fpga_device != nullptr) &&
            (!g_caps_response_seen || !g_states_response_seen || g_caps_request_sent || g_states_request_sent);
+}
+
+BootProgress get_boot_progress()
+{
+    BootProgress progress = {};
+    progress.percent = 10u;
+    progress.loaded_points = g_snapshot_record_count;
+    progress.total_points = g_point_count;
+    progress.link_ready = (g_fpga_device != nullptr);
+    progress.caps_received = g_caps_response_seen;
+    progress.snapshot_started = g_states_request_sent || (g_snapshot_record_count != 0u) || g_states_response_seen;
+    progress.snapshot_complete = g_states_response_seen;
+
+    if (!progress.link_ready) {
+        return progress;
+    }
+
+    if (!progress.caps_received) {
+        progress.percent = kBootPercentLinkReady;
+        return progress;
+    }
+
+    progress.percent = compute_snapshot_percent();
+    return progress;
 }
 
 } // namespace spi_link

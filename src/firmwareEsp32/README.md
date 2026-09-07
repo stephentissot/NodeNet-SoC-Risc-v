@@ -31,6 +31,14 @@ The initial skeleton only brings up:
 - note: the init sequence remains aligned with the working `76x284` ST7789 bring-up that was validated during the Arduino reference phase
 - bus speed: `10 MHz` for the display device on the shared bus
 
+## UI Library Direction
+
+- recommended library: `LVGL`
+- reason: it fits the current pure `ESP-IDF` stack well and expects exactly the kind of flush callback that `display_st7789.cpp` can provide
+- keep the current ST7789 driver as the low-level panel backend; do not replace it with a framework-specific display wrapper
+- avoid `TFT_eSPI` here: it is more display-driver oriented than UI-oriented and would pull the project back toward the Arduino path we intentionally removed
+- next integration step: add a small `lvgl_port` that allocates one or two partial RGB565 draw buffers and forwards `flush_cb` rectangles into `display_st7789::blit_rgb565()`
+
 ## Shared SPI Bus
 
 - bus init: shared once through `src/spi_bus_shared.cpp`

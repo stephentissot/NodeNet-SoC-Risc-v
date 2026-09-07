@@ -401,6 +401,7 @@ $(BUILD)/$(TOP).config: $(BUILD)/$(TOP).json
 		--$(DEVICE) \
 		--package $(PACKAGE) \
 		--speed $(SPEED) \
+		--ignore-rel-clk \
 		--json $< \
 		--lpf $(LPF) \
 		--textcfg $@
