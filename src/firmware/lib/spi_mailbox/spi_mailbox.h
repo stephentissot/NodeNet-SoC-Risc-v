@@ -11,7 +11,7 @@
 class SpiMailbox {
 public:
   static constexpr uint32_t kDefaultBase = 0x10009000u;
-  static constexpr uint16_t kMaxPayloadSize = 128u;
+  static constexpr uint16_t kMaxPayloadSize = 256u;
 
   explicit SpiMailbox(uint32_t baseAddress = kDefaultBase);
 

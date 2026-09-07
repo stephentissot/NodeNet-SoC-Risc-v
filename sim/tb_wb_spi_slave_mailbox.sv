@@ -2,7 +2,7 @@
 
 module tb_wb_spi_slave_mailbox;
 
-    localparam integer MAILBOX_BYTES = 128;
+    localparam integer MAILBOX_BYTES = 256;
 
     localparam [31:0] REG_CONTROL   = 32'h0000_0004;
     localparam [31:0] REG_RX_DATA   = 32'h0000_000C;

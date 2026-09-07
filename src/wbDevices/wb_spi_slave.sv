@@ -77,8 +77,8 @@ module wb_spi_slave #(
     reg [15:0] rx_length;
     reg [15:0] tx_length;
     reg [15:0] tx_staged_length;
-    reg [15:0] rx_cpu_read_count;
-    reg [15:0] tx_cpu_write_count;
+    reg [COUNT_WIDTH-1:0] rx_cpu_read_count;
+    reg [COUNT_WIDTH-1:0] tx_cpu_write_count;
     reg        tx_loaded;
     reg        tx_loaded_bank;
     reg        tx_stage_bank_select;
@@ -96,20 +96,21 @@ module wb_spi_slave #(
     reg [15:0] spi_declared_length;
     reg [15:0] spi_control_word;
     reg [15:0] spi_status_snapshot;
-    reg [15:0] spi_tx_data_index;
     reg        spi_accept_rx_frame;
     reg        spi_frame_active;
     reg        spi_write_request_payload_phase;
+    reg        spi_read_response_payload_phase;
     reg        spi_rx_write_bank;
     reg        spi_rx_commit_bank;
     reg [COUNT_WIDTH-1:0] spi_rx_bytes_remaining;
     reg [INDEX_WIDTH-1:0] spi_rx_write_addr_ctr;
     reg        spi_tx_loaded_snapshot;
     reg        spi_tx_loaded_bank_snapshot;
+    reg [COUNT_WIDTH-1:0] spi_tx_bytes_remaining;
     reg [15:0] spi_tx_length_snapshot;
 
     reg [7:0]  spi_frame_opcode_latched;
-    reg [15:0] spi_frame_byte_count_latched;
+    reg        spi_frame_has_header_latched;
     reg [15:0] spi_rx_commit_length;
     reg        spi_rx_commit_valid;
     reg        spi_rx_commit_overflow;
@@ -122,17 +123,24 @@ module wb_spi_slave #(
     reg        spi_cs_prev;
     reg        spi_miso_bit;
     reg [INDEX_WIDTH-1:0] spi_tx_ram_read_addr;
+    reg [COUNT_WIDTH-1:0] spi_tx_length_count_snapshot;
 
     wire [2:0] wb_reg_index = wb_adr_i[4:2];
     wire wb_request = wb_cyc_i && wb_stb_i;
     wire wb_fire = wb_request && !wb_request_latched;
     wire spi_active_status = !spi_cs_n_i;
     wire [15:0] status_value;
+    wire [COUNT_WIDTH-1:0] rx_length_count = rx_length[COUNT_WIDTH-1:0];
+    wire [COUNT_WIDTH-1:0] tx_length_count = tx_length[COUNT_WIDTH-1:0];
+    wire [COUNT_WIDTH-1:0] tx_staged_length_count = tx_staged_length[COUNT_WIDTH-1:0];
+    wire [COUNT_WIDTH-1:0] count_zero = {COUNT_WIDTH{1'b0}};
+    wire [COUNT_WIDTH-1:0] count_one = {{(COUNT_WIDTH-1){1'b0}}, 1'b1};
+    wire [INDEX_WIDTH-1:0] index_one = {{(INDEX_WIDTH-1){1'b0}}, 1'b1};
     wire [7:0] spi_rx_byte = {spi_rx_shift[6:0], spi_mosi_i};
     wire [INDEX_WIDTH-1:0] rx_cpu_read_addr = rx_cpu_read_count[INDEX_WIDTH-1:0];
     wire [INDEX_WIDTH-1:0] tx_cpu_write_addr = tx_cpu_write_count[INDEX_WIDTH-1:0];
-    wire rx_cpu_can_read = rx_ready && (rx_cpu_read_count < rx_length);
-    wire tx_cpu_can_write = !tx_loaded && wb_sel_i[0] && (tx_cpu_write_count < tx_staged_length);
+    wire rx_cpu_can_read = rx_ready && (rx_cpu_read_count < rx_length_count);
+    wire tx_cpu_can_write = !tx_loaded && wb_sel_i[0] && (tx_cpu_write_count < tx_staged_length_count);
     wire tx_cpu_write_fire = wb_fire && wb_we_i && (wb_reg_index == REG_TX_DATA) && tx_cpu_can_write;
     wire [7:0] rx_bank0_cpu_data;
     wire [7:0] rx_bank1_cpu_data;
@@ -148,6 +156,23 @@ module wb_spi_slave #(
     wire [7:0] spi_rx_write_data = spi_rx_byte;
     wire [7:0] rx_cpu_read_data = rx_ready_bank ? rx_bank1_cpu_data : rx_bank0_cpu_data;
     wire [7:0] tx_spi_read_data = spi_tx_loaded_bank_snapshot ? tx_bank1_spi_data : tx_bank0_spi_data;
+    wire wb_control_write = wb_fire && wb_we_i && (wb_reg_index == REG_CONTROL);
+    wire wb_tx_length_write = wb_fire && wb_we_i && (wb_reg_index == REG_TX_LENGTH);
+    wire wb_rx_data_read_fire = wb_fire && !wb_we_i && (wb_reg_index == REG_RX_DATA) && rx_cpu_can_read;
+    wire spi_frame_end_fire = !spi_cs_prev && spi_cs_sync;
+    wire spi_write_request_frame = spi_frame_end_fire && (spi_frame_opcode_latched == OPCODE_WRITE_REQUEST);
+    wire spi_write_control_frame = spi_frame_end_fire
+                                && (spi_frame_opcode_latched == OPCODE_WRITE_CONTROL)
+                                && spi_frame_has_header_latched;
+    wire control_apply = wb_control_write || spi_write_control_frame;
+    wire [15:0] control_word_apply = spi_write_control_frame ? spi_control_word_latched : wb_dat_i[15:0];
+    wire [COUNT_WIDTH-1:0] tx_commit_length_count = (tx_cpu_write_count < tx_staged_length_count)
+                                                   ? tx_cpu_write_count
+                                                   : tx_staged_length_count;
+    wire [15:0] tx_length_packed = {{(16-COUNT_WIDTH){1'b0}}, tx_length_count};
+    wire [15:0] tx_commit_length = {{(16-COUNT_WIDTH){1'b0}}, tx_commit_length_count};
+    wire spi_tx_length_snapshot_nonzero = (spi_tx_length_count_snapshot != count_zero);
+    wire spi_tx_length_snapshot_is_one = (spi_tx_length_count_snapshot == count_one);
 
     assign spi_irq_o = irq_asserted;
     assign spi_miso_o = spi_cs_n_i ? 1'b0 : spi_miso_bit;
@@ -269,20 +294,21 @@ module wb_spi_slave #(
             spi_declared_length <= 16'd0;
             spi_control_word <= 16'd0;
             spi_status_snapshot <= 16'd0;
-            spi_tx_data_index <= 16'd0;
             spi_accept_rx_frame <= 1'b1;
             spi_frame_active <= 1'b0;
             spi_write_request_payload_phase <= 1'b0;
+            spi_read_response_payload_phase <= 1'b0;
             spi_rx_write_bank <= 1'b0;
             spi_rx_commit_bank <= 1'b0;
             spi_rx_bytes_remaining <= {COUNT_WIDTH{1'b0}};
             spi_rx_write_addr_ctr <= {INDEX_WIDTH{1'b0}};
             spi_tx_loaded_snapshot <= 1'b0;
             spi_tx_loaded_bank_snapshot <= 1'b0;
+            spi_tx_bytes_remaining <= {COUNT_WIDTH{1'b0}};
             spi_tx_length_snapshot <= 16'd0;
 
             spi_frame_opcode_latched <= 8'd0;
-            spi_frame_byte_count_latched <= 16'd0;
+            spi_frame_has_header_latched <= 1'b0;
             spi_rx_commit_length <= 16'd0;
             spi_rx_commit_valid <= 1'b0;
             spi_rx_commit_overflow <= 1'b0;
@@ -290,6 +316,7 @@ module wb_spi_slave #(
             spi_frame_read_response_complete <= 1'b0;
             spi_frame_end_seen <= 1'b0;
             spi_tx_ram_read_addr <= {INDEX_WIDTH{1'b0}};
+            spi_tx_length_count_snapshot <= {COUNT_WIDTH{1'b0}};
         end else if (spi_cs_n_i) begin
             spi_frame_active <= 1'b0;
             spi_rx_shift <= 8'd0;
@@ -300,20 +327,23 @@ module wb_spi_slave #(
             spi_declared_length <= 16'd0;
             spi_control_word <= 16'd0;
             spi_status_snapshot <= 16'd0;
-            spi_tx_data_index <= 16'd0;
             spi_accept_rx_frame <= 1'b1;
             spi_write_request_payload_phase <= 1'b0;
+            spi_read_response_payload_phase <= 1'b0;
             spi_rx_bytes_remaining <= {COUNT_WIDTH{1'b0}};
             spi_rx_write_addr_ctr <= {INDEX_WIDTH{1'b0}};
             spi_tx_loaded_snapshot <= 1'b0;
+            spi_tx_length_count_snapshot <= {COUNT_WIDTH{1'b0}};
             spi_tx_loaded_bank_snapshot <= 1'b0;
+            spi_tx_bytes_remaining <= {COUNT_WIDTH{1'b0}};
             spi_tx_length_snapshot <= 16'd0;
             spi_tx_ram_read_addr <= {INDEX_WIDTH{1'b0}};
+            spi_frame_has_header_latched <= 1'b0;
         end else if (!spi_frame_active || (spi_frame_end_toggle != spi_frame_end_seen)) begin
             spi_frame_active <= 1'b1;
             spi_frame_end_seen <= spi_frame_end_toggle;
             spi_frame_opcode_latched <= 8'd0;
-            spi_frame_byte_count_latched <= 16'd0;
+            spi_frame_has_header_latched <= 1'b0;
             spi_rx_commit_length <= 16'd0;
             spi_rx_commit_valid <= 1'b0;
             spi_rx_commit_overflow <= 1'b0;
@@ -331,18 +361,23 @@ module wb_spi_slave #(
             spi_declared_length <= 16'd0;
             spi_control_word <= 16'd0;
             spi_status_snapshot <= 16'd0;
-            spi_tx_data_index <= 16'd0;
             spi_accept_rx_frame <= 1'b1;
             spi_write_request_payload_phase <= 1'b0;
+            spi_read_response_payload_phase <= 1'b0;
             spi_rx_bytes_remaining <= {COUNT_WIDTH{1'b0}};
             spi_rx_write_addr_ctr <= {INDEX_WIDTH{1'b0}};
+            spi_tx_bytes_remaining <= {COUNT_WIDTH{1'b0}};
             spi_tx_ram_read_addr <= {INDEX_WIDTH{1'b0}};
+            spi_tx_length_count_snapshot <= {COUNT_WIDTH{1'b0}};
         end else begin
             if (spi_bit_count == 3'd7) begin
                 spi_bit_count <= 3'd0;
                 spi_byte_count <= spi_byte_count + 16'd1;
-                spi_frame_byte_count_latched <= spi_byte_count + 16'd1;
                 spi_rx_shift <= {7'd0, spi_mosi_i};
+
+                if (spi_byte_count == 16'd2) begin
+                    spi_frame_has_header_latched <= 1'b1;
+                end
 
                 if (spi_byte_count == 16'd0) begin
                     spi_opcode <= spi_rx_byte;
@@ -360,7 +395,8 @@ module wb_spi_slave #(
                         rx_overflow_sticky,
                         rx_ready
                     };
-                    spi_tx_data_index <= 16'd0;
+                    spi_read_response_payload_phase <= 1'b0;
+                    spi_tx_bytes_remaining <= {COUNT_WIDTH{1'b0}};
 
                     if (spi_rx_byte == OPCODE_READ_STATUS) begin
                         spi_tx_shift <= {
@@ -376,9 +412,11 @@ module wb_spi_slave #(
                     end else if (spi_rx_byte == OPCODE_READ_RESPONSE) begin
                         spi_tx_loaded_snapshot <= tx_loaded;
                         spi_tx_loaded_bank_snapshot <= tx_loaded_bank;
-                        spi_tx_length_snapshot <= tx_length;
+                        spi_tx_bytes_remaining <= tx_length_count;
+                        spi_tx_length_snapshot <= tx_length_packed;
+                        spi_tx_length_count_snapshot <= tx_length_count;
                         spi_tx_ram_read_addr <= {INDEX_WIDTH{1'b0}};
-                        spi_tx_shift <= tx_loaded ? tx_length[7:0] : 8'd0;
+                        spi_tx_shift <= tx_loaded ? tx_length_packed[7:0] : 8'd0;
                     end else begin
                         spi_tx_shift <= 8'd0;
                     end
@@ -401,7 +439,7 @@ module wb_spi_slave #(
                                 spi_rx_commit_valid <= ({spi_rx_byte, spi_declared_length[7:0]} == 16'd0);
                                 spi_rx_commit_overflow <= 1'b0;
                                 spi_write_request_payload_phase <= 1'b0;
-                                spi_rx_bytes_remaining <= {COUNT_WIDTH{1'b0}};
+                                spi_rx_bytes_remaining <= count_zero;
                                 spi_rx_write_addr_ctr <= {INDEX_WIDTH{1'b0}};
 
                                 if (({spi_rx_byte, spi_declared_length[7:0]} > MAILBOX_BYTES_U16) || rx_ready) begin
@@ -419,15 +457,15 @@ module wb_spi_slave #(
                                 if (spi_write_request_payload_phase) begin
                                     spi_rx_commit_length <= spi_declared_length;
                                     spi_rx_commit_valid <= spi_accept_rx_frame
-                                                        && (spi_rx_bytes_remaining == {{(COUNT_WIDTH-1){1'b0}}, 1'b1});
+                                                        && (spi_rx_bytes_remaining == count_one);
                                     spi_rx_commit_overflow <= !spi_accept_rx_frame;
 
-                                    if (spi_accept_rx_frame && (spi_rx_bytes_remaining != {COUNT_WIDTH{1'b0}})) begin
-                                        spi_rx_bytes_remaining <= spi_rx_bytes_remaining - {{(COUNT_WIDTH-1){1'b0}}, 1'b1};
-                                        spi_rx_write_addr_ctr <= spi_rx_write_addr_ctr + {{(INDEX_WIDTH-1){1'b0}}, 1'b1};
+                                    if (spi_accept_rx_frame && (spi_rx_bytes_remaining != count_zero)) begin
+                                        spi_rx_bytes_remaining <= spi_rx_bytes_remaining - count_one;
+                                        spi_rx_write_addr_ctr <= spi_rx_write_addr_ctr + index_one;
                                     end
 
-                                    if (spi_accept_rx_frame && (spi_rx_bytes_remaining == {{(COUNT_WIDTH-1){1'b0}}, 1'b1})) begin
+                                    if (spi_accept_rx_frame && (spi_rx_bytes_remaining == count_one)) begin
                                         spi_rx_commit_bank <= spi_rx_write_bank;
                                         spi_rx_write_bank <= ~spi_rx_write_bank;
                                         spi_write_request_payload_phase <= 1'b0;
@@ -442,21 +480,28 @@ module wb_spi_slave #(
                         OPCODE_READ_RESPONSE: begin
                             if (spi_byte_count == 16'd1) begin
                                 spi_tx_shift <= spi_tx_loaded_snapshot ? spi_tx_length_snapshot[15:8] : 8'd0;
-                                spi_tx_data_index <= 16'd0;
                             end else if (spi_byte_count == 16'd2) begin
-                                spi_tx_shift <= (spi_tx_loaded_snapshot && (spi_tx_length_snapshot != 16'd0)) ? tx_spi_read_data : 8'd0;
-                                spi_tx_data_index <= 16'd1;
-                                spi_frame_read_response_complete <= spi_tx_loaded_snapshot && ((spi_tx_length_snapshot == 16'd0) || (spi_tx_length_snapshot == 16'd1));
-                                if (spi_tx_loaded_snapshot && (spi_tx_length_snapshot > 16'd1)) begin
-                                    spi_tx_ram_read_addr <= {{(INDEX_WIDTH-1){1'b0}}, 1'b1};
+                                spi_tx_shift <= (spi_tx_loaded_snapshot && spi_tx_length_snapshot_nonzero) ? tx_spi_read_data : 8'd0;
+                                spi_frame_read_response_complete <= spi_tx_loaded_snapshot
+                                                                 && (!spi_tx_length_snapshot_nonzero || spi_tx_length_snapshot_is_one);
+                                if (spi_tx_loaded_snapshot && spi_tx_length_snapshot_nonzero && !spi_tx_length_snapshot_is_one) begin
+                                    spi_read_response_payload_phase <= 1'b1;
+                                    spi_tx_bytes_remaining <= spi_tx_bytes_remaining - count_one;
+                                    spi_tx_ram_read_addr <= index_one;
+                                end else begin
+                                    spi_read_response_payload_phase <= 1'b0;
+                                    spi_tx_bytes_remaining <= count_zero;
                                 end
-                            end else if (spi_tx_loaded_snapshot && (spi_tx_data_index < spi_tx_length_snapshot)) begin
+                            end else if (spi_read_response_payload_phase && (spi_tx_bytes_remaining != count_zero)) begin
                                 spi_tx_shift <= tx_spi_read_data;
-                                spi_frame_read_response_complete <= ((spi_tx_data_index + 16'd1) >= spi_tx_length_snapshot);
-                                if ((spi_tx_data_index + 16'd1) < spi_tx_length_snapshot) begin
-                                    spi_tx_ram_read_addr <= spi_tx_ram_read_addr + {{(INDEX_WIDTH-1){1'b0}}, 1'b1};
+                                spi_frame_read_response_complete <= (spi_tx_bytes_remaining == count_one);
+                                if (spi_tx_bytes_remaining == count_one) begin
+                                    spi_read_response_payload_phase <= 1'b0;
+                                    spi_tx_bytes_remaining <= count_zero;
+                                end else begin
+                                    spi_tx_bytes_remaining <= spi_tx_bytes_remaining - count_one;
+                                    spi_tx_ram_read_addr <= spi_tx_ram_read_addr + index_one;
                                 end
-                                spi_tx_data_index <= spi_tx_data_index + 16'd1;
                             end else begin
                                 spi_tx_shift <= 8'd0;
                             end
@@ -513,8 +558,8 @@ module wb_spi_slave #(
             rx_length <= 16'd0;
             tx_length <= 16'd0;
             tx_staged_length <= 16'd0;
-            rx_cpu_read_count <= 16'd0;
-            tx_cpu_write_count <= 16'd0;
+            rx_cpu_read_count <= {COUNT_WIDTH{1'b0}};
+            tx_cpu_write_count <= {COUNT_WIDTH{1'b0}};
             tx_loaded <= 1'b0;
             tx_loaded_bank <= 1'b0;
             tx_stage_bank_select <= 1'b0;
@@ -529,74 +574,23 @@ module wb_spi_slave #(
                 rx_cpu_read_hold_valid <= 1'b0;
             end
 
+            if (wb_tx_length_write) begin
+                if (!tx_loaded) begin
+                    if (wb_dat_i[15:0] > MAILBOX_BYTES_U16) begin
+                        tx_staged_length <= MAILBOX_BYTES_U16;
+                    end else begin
+                        tx_staged_length <= wb_dat_i[15:0];
+                    end
+                    tx_cpu_write_count <= {COUNT_WIDTH{1'b0}};
+                    tx_read_complete <= 1'b0;
+                end
+            end
+
             if (wb_fire && wb_we_i) begin
                 case (wb_reg_index)
-                    REG_CONTROL: begin
-                        if (wb_dat_i[3]) begin
-                            rx_ready <= 1'b0;
-                            rx_ready_bank <= 1'b0;
-                            rx_overflow_sticky <= 1'b0;
-                            rx_frame_error_sticky <= 1'b0;
-                            rx_length <= 16'd0;
-                            rx_cpu_read_count <= 16'd0;
-                            tx_length <= 16'd0;
-                            tx_staged_length <= 16'd0;
-                            tx_cpu_write_count <= 16'd0;
-                            tx_loaded <= 1'b0;
-                            tx_loaded_bank <= 1'b0;
-                            tx_stage_bank_select <= 1'b0;
-                            irq_asserted <= 1'b0;
-                            tx_read_complete <= 1'b0;
-                            rx_cpu_read_hold_valid <= 1'b0;
-                        end else begin
-                            if (wb_dat_i[0]) begin
-                                rx_ready <= 1'b0;
-                                rx_overflow_sticky <= 1'b0;
-                                rx_frame_error_sticky <= 1'b0;
-                                rx_length <= 16'd0;
-                                rx_cpu_read_count <= 16'd0;
-                                rx_cpu_read_hold_valid <= 1'b0;
-                            end
-                            if (wb_dat_i[1] && !tx_loaded) begin
-                                if (tx_cpu_write_count < tx_staged_length) begin
-                                    tx_length <= tx_cpu_write_count;
-                                end else begin
-                                    tx_length <= tx_staged_length;
-                                end
-                                tx_loaded <= 1'b1;
-                                tx_loaded_bank <= tx_stage_bank_select;
-                                tx_stage_bank_select <= ~tx_stage_bank_select;
-                                irq_asserted <= 1'b1;
-                                tx_read_complete <= 1'b0;
-                            end
-                            if (wb_dat_i[2]) begin
-                                irq_asserted <= 1'b0;
-                                if (tx_read_complete) begin
-                                    tx_loaded <= 1'b0;
-                                    tx_length <= 16'd0;
-                                    tx_staged_length <= 16'd0;
-                                    tx_cpu_write_count <= 16'd0;
-                                    tx_read_complete <= 1'b0;
-                                end
-                            end
-                        end
-                    end
-
-                    REG_TX_LENGTH: begin
-                        if (!tx_loaded) begin
-                            if (wb_dat_i[15:0] > MAILBOX_BYTES_U16) begin
-                                tx_staged_length <= MAILBOX_BYTES_U16;
-                            end else begin
-                                tx_staged_length <= wb_dat_i[15:0];
-                            end
-                            tx_cpu_write_count <= 16'd0;
-                            tx_read_complete <= 1'b0;
-                        end
-                    end
-
                     REG_TX_DATA: begin
                         if (tx_cpu_can_write) begin
-                            tx_cpu_write_count <= tx_cpu_write_count + 16'd1;
+                            tx_cpu_write_count <= tx_cpu_write_count + {{(COUNT_WIDTH-1){1'b0}}, 1'b1};
                         end
                     end
 
@@ -605,80 +599,76 @@ module wb_spi_slave #(
                 endcase
             end
 
-            if (wb_fire && !wb_we_i && (wb_reg_index == REG_RX_DATA) && rx_cpu_can_read) begin
+            if (wb_rx_data_read_fire) begin
                 rx_cpu_read_hold <= rx_cpu_read_data;
                 rx_cpu_read_hold_valid <= 1'b1;
-                rx_cpu_read_count <= rx_cpu_read_count + 16'd1;
+                rx_cpu_read_count <= rx_cpu_read_count + {{(COUNT_WIDTH-1){1'b0}}, 1'b1};
             end
 
-            if (!spi_cs_prev && spi_cs_sync) begin
+            if (control_apply) begin
+                if (control_word_apply[3]) begin
+                    rx_ready <= 1'b0;
+                    rx_ready_bank <= 1'b0;
+                    rx_overflow_sticky <= 1'b0;
+                    rx_frame_error_sticky <= 1'b0;
+                    rx_length <= 16'd0;
+                    rx_cpu_read_count <= {COUNT_WIDTH{1'b0}};
+                    tx_length <= 16'd0;
+                    tx_staged_length <= 16'd0;
+                    tx_cpu_write_count <= {COUNT_WIDTH{1'b0}};
+                    tx_loaded <= 1'b0;
+                    tx_loaded_bank <= 1'b0;
+                    tx_stage_bank_select <= 1'b0;
+                    irq_asserted <= 1'b0;
+                    tx_read_complete <= 1'b0;
+                    rx_cpu_read_hold_valid <= 1'b0;
+                end else begin
+                    if (control_word_apply[0]) begin
+                        rx_ready <= 1'b0;
+                        rx_overflow_sticky <= 1'b0;
+                        rx_frame_error_sticky <= 1'b0;
+                        rx_length <= 16'd0;
+                        rx_cpu_read_count <= {COUNT_WIDTH{1'b0}};
+                        rx_cpu_read_hold_valid <= 1'b0;
+                    end
+                    if (control_word_apply[1] && !tx_loaded) begin
+                        tx_length <= tx_commit_length;
+                        tx_loaded <= 1'b1;
+                        tx_loaded_bank <= tx_stage_bank_select;
+                        tx_stage_bank_select <= ~tx_stage_bank_select;
+                        irq_asserted <= 1'b1;
+                        tx_read_complete <= 1'b0;
+                    end
+                    if (control_word_apply[2]) begin
+                        irq_asserted <= 1'b0;
+                        if (tx_read_complete) begin
+                            tx_loaded <= 1'b0;
+                            tx_length <= 16'd0;
+                            tx_staged_length <= 16'd0;
+                            tx_cpu_write_count <= {COUNT_WIDTH{1'b0}};
+                            tx_read_complete <= 1'b0;
+                        end
+                    end
+                end
+            end
+
+            if (spi_frame_end_fire) begin
                 if ((spi_frame_opcode_latched == OPCODE_READ_RESPONSE) && tx_loaded && spi_frame_read_response_complete) begin
                     tx_read_complete <= 1'b1;
                 end
 
-                if (spi_frame_opcode_latched == OPCODE_WRITE_REQUEST) begin
-                    if ((spi_frame_byte_count_latched >= 16'd3) && spi_rx_commit_valid) begin
+                if (spi_write_request_frame) begin
+                    if (spi_frame_has_header_latched && spi_rx_commit_valid) begin
                         rx_length <= spi_rx_commit_length;
                         rx_ready <= 1'b1;
                         rx_ready_bank <= spi_rx_commit_bank;
                         rx_frame_error_sticky <= 1'b0;
-                        rx_cpu_read_count <= 16'd0;
+                        rx_cpu_read_count <= {COUNT_WIDTH{1'b0}};
                         rx_cpu_read_hold_valid <= 1'b0;
-                    end else if ((spi_frame_byte_count_latched >= 16'd3) && spi_rx_commit_overflow) begin
+                    end else if (spi_frame_has_header_latched && spi_rx_commit_overflow) begin
                         rx_overflow_sticky <= 1'b1;
-                    end else if (spi_frame_byte_count_latched >= 16'd3) begin
+                    end else if (spi_frame_has_header_latched) begin
                         rx_frame_error_sticky <= 1'b1;
-                    end
-                end
-
-                if ((spi_frame_opcode_latched == OPCODE_WRITE_CONTROL) && (spi_frame_byte_count_latched >= 16'd3)) begin
-                    if (spi_control_word_latched[3]) begin
-                        rx_ready <= 1'b0;
-                        rx_ready_bank <= 1'b0;
-                        rx_overflow_sticky <= 1'b0;
-                        rx_frame_error_sticky <= 1'b0;
-                        rx_length <= 16'd0;
-                        rx_cpu_read_count <= 16'd0;
-                        rx_cpu_read_hold_valid <= 1'b0;
-                        tx_length <= 16'd0;
-                        tx_staged_length <= 16'd0;
-                        tx_cpu_write_count <= 16'd0;
-                        tx_loaded <= 1'b0;
-                        tx_loaded_bank <= 1'b0;
-                        tx_stage_bank_select <= 1'b0;
-                        irq_asserted <= 1'b0;
-                        tx_read_complete <= 1'b0;
-                    end else begin
-                        if (spi_control_word_latched[0]) begin
-                            rx_ready <= 1'b0;
-                            rx_overflow_sticky <= 1'b0;
-                            rx_frame_error_sticky <= 1'b0;
-                            rx_length <= 16'd0;
-                            rx_cpu_read_count <= 16'd0;
-                            rx_cpu_read_hold_valid <= 1'b0;
-                        end
-                        if (spi_control_word_latched[1] && !tx_loaded) begin
-                            if (tx_cpu_write_count < tx_staged_length) begin
-                                tx_length <= tx_cpu_write_count;
-                            end else begin
-                                tx_length <= tx_staged_length;
-                            end
-                            tx_loaded <= 1'b1;
-                            tx_loaded_bank <= tx_stage_bank_select;
-                            tx_stage_bank_select <= ~tx_stage_bank_select;
-                            irq_asserted <= 1'b1;
-                            tx_read_complete <= 1'b0;
-                        end
-                        if (spi_control_word_latched[2]) begin
-                            irq_asserted <= 1'b0;
-                            if (tx_read_complete) begin
-                                tx_loaded <= 1'b0;
-                                tx_length <= 16'd0;
-                                tx_staged_length <= 16'd0;
-                                tx_cpu_write_count <= 16'd0;
-                                tx_read_complete <= 1'b0;
-                            end
-                        end
                     end
                 end
             end
