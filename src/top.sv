@@ -665,7 +665,7 @@ module top (
 
     wb_spi_slave #(
         .ADDR(SPI_SLAVE_BASE),
-        .MAILBOX_BYTES(64)
+        .MAILBOX_BYTES(128)
     ) spi_slave0 (
         .clk_i(sys_clk),
         .rst_i(reset),

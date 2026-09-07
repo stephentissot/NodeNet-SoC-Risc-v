@@ -18,7 +18,7 @@ static constexpr gpio_num_t kDisplayDc = GPIO_NUM_16;
 static constexpr gpio_num_t kDisplayReset = GPIO_NUM_17;
 static constexpr bool kDisplayBringupOwnsSpiBus = false;
 
-static constexpr int kSpiClockHz = 1000000;
+static constexpr int kSpiClockHz = 5000000;
 static constexpr int kSpiQueueSize = 2;
 static constexpr int kSpiMaxTransferBytes = 4096;
 static constexpr int kDisplayClockHz = 10000000;

@@ -11,7 +11,8 @@
 namespace {
 
 constexpr const char* kLogTag = "esp32-main";
-constexpr unsigned long kPollIntervalMs = 20;
+constexpr unsigned long kPollIntervalIdleMs = 20;
+constexpr unsigned long kPollIntervalBusyMs = 1;
 TickType_t g_last_poll_tick = 0;
 
 } // namespace
@@ -47,7 +48,9 @@ extern "C" void app_main()
         }
 
         const TickType_t now = xTaskGetTickCount();
-        if ((now - g_last_poll_tick) < pdMS_TO_TICKS(kPollIntervalMs)) {
+        const TickType_t poll_interval = pdMS_TO_TICKS(
+            spi_link::is_busy() ? kPollIntervalBusyMs : kPollIntervalIdleMs);
+        if ((now - g_last_poll_tick) < poll_interval) {
             vTaskDelay(pdMS_TO_TICKS(1));
             continue;
         }

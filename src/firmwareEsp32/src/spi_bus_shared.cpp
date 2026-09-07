@@ -25,7 +25,7 @@ esp_err_t ensure_bus()
     bus_config.quadhd_io_num = -1;
     bus_config.max_transfer_sz = app_config::kSpiMaxTransferBytes;
 
-    const esp_err_t result = spi_bus_initialize(app_config::kSpiHost, &bus_config, SPI_DMA_DISABLED);
+    const esp_err_t result = spi_bus_initialize(app_config::kSpiHost, &bus_config, SPI_DMA_CH_AUTO);
     if ((result == ESP_OK) || (result == ESP_ERR_INVALID_STATE)) {
         g_bus_initialized = true;
         return ESP_OK;
