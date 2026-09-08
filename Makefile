@@ -95,7 +95,7 @@ SOURCES += $(LITEDRAM_RTL)
 SOURCES := $(sort $(SOURCES))
 
 
-.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw-check-image flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc plc-package plc-mirror-package plc-package-check plc-package-build-check plc-mirror-package-check flash-plc-package flash-plc-package-write bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only litedram-gen litedram-copy litedram-refresh esp32 esp32Flash monitor
+.PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw-check-image flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc plc-package plc-mirror-package plc-package-check plc-package-build-check plc-mirror-package-check flash-plc-package flash-plc-package-write bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only litedram-gen litedram-copy litedram-refresh esp32 esp32Flash esp32FlashFs monitor
 
 all: firmware-build $(BUILD)/$(TOP).bit
 
@@ -172,6 +172,10 @@ esp32:
 
 esp32Flash:
 	cd $(ESP32_DIR) && "$(PIO)" run -t upload
+	powershell -NoProfile -ExecutionPolicy Bypass -File tools/esp32_sync_littlefs.ps1 -ProjectDir "$(ESP32_DIR)" -PioPath "$(PIO)"
+
+esp32FlashFs:
+	powershell -NoProfile -ExecutionPolicy Bypass -File tools/esp32_sync_littlefs.ps1 -ProjectDir "$(ESP32_DIR)" -PioPath "$(PIO)"
 
 monitor:
 	cd $(ESP32_DIR) && "$(PIO)" device monitor

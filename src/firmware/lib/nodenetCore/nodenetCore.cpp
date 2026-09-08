@@ -9,6 +9,7 @@
 #include "sdram.h"
 
 namespace {
+constexpr bool kEnableModbusWriteTraceLogs = false;
 constexpr const char* kFlashDbConfigKey = "nodenet.config";
 constexpr const char* kFlashDbModbus0Key = "nodenet.modbus0";
 constexpr const char* kFlashDbPointCatalogKey = "nodenet.points";
@@ -33,6 +34,30 @@ constexpr uint8_t kBootNodeServicesProgressStart = 10u;
 constexpr uint8_t kBootNodeServicesProgressEnd = 34u;
 constexpr uint8_t kBootRestoreProgressStart = 70u;
 constexpr uint8_t kBootRestoreProgressEnd = 95u;
+
+constexpr const char* kPlcSlotRuntimePointIds[] = {
+    "loaded",
+    "state",
+    "runEnabled",
+    "status",
+    "faultCode",
+    "faultInfo",
+    "bytecodeSize",
+    "loadEpoch",
+    "objectSize",
+    "paramsSummary",
+};
+
+constexpr const char* kPlcGlobalRuntimePointIds[] = {
+    "activeSlotCount",
+    "faultedSlotCount",
+    "engineEnabled",
+    "engineBusy",
+    "engineActiveSlot",
+    "engineLastFaultCode",
+    "engineLastFaultSlot",
+    "engineScanIntervalCycles",
+};
 
 uint8_t boot_node_services_progress(uint16_t slot_index)
 {
@@ -1962,6 +1987,62 @@ bool NodeNetCore::buildVirtualPlcPointState(const PointDefinition& definition,
     return true;
 }
 
+bool NodeNetCore::buildPlcLinkPointState(uint16_t point_index, PointState& state) const
+{
+    if (point_index >= _pointCatalog.size()) {
+        return false;
+    }
+
+    const PointDefinition* definitions = _pointCatalog.entries();
+    const PointState* states = _pointCatalog.states();
+    const uint32_t now_ms = millis();
+    const PointCatalog::PlcPointMeta& plc_meta = _pointCatalog.plcPointMeta(point_index);
+    if (buildVirtualPlcPointState(definitions[point_index], plc_meta, now_ms, state)) {
+        return true;
+    }
+
+    state = states[point_index];
+    return true;
+}
+
+bool NodeNetCore::publishVirtualPointStateIfChanged(const PointIdentity& id)
+{
+    const size_t point_index = _pointCatalog.findIndex(id);
+    if (point_index >= _pointCatalog.size()) {
+        return false;
+    }
+
+    PointState next_state = {};
+    if (!buildVirtualPlcPointState(_pointCatalog.entries()[point_index],
+                                   _pointCatalog.plcPointMeta(point_index),
+                                   millis(),
+                                   next_state)) {
+        return false;
+    }
+
+    return updatePointState(id, next_state);
+}
+
+void NodeNetCore::publishPlcSlotRuntimeStates(uint16_t slot_id)
+{
+    char slot_feature[32] = {};
+    (void)std::snprintf(slot_feature, sizeof(slot_feature), "plc.slot%u", static_cast<unsigned>(slot_id));
+    for (const char* point_id : kPlcSlotRuntimePointIds) {
+        PointIdentity id = {};
+        make_point_identity(id, deviceId, slot_feature, point_id);
+        (void)publishVirtualPointStateIfChanged(id);
+    }
+}
+
+void NodeNetCore::publishPlcGlobalRuntimeStates()
+{
+    for (const char* point_id : kPlcGlobalRuntimePointIds) {
+        PointIdentity id = {};
+        make_point_identity(id, deviceId, "plc", point_id);
+        (void)publishVirtualPointStateIfChanged(id);
+    }
+}
+
 bool NodeNetCore::refreshMirrorProgramRuntimeMap(uint16_t slot_id, uint32_t runtime_store_epoch)
 {
     if (_plcRuntimePublisher == nullptr || slot_id >= kPlcSlotCountV1) {
@@ -2443,6 +2524,18 @@ bool NodeNetCore::updateProperty(const JsonDocument& request)
     }
 
     const bool next_value = value.as<bool>();
+    const PointState current_state = _pointCatalog.states()[point_index];
+    const uint32_t sequence_before = _pointCatalog.statesSequence();
+    if (kEnableModbusWriteTraceLogs && _logger != nullptr) {
+        _logger->Info("UpdateProperty modbus begin point=%s idx=%u slave=%u addr=%u prev=%u prev_q=%u req=%u",
+                      propertyName,
+                      static_cast<unsigned>(point_index),
+                      static_cast<unsigned>(definition.ref.modbus.slave_address),
+                      static_cast<unsigned>(definition.ref.modbus.address),
+                      current_state.value.b ? 1u : 0u,
+                      static_cast<unsigned>(current_state.quality),
+                      next_value ? 1u : 0u);
+    }
     const bool ok = _modbus0->writeSingleCoil(definition.ref.modbus.slave_address,
                                               definition.ref.modbus.address,
                                               next_value);
@@ -2453,7 +2546,8 @@ bool NodeNetCore::updateProperty(const JsonDocument& request)
     command_state.pending = false;
 
     PointState next_state = {};
-    next_state = _pointCatalog.states()[point_index];
+    next_state = current_state;
+    bool state_update_ok = false;
 
     if (ok) {
         command_state.command_quality = PointCommandQuality::Acked;
@@ -2462,15 +2556,26 @@ bool NodeNetCore::updateProperty(const JsonDocument& request)
         next_state.quality = PointQuality::Good;
         next_state.last_update_ms = command_state.last_command_ts_ms;
         next_state.last_good_update_ms = command_state.last_command_ts_ms;
-        (void)updatePointState(definition.id, next_state);
+        state_update_ok = updatePointState(definition.id, next_state);
     } else {
         command_state.command_quality = PointCommandQuality::ProtocolError;
         next_state.quality = PointQuality::BadProtocolError;
         next_state.last_update_ms = command_state.last_command_ts_ms;
-        (void)updatePointState(definition.id, next_state);
+        state_update_ok = updatePointState(definition.id, next_state);
     }
 
     (void)updatePointCommandState(definition.id, command_state);
+    if (kEnableModbusWriteTraceLogs && _logger != nullptr) {
+        _logger->Info("UpdateProperty modbus end point=%s write_ok=%u state_update_ok=%u seq_before=%lu seq_after=%lu prev=%u next=%u next_q=%u",
+                      propertyName,
+                      ok ? 1u : 0u,
+                      state_update_ok ? 1u : 0u,
+                      static_cast<unsigned long>(sequence_before),
+                      static_cast<unsigned long>(_pointCatalog.statesSequence()),
+                      current_state.value.b ? 1u : 0u,
+                      next_state.value.b ? 1u : 0u,
+                      static_cast<unsigned>(next_state.quality));
+    }
     return ok;
 }
 
@@ -2508,12 +2613,16 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
             plc_engine_set_enabled(requested);
             ok = (plc_engine_enabled() == requested);
             if (ok) {
+                publishPlcGlobalRuntimeStates();
                 savePreferences();
             }
         } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::EngineClearFault) {
             if (requested) {
                 plc_engine_clear_fault_latch();
                 ok = plc_engine_last_fault_code() == 0u;
+                if (ok) {
+                    publishPlcGlobalRuntimeStates();
+                }
             }
         } else {
             return false;
@@ -2662,6 +2771,8 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
                 control_block->status = kPlcSlotStatusLoadedV1;
             }
             ok = true;
+            publishPlcSlotRuntimeStates(slot_id);
+            publishPlcGlobalRuntimeStates();
             savePreferences();
         }
     } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotStop) {
@@ -2671,6 +2782,8 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
                 control_block->status = kPlcSlotStatusLoadedV1;
             }
             ok = true;
+            publishPlcSlotRuntimeStates(slot_id);
+            publishPlcGlobalRuntimeStates();
             savePreferences();
         }
     } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotReset) {
@@ -2690,6 +2803,8 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
                 control_block->status = kPlcSlotStatusLoadedV1;
             }
             ok = true;
+            publishPlcSlotRuntimeStates(slot_id);
+            publishPlcGlobalRuntimeStates();
         }
     } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotClearFault) {
         if (requested && loaded) {
@@ -2699,6 +2814,8 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
                 control_block->status = kPlcSlotStatusLoadedV1;
             }
             ok = true;
+            publishPlcSlotRuntimeStates(slot_id);
+            publishPlcGlobalRuntimeStates();
         }
     } else {
         return false;
@@ -3377,6 +3494,8 @@ bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument
         static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
     response["state"] = plc_slot_state_name(*control_block, slot_id);
     response["faultCode"] = control_block->fault_code;
+    publishPlcSlotRuntimeStates(slot_id);
+    publishPlcGlobalRuntimeStates();
     return true;
 }
 
@@ -3632,6 +3751,8 @@ erase_cleanup:
         plc_engine_set_enabled(true);
     }
     _pendingPlcErase = {};
+    publishPlcSlotRuntimeStates(slot_id);
+    publishPlcGlobalRuntimeStates();
     refreshScreen();
 }
 
@@ -3939,6 +4060,9 @@ void NodeNetCore::processPendingPlcAutoLoad()
         }
         control_block->status = kPlcSlotStatusLoadedV1;
     }
+
+    publishPlcSlotRuntimeStates(slot_id);
+    publishPlcGlobalRuntimeStates();
 
     const uint32_t runtime_store_epoch_after = _plcRuntimePublisher->headerSnapshot().store_epoch;
     if (runtime_store_epoch_after != runtime_store_epoch_before) {
@@ -4791,4 +4915,5 @@ void NodeNetCore::publishBuiltinPointStates()
     state.quality = PointQuality::Good;
     (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
 }
+
 

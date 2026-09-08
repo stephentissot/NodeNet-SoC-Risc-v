@@ -15,15 +15,95 @@
 #include "spi_mailbox.h"
 
 #include "nodenetCore.h"
+#include "nodenetLogger.h"
 
 namespace {
 
+constexpr bool kEnablePlcLinkTraceLogs = false;
+
+bool resolvePlcLinkPointState(void* context,
+                              uint16_t point_index,
+                              const PointDefinition& definition,
+                              PointState& out_state)
+{
+    (void)definition;
+    if (context == nullptr) {
+        return false;
+    }
+
+    return static_cast<const NodeNetCore*>(context)->buildPlcLinkPointState(point_index, out_state);
+}
+
 void handleSpiMailboxProtocol(SpiMailbox& mailbox, const NodeNetCore& nodeNetCore)
 {
+    PointCatalog& point_catalog = const_cast<NodeNetCore&>(nodeNetCore).pointCatalog();
+    const uint32_t defs_generation = point_catalog.defsGeneration();
+    const uint32_t states_sequence = point_catalog.statesSequence();
+    NodeNet* transport = nodeNetCore.nodeNet();
+    if (transport == nullptr) {
+        return;
+    }
+
     (void)plclink_mailbox_service::service(mailbox,
-                                           nodeNetCore.pointCatalog(),
-                                           0u,
-                                           0u);
+                                           point_catalog,
+                                           resolvePlcLinkPointState,
+                                           const_cast<NodeNetCore*>(&nodeNetCore),
+                                           defs_generation,
+                                           states_sequence);
+
+    size_t dirty_index = 0u;
+    const bool dirty_pending = point_catalog.peekDirtyStateIndex(dirty_index);
+    const uint16_t mailbox_status = mailbox.Status();
+    if constexpr (kEnablePlcLinkTraceLogs) {
+        static NodeLogger spi_logger(transport, 0x05);
+        static uint32_t last_logged_sequence = 0xFFFFFFFFu;
+        static uint16_t last_logged_status = 0xFFFFu;
+        static size_t last_logged_dirty_index = static_cast<size_t>(-1);
+        if (dirty_pending) {
+            if (states_sequence != last_logged_sequence ||
+                mailbox_status != last_logged_status ||
+                dirty_index != last_logged_dirty_index) {
+                spi_logger.Info("plcLink pump pending seq=%lu dirty=%u status=0x%04x has_rx=%u tx_ready=%u fullsync=%u",
+                                static_cast<unsigned long>(states_sequence),
+                                static_cast<unsigned>(dirty_index),
+                                static_cast<unsigned>(mailbox_status),
+                                mailbox.HasMessage() ? 1u : 0u,
+                                mailbox.TxReady() ? 1u : 0u,
+                                point_catalog.runtimeFullSyncRequired() ? 1u : 0u);
+                last_logged_sequence = states_sequence;
+                last_logged_status = mailbox_status;
+                last_logged_dirty_index = dirty_index;
+            }
+        }
+    }
+
+    const bool pumped = plclink_mailbox_service::pumpUpdates(mailbox,
+                                                             point_catalog,
+                                                             resolvePlcLinkPointState,
+                                                             const_cast<NodeNetCore*>(&nodeNetCore),
+                                                             defs_generation,
+                                                             point_catalog.statesSequence());
+    if constexpr (kEnablePlcLinkTraceLogs) {
+        static NodeLogger spi_logger(transport, 0x05);
+        static uint32_t blocked_log_count = 0u;
+        if (pumped) {
+            spi_logger.Info("plcLink pump sent seq=%lu status=0x%04x",
+                            static_cast<unsigned long>(point_catalog.statesSequence()),
+                            static_cast<unsigned>(mailbox_status));
+        } else if (dirty_pending) {
+            ++blocked_log_count;
+            if (blocked_log_count == 1u || (blocked_log_count % 64u) == 0u) {
+                spi_logger.Warning("plcLink pump blocked seq=%lu dirty=%u status=0x%04x has_rx=%u tx_ready=%u",
+                                   static_cast<unsigned long>(point_catalog.statesSequence()),
+                                   static_cast<unsigned>(dirty_index),
+                                   static_cast<unsigned>(mailbox.Status()),
+                                   mailbox.HasMessage() ? 1u : 0u,
+                                   mailbox.TxReady() ? 1u : 0u);
+            }
+        } else {
+            blocked_log_count = 0u;
+        }
+    }
 }
 
 }

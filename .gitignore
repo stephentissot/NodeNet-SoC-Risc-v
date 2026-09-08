@@ -17,6 +17,7 @@
 
 # ESP-IDF managed component cache
 /src/firmwareEsp32/managed_components/
+/src/firmwareEsp32/www/node_modules/
 
 # Keep source JSON, ignore generated machine outputs in build/ only
 /build/**/*.json

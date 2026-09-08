@@ -75,9 +75,15 @@ public:
                                         bool& changed_out);
     bool updateState(const PointIdentity& id, const PointState& state);
     bool updateCommandState(const PointIdentity& id, const PointCommandState& state);
+    bool notifyStateChanged(const PointIdentity& id);
+    bool notifyStateChanged(size_t index);
+    bool peekDirtyStateIndex(size_t& index_out) const;
     bool popDirtyStateIndex(size_t& index_out);
+    bool acknowledgeDirtyStateIndex();
     bool runtimeFullSyncRequired() const;
     void acknowledgeRuntimeFullSync();
+    uint32_t defsGeneration() const;
+    uint32_t statesSequence() const;
 
     bool loadFromJson(const char* json);
     bool saveToJson(char* out, size_t out_size) const;
@@ -116,6 +122,14 @@ private:
     size_t browse_feature_count_ = 0u;
     size_t batch_update_depth_ = 0u;
     bool batch_browse_rebuild_pending_ = false;
+    uint16_t dirty_state_queue_[kMaxPoints] = {};
+    uint8_t dirty_state_flags_[(kMaxPoints + 7u) / 8u] = {};
+    size_t dirty_state_queue_head_ = 0u;
+    size_t dirty_state_queue_tail_ = 0u;
+    size_t dirty_state_queue_count_ = 0u;
+    bool runtime_full_sync_required_ = true;
+    uint32_t defs_generation_ = 0u;
+    uint32_t states_sequence_ = 0u;
 };
 
 #endif

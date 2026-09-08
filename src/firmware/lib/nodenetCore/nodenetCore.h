@@ -53,6 +53,8 @@ class NodeNetCore
         void attachPlcRuntimePublisher(const PlcRuntimePublisherV1* publisher);
         uint16_t restorePersistedPlcSlots();
         bool hasActiveRealtimeWork() const { return _plcCore.pollTransactionActive(); }
+        bool buildPlcLinkPointState(uint16_t point_index, PointState& state) const;
+        NodeNet* nodeNet() const { return _nodeNet; }
         void setPlcSlotRuntimeDiagnostics(uint8_t slot_id,
                                           uint8_t input_channel,
                                           uint8_t output_channel,
@@ -358,6 +360,9 @@ class NodeNetCore
 
         // Refreshes built-in node points that come from local configuration state.
         void publishBuiltinPointStates();
+        bool publishVirtualPointStateIfChanged(const PointIdentity& id);
+        void publishPlcSlotRuntimeStates(uint16_t slot_id);
+        void publishPlcGlobalRuntimeStates();
 
         bool buildVirtualPlcPointState(const PointDefinition& definition,
                            const PointCatalog::PlcPointMeta& plc_meta,

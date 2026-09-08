@@ -30,6 +30,11 @@ static constexpr int kDisplayYGap = 82;
 static constexpr bool kDisplaySwapXY = true;
 static constexpr bool kDisplayMirrorX = true;
 static constexpr bool kDisplayMirrorY = false;
+static constexpr char kSetupApSsid[] = "NodeNet-Setup";
+static constexpr char kSetupApPassword[] = "nodenet32";
+static constexpr char kSetupHostname[] = "nodenet-esp32";
+static constexpr char kWebMountPath[] = "/www";
+static constexpr uint32_t kWebSnapshotRefreshMs = 5000;
 static constexpr uint16_t kTransportMagic = 0x4E53u;
 static constexpr uint8_t kTransportVersion = 1u;
 

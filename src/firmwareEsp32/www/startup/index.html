@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NodeNet Setup</title>
+  <link rel="stylesheet" href="/startup/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="card">
+      <div class="header-row">
+        <div>
+          <p class="eyebrow" id="eyebrowText">NodeNet ESP32</p>
+          <h1 id="pageTitle">Wi-Fi Setup</h1>
+        </div>
+        <label class="inline-field compact">
+          <span id="languageLabelTop">Language</span>
+          <select id="languageQuick"></select>
+        </label>
+      </div>
+      <p class="lead" id="leadText">Connect the ESP32 to your local network while keeping a maintenance access point available.</p>
+      <div class="status" id="statusBox">Loading Wi-Fi status...</div>
+      <form id="wifiForm">
+        <label>
+          <span id="ssidLabel">SSID</span>
+          <input id="ssid" name="ssid" maxlength="32" required>
+        </label>
+        <label>
+          <span id="passwordLabel">Password</span>
+          <input id="password" name="password" type="password" maxlength="64" placeholder="Leave empty for an open network">
+        </label>
+        <button type="submit" id="wifiSubmit">Save and connect</button>
+      </form>
+      <section class="subcard">
+        <div class="subcard-head">
+          <h2 id="settingsTitle">Access and language</h2>
+          <p id="settingsLead">These settings are stored in ESP32 flash.</p>
+        </div>
+        <div class="status compact" id="settingsBox">Loading settings...</div>
+        <form id="settingsForm">
+          <label class="inline-field">
+            <span id="languageLabel">Language</span>
+            <select id="languageSelect"></select>
+          </label>
+          <label class="toggle-row">
+            <input id="anonymousAccess" name="anonymousAccess" type="checkbox">
+            <span>
+              <strong id="anonymousLabel">Anonymous access</strong>
+              <small id="anonymousHint">When disabled, the startup site remains available for setup but the PLC app requires the future user system.</small>
+            </span>
+          </label>
+          <button type="submit" id="settingsSubmit">Save settings</button>
+        </form>
+      </section>
+      <p class="hint" id="hintText">The maintenance access point stays available for local support.</p>
+      <a class="secondary" href="/app/" id="appLink">Open PLC application</a>
+    </section>
+  </main>
+  <script type="module" src="/startup/app.js"></script>
+</body>
+</html>

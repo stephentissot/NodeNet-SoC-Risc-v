@@ -36,6 +36,35 @@ static const PointState* point_state_storage_const() {
 static PointDefinition* g_slot_variable_scratch_definitions = nullptr;
 static size_t g_slot_variable_scratch_capacity = 0u;
 
+static bool point_state_payload_equal(PointValueType value_type,
+                                      const PointState& lhs,
+                                      const PointState& rhs) {
+    if (lhs.quality != rhs.quality) {
+        return false;
+    }
+
+    switch (value_type) {
+    case PointValueType::Bool:
+        return lhs.value.b == rhs.value.b;
+    case PointValueType::Uint16:
+        return lhs.value.u16 == rhs.value.u16;
+    case PointValueType::Int16:
+        return lhs.value.i16 == rhs.value.i16;
+    case PointValueType::Uint32:
+        return lhs.value.u32 == rhs.value.u32;
+    case PointValueType::Int32:
+        return lhs.value.i32 == rhs.value.i32;
+    case PointValueType::Float:
+        return lhs.value.f32 == rhs.value.f32;
+    case PointValueType::Enum:
+        return lhs.value.enum_value == rhs.value.enum_value;
+    case PointValueType::String:
+        return std::strncmp(lhs.string_value, rhs.string_value, sizeof(lhs.string_value)) == 0;
+    default:
+        return false;
+    }
+}
+
 static bool is_ascii_digit(char c) {
     return c >= '0' && c <= '9';
 }
@@ -387,6 +416,8 @@ void PointCatalog::clear() {
     std::memset(plc_point_meta_, 0, sizeof(plc_point_meta_));
     std::memset(browse_devices_, 0, sizeof(browse_devices_));
     std::memset(browse_feature_indices_, 0, sizeof(browse_feature_indices_));
+    defs_generation_ += 1u;
+    resetDirtyStateTracking();
     resetIndex();
 }
 
@@ -483,6 +514,7 @@ const char* PointCatalog::browseFeatureName(const BrowseDeviceMeta& meta, size_t
     return entries_[catalog_index].id.feature;
 }
 
+
 PointState* PointCatalog::findState(const PointIdentity& id) {
     const size_t index = lookupIndex(id);
     return index < count_ ? &point_state_storage()[index] : nullptr;
@@ -524,6 +556,8 @@ bool PointCatalog::upsert(const PointDefinition& definition) {
     if (existing_index < count_) {
         entries_[existing_index] = definition;
         plc_point_meta_[existing_index] = classifyPlcPointMeta(definition);
+        defs_generation_ += 1u;
+        requestRuntimeFullSync();
         rebuildIndex();
         if (batch_update_depth_ != 0u) {
             batch_browse_rebuild_pending_ = true;
@@ -542,6 +576,8 @@ bool PointCatalog::upsert(const PointDefinition& definition) {
     plc_point_meta_[count_] = classifyPlcPointMeta(definition);
     point_state_storage()[count_] = {};
     count_ += 1u;
+    defs_generation_ += 1u;
+    requestRuntimeFullSync();
     rebuildIndex();
     if (batch_update_depth_ != 0u) {
         batch_browse_rebuild_pending_ = true;
@@ -570,6 +606,8 @@ bool PointCatalog::remove(const PointIdentity& id) {
     plc_point_meta_[count_ - 1u] = {};
     point_state_storage()[count_ - 1u] = {};
     count_ -= 1u;
+    defs_generation_ += 1u;
+    requestRuntimeFullSync();
     rebuildIndex();
     if (batch_update_depth_ != 0u) {
         batch_browse_rebuild_pending_ = true;
@@ -663,6 +701,8 @@ bool PointCatalog::replaceSlotVariableDefinitions(uint16_t slot_id,
     }
 
     count_ = compacted_count + definition_count;
+    defs_generation_ += 1u;
+    requestRuntimeFullSync();
     rebuildIndex();
     if (batch_update_depth_ != 0u) {
         batch_browse_rebuild_pending_ = true;
@@ -679,7 +719,14 @@ bool PointCatalog::updateState(const PointIdentity& id, const PointState& state)
         return false;
     }
 
-    point_state_storage()[index] = state;
+    PointState* const stored_state = &point_state_storage()[index];
+    if (point_state_payload_equal(entries_[index].value_type, *stored_state, state)) {
+        *stored_state = state;
+        return true;
+    }
+
+    *stored_state = state;
+    markStateDirty(index);
     return true;
 }
 
@@ -690,6 +737,34 @@ bool PointCatalog::updateCommandState(const PointIdentity& id, const PointComman
     }
 
     *stored = state;
+    return true;
+}
+
+bool PointCatalog::notifyStateChanged(const PointIdentity& id) {
+    const size_t index = lookupIndex(id);
+    if (index >= count_) {
+        return false;
+    }
+
+    markStateDirty(index);
+    return true;
+}
+
+bool PointCatalog::notifyStateChanged(size_t index) {
+    if (index >= count_) {
+        return false;
+    }
+
+    markStateDirty(index);
+    return true;
+}
+
+bool PointCatalog::peekDirtyStateIndex(size_t& index_out) const {
+    if (dirty_state_queue_count_ == 0u) {
+        return false;
+    }
+
+    index_out = dirty_state_queue_[dirty_state_queue_head_];
     return true;
 }
 
@@ -739,15 +814,35 @@ bool PointCatalog::loadFromJson(const char* json) {
 }
 
 bool PointCatalog::popDirtyStateIndex(size_t& index_out) {
-    (void)index_out;
+    if (!peekDirtyStateIndex(index_out)) {
+        return false;
+    }
+
+    dirty_state_queue_head_ = (dirty_state_queue_head_ + 1u) % kMaxPoints;
+    dirty_state_queue_count_ -= 1u;
+    setDirtyStateFlag(index_out, false);
     return true;
 }
 
+bool PointCatalog::acknowledgeDirtyStateIndex() {
+    size_t index_out = 0u;
+    return popDirtyStateIndex(index_out);
+}
+
 bool PointCatalog::runtimeFullSyncRequired() const {
-    return false;
+    return runtime_full_sync_required_;
 }
 
 void PointCatalog::acknowledgeRuntimeFullSync() {
+    runtime_full_sync_required_ = false;
+}
+
+uint32_t PointCatalog::defsGeneration() const {
+    return defs_generation_;
+}
+
+uint32_t PointCatalog::statesSequence() const {
+    return states_sequence_;
 }
 
 bool PointCatalog::saveToJson(char* out, size_t out_size) const {
@@ -774,23 +869,67 @@ bool PointCatalog::saveToJson(char* out, size_t out_size) const {
 }
 
 void PointCatalog::resetDirtyStateTracking() {
+    std::memset(dirty_state_queue_, 0, sizeof(dirty_state_queue_));
+    std::memset(dirty_state_flags_, 0, sizeof(dirty_state_flags_));
+    dirty_state_queue_head_ = 0u;
+    dirty_state_queue_tail_ = 0u;
+    dirty_state_queue_count_ = 0u;
+    runtime_full_sync_required_ = true;
+    states_sequence_ = 0u;
 }
 
 void PointCatalog::requestRuntimeFullSync() {
+    std::memset(dirty_state_queue_, 0, sizeof(dirty_state_queue_));
+    std::memset(dirty_state_flags_, 0, sizeof(dirty_state_flags_));
+    dirty_state_queue_head_ = 0u;
+    dirty_state_queue_tail_ = 0u;
+    dirty_state_queue_count_ = 0u;
+    runtime_full_sync_required_ = true;
 }
 
 void PointCatalog::markStateDirty(size_t index) {
-    (void)index;
+    if (index >= count_) {
+        return;
+    }
+
+    states_sequence_ += 1u;
+    if (dirtyStateFlag(index)) {
+        return;
+    }
+
+    if (dirty_state_queue_count_ >= kMaxPoints) {
+        requestRuntimeFullSync();
+        return;
+    }
+
+    dirty_state_queue_[dirty_state_queue_tail_] = static_cast<uint16_t>(index);
+    dirty_state_queue_tail_ = (dirty_state_queue_tail_ + 1u) % kMaxPoints;
+    dirty_state_queue_count_ += 1u;
+    setDirtyStateFlag(index, true);
 }
 
 bool PointCatalog::dirtyStateFlag(size_t index) const {
-    (void)index;
-    return false;
+    if (index >= kMaxPoints) {
+        return false;
+    }
+
+    const size_t byte_index = index / 8u;
+    const uint8_t bit_mask = static_cast<uint8_t>(1u << (index % 8u));
+    return (dirty_state_flags_[byte_index] & bit_mask) != 0u;
 }
 
 void PointCatalog::setDirtyStateFlag(size_t index, bool dirty) {
-    (void)index;
-    (void)dirty;
+    if (index >= kMaxPoints) {
+        return;
+    }
+
+    const size_t byte_index = index / 8u;
+    const uint8_t bit_mask = static_cast<uint8_t>(1u << (index % 8u));
+    if (dirty) {
+        dirty_state_flags_[byte_index] |= bit_mask;
+    } else {
+        dirty_state_flags_[byte_index] &= static_cast<uint8_t>(~bit_mask);
+    }
 }
 
 bool PointCatalog::identitiesEqual(const PointIdentity& lhs, const PointIdentity& rhs) {
