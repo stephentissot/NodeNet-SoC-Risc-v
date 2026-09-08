@@ -12,7 +12,11 @@
 *.hex
 *.bit
 *.vvp
+*.vcd
 *.bak
+
+# ESP-IDF managed component cache
+/src/firmwareEsp32/managed_components/
 
 # Keep source JSON, ignore generated machine outputs in build/ only
 /build/**/*.json
