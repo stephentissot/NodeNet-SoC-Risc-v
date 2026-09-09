@@ -202,7 +202,7 @@ const wifiSsid = ref('');
 const wifiPassword = ref('');
 const wifiScanResults = ref([]);
 const selectedScanSsid = ref('');
-const slotActionKey = ref('');
+const pendingSlotAction = ref(null);
 
 let socket = null;
 let socketReconnectEnabled = false;
@@ -248,6 +248,7 @@ function syncAuth(auth) {
 
 function disconnectSocket() {
   socketReconnectEnabled = false;
+  pendingSlotAction.value = null;
   if (socket) {
     const activeSocket = socket;
     socket = null;
@@ -454,7 +455,29 @@ function applySnapshotMeta(snapshot) {
 }
 
 function slotActionBusy(slotId, action) {
-  return slotActionKey.value === `${slotId}:${action}`;
+  if (!pendingSlotAction.value) {
+    return false;
+  }
+  if (action === undefined) {
+    return pendingSlotAction.value.slotId === slotId;
+  }
+  return pendingSlotAction.value.slotId === slotId && pendingSlotAction.value.action === action;
+}
+
+function clearPendingSlotActionIfMatched(record) {
+  const pending = pendingSlotAction.value;
+  if (!pending || !record) {
+    return;
+  }
+
+  if ((record.feature || '') !== pending.feature) {
+    return;
+  }
+
+  const pointId = record.point_id || '';
+  if (pointId === pending.pointId || pointId === 'state' || pointId === 'loaded' || pointId === 'runEnabled' || pointId === 'status') {
+    pendingSlotAction.value = null;
+  }
 }
 
 function connectSocket() {
@@ -517,6 +540,7 @@ function connectSocket() {
     if (message.type === 'plc_point_update') {
       applySnapshotMeta(message.snapshot);
       upsertStateRecord(message.record);
+      clearPendingSlotActionIfMatched(message.record);
       return;
     }
   });
@@ -775,13 +799,21 @@ const app = {
           return;
         }
 
-        slotActionKey.value = `${slot.id}:${action}`;
+        if (slotActionBusy(slot.id)) {
+          return;
+        }
+
+        pendingSlotAction.value = {
+          slotId: slot.id,
+          action,
+          feature: record.feature || `plc.slot${slot.id}`,
+          pointId: record.point_id || action,
+        };
         try {
           await writePlcPoint(record, 1, 1);
         } catch (error) {
+          pendingSlotAction.value = null;
           errorText.value = `${t('slotActionFailed')} ${error.message}`;
-        } finally {
-          slotActionKey.value = '';
         }
       },
       saveSettings: async () => {
@@ -890,10 +922,10 @@ const app = {
               <strong>{{ slot.stateLabel }}</strong>
               <small>{{ slot.sourceLabel }}</small>
               <div class="slot-actions" v-if="slot.canStart || slot.canStop || slot.canReset || slot.canClearFault">
-                <button v-if="slot.canStart" class="slot-action-button" :disabled="slotActionBusy(slot.id, 'start')" @click="triggerSlotAction(slot, 'start')">{{ t('slotStart') }}</button>
-                <button v-if="slot.canStop" class="slot-action-button secondary-button" :disabled="slotActionBusy(slot.id, 'stop')" @click="triggerSlotAction(slot, 'stop')">{{ t('slotStop') }}</button>
-                <button v-if="slot.canReset" class="slot-action-button secondary-button" :disabled="slotActionBusy(slot.id, 'reset')" @click="triggerSlotAction(slot, 'reset')">{{ t('slotReset') }}</button>
-                <button v-if="slot.canClearFault" class="slot-action-button danger-button" :disabled="slotActionBusy(slot.id, 'clearFault')" @click="triggerSlotAction(slot, 'clearFault')">{{ t('slotClearFault') }}</button>
+                <button v-if="slot.canStart" :class="['slot-action-button', { 'is-busy': slotActionBusy(slot.id, 'start') }]" :disabled="slotActionBusy(slot.id)" @click="triggerSlotAction(slot, 'start')"><span>{{ t('slotStart') }}</span><span v-if="slotActionBusy(slot.id, 'start')" class="button-spinner" aria-hidden="true"></span></button>
+                <button v-if="slot.canStop" :class="['slot-action-button', 'secondary-button', { 'is-busy': slotActionBusy(slot.id, 'stop') }]" :disabled="slotActionBusy(slot.id)" @click="triggerSlotAction(slot, 'stop')"><span>{{ t('slotStop') }}</span><span v-if="slotActionBusy(slot.id, 'stop')" class="button-spinner" aria-hidden="true"></span></button>
+                <button v-if="slot.canReset" :class="['slot-action-button', 'secondary-button', { 'is-busy': slotActionBusy(slot.id, 'reset') }]" :disabled="slotActionBusy(slot.id)" @click="triggerSlotAction(slot, 'reset')"><span>{{ t('slotReset') }}</span><span v-if="slotActionBusy(slot.id, 'reset')" class="button-spinner" aria-hidden="true"></span></button>
+                <button v-if="slot.canClearFault" :class="['slot-action-button', 'danger-button', { 'is-busy': slotActionBusy(slot.id, 'clearFault') }]" :disabled="slotActionBusy(slot.id)" @click="triggerSlotAction(slot, 'clearFault')"><span>{{ t('slotClearFault') }}</span><span v-if="slotActionBusy(slot.id, 'clearFault')" class="button-spinner" aria-hidden="true"></span></button>
               </div>
             </article>
           </div>

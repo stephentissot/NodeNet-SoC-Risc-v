@@ -259,6 +259,36 @@ input {
   padding: 10px 14px;
 }
 
+.slot-action-button.is-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.slot-action-button:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.button-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: rgba(255, 255, 255, 0.95);
+  animation: button-spin 0.75s linear infinite;
+}
+
+@keyframes button-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .danger-button {
   background: linear-gradient(135deg, var(--danger) 0%, #d64550 100%);
 }
