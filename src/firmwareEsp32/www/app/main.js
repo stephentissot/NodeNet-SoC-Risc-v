@@ -78,7 +78,7 @@ const translations = {
     sequence: 'Sequence',
     plcSnapshot: 'PLC snapshot',
     pointsLoaded: 'points loaded',
-    refreshSnapshot: 'Request snapshot refresh',
+    refreshSnapshot: 'Reload snapshot',
     slotStart: 'Start',
     slotStop: 'Stop',
     slotReset: 'Reset',
@@ -160,7 +160,7 @@ const translations = {
     sequence: 'Sequence',
     plcSnapshot: 'Snapshot PLC',
     pointsLoaded: 'points charges',
-    refreshSnapshot: 'Relancer un snapshot',
+    refreshSnapshot: 'Recharger le snapshot',
     slotStart: 'Start',
     slotStop: 'Stop',
     slotReset: 'Reset',
@@ -347,12 +347,7 @@ function updateWifiInSystemInfo(payload) {
 }
 
 async function requestRefresh() {
-  try {
-    await fetchJson('/api/plc/states/refresh', { method: 'POST' });
-  } catch (error) {
-    await handleProtectedFailure(error);
-    throw error;
-  }
+  await loadStates();
 }
 
 async function writePlcPoint(record, valueBits, writeFlags = 1) {
