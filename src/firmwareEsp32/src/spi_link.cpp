@@ -64,6 +64,7 @@ uint32_t g_frame_count = 0;
 uint16_t g_last_status = 0xFFFFu;
 uint32_t g_runtime_status5_ready_count = 0u;
 uint32_t g_runtime_suspicious_mailbox_count = 0u;
+bool g_startup_irq_inconsistent_logged = false;
 bool g_caps_request_sent = false;
 bool g_caps_response_seen = false;
 bool g_defs_request_sent = false;
@@ -625,10 +626,16 @@ esp_err_t read_status(uint16_t* out_status, uint8_t* out_rx)
 
 esp_err_t recover_startup_mailbox(uint16_t status, int irq_level)
 {
-    if (irq_level == 0 &&
-        status_bit(status, 0) == 0u &&
-        status_bit(status, 4) == 0u &&
-        status_bit(status, 6) == 0u) {
+    const bool has_mailbox_state = (status_bit(status, 0) != 0u) ||
+                                   (status_bit(status, 4) != 0u) ||
+                                   (status_bit(status, 6) != 0u);
+    if (!has_mailbox_state) {
+        if (irq_level != 0 && !g_startup_irq_inconsistent_logged) {
+            ESP_LOGW(kLogTag,
+                     "Ignoring startup IRQ high with empty STATUS=0x%04x; bridge not ready or IRQ line floating",
+                     static_cast<unsigned>(status));
+            g_startup_irq_inconsistent_logged = true;
+        }
         return ESP_OK;
     }
 
@@ -898,7 +905,7 @@ esp_err_t init()
     irq_config.pin_bit_mask = (1ULL << static_cast<uint32_t>(app_config::kFpgaIrq));
     irq_config.mode = GPIO_MODE_INPUT;
     irq_config.pull_up_en = GPIO_PULLUP_DISABLE;
-    irq_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    irq_config.pull_down_en = GPIO_PULLDOWN_ENABLE;
     irq_config.intr_type = GPIO_INTR_DISABLE;
     ESP_ERROR_CHECK(gpio_config(&irq_config));
 
