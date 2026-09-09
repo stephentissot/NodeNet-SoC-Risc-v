@@ -625,7 +625,10 @@ esp_err_t read_status(uint16_t* out_status, uint8_t* out_rx)
 
 esp_err_t recover_startup_mailbox(uint16_t status, int irq_level)
 {
-    if (status_bit(status, 0) == 0u && status_bit(status, 4) == 0u && status_bit(status, 6) == 0u) {
+    if (irq_level == 0 &&
+        status_bit(status, 0) == 0u &&
+        status_bit(status, 4) == 0u &&
+        status_bit(status, 6) == 0u) {
         return ESP_OK;
     }
 
@@ -906,6 +909,18 @@ esp_err_t init()
     ESP_RETURN_ON_ERROR(add_device(app_config::kFpgaCs, &g_fpga_device),
                         kLogTag,
                         "spi_bus_add_device(fpga) failed");
+
+    {
+        const int irq_level = gpio_get_level(app_config::kFpgaIrq);
+        uint8_t status_rx[3] = {};
+        uint16_t status = 0u;
+        ESP_RETURN_ON_ERROR(read_status(&status, status_rx),
+                            kLogTag,
+                            "startup read_status failed");
+        ESP_RETURN_ON_ERROR(recover_startup_mailbox(status, irq_level),
+                            kLogTag,
+                            "startup mailbox sanitize failed");
+    }
 
     ESP_LOGI(kLogTag,
              "SPI ready host=%d sck=%d mosi=%d miso=%d fpga_cs=%d irq=%d mode=%d hz=%d max_transfer=%d irq_level=%d",
