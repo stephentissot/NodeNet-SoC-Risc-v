@@ -41,6 +41,7 @@ constexpr uint8_t kBootPercentCapsReady = 45u;
 constexpr uint8_t kBootPercentSnapshotBase = 45u;
 constexpr uint8_t kBootPercentSnapshotSpan = 54u;
 constexpr size_t kMaxPendingPointUpdates = 512u;
+constexpr TickType_t kStateReadLockTimeoutTicks = 1u;
 
 struct PendingPointUpdate {
     uint16_t point_index;
@@ -104,6 +105,15 @@ void state_lock()
     if (g_state_mutex != nullptr) {
         xSemaphoreTake(g_state_mutex, portMAX_DELAY);
     }
+}
+
+bool state_try_lock(TickType_t timeout_ticks)
+{
+    if (g_state_mutex == nullptr) {
+        return true;
+    }
+
+    return xSemaphoreTake(g_state_mutex, timeout_ticks) == pdTRUE;
 }
 
 void state_unlock()
@@ -1475,26 +1485,26 @@ BootProgress get_boot_progress()
 SnapshotInfo get_snapshot_info()
 {
     SnapshotInfo info = {};
-    state_lock();
     info.point_count = g_point_count;
-    info.loaded_points = static_cast<uint16_t>(std::min<size_t>(g_snapshot_record_count, g_state_records.size()));
+    info.loaded_points = g_snapshot_record_count;
     info.max_payload = g_max_fragment_payload;
     info.complete = g_states_response_seen;
     info.sequence = g_states_sequence;
-    state_unlock();
+    if (state_try_lock(kStateReadLockTimeoutTicks)) {
+        info.loaded_points = static_cast<uint16_t>(std::min<size_t>(g_snapshot_record_count, g_state_records.size()));
+        state_unlock();
+    }
     return info;
 }
 
 DefinitionsInfo get_definitions_info()
 {
     DefinitionsInfo info = {};
-    state_lock();
     info.point_count = g_point_count;
     info.complete = g_defs_response_seen;
     info.generation = g_defs_generation;
     info.loaded_bytes = g_defs_loaded_bytes;
     info.total_bytes = g_defs_total_bytes;
-    state_unlock();
     return info;
 }
 
@@ -1521,7 +1531,9 @@ size_t copy_cached_state_records(CachedStateRecord* out_records, size_t max_reco
         return 0u;
     }
 
-    state_lock();
+    if (!state_try_lock(kStateReadLockTimeoutTicks)) {
+        return 0u;
+    }
     const size_t copy_count = std::min(max_records, g_state_records.size());
     if (copy_count != 0u) {
         std::memcpy(out_records, g_state_records.data(), copy_count * sizeof(CachedStateRecord));
@@ -1536,7 +1548,9 @@ size_t copy_definition_records(plclink::DefinitionRecordV1* out_records, size_t 
         return 0u;
     }
 
-    state_lock();
+    if (!state_try_lock(kStateReadLockTimeoutTicks)) {
+        return 0u;
+    }
     const size_t copy_count = std::min(max_records, g_definition_records.size());
     if (copy_count != 0u) {
         std::memcpy(out_records, g_definition_records.data(), copy_count * sizeof(plclink::DefinitionRecordV1));
@@ -1552,7 +1566,9 @@ bool copy_cached_state_record(size_t index, CachedStateRecord* out_record)
     }
 
     bool copied = false;
-    state_lock();
+    if (!state_try_lock(kStateReadLockTimeoutTicks)) {
+        return false;
+    }
     if (index < g_state_records.size()) {
         *out_record = g_state_records[index];
         copied = true;
@@ -1568,7 +1584,9 @@ bool copy_definition_record(size_t index, plclink::DefinitionRecordV1* out_recor
     }
 
     bool copied = false;
-    state_lock();
+    if (!state_try_lock(kStateReadLockTimeoutTicks)) {
+        return false;
+    }
     if (index < g_definition_records.size()) {
         *out_record = g_definition_records[index];
         copied = true;
@@ -1584,7 +1602,9 @@ bool pop_point_update(PointUpdate* out_update)
     }
 
     bool copied = false;
-    state_lock();
+    if (!state_try_lock(kStateReadLockTimeoutTicks)) {
+        return false;
+    }
     if (g_pending_point_update_count != 0u) {
         const PendingPointUpdate pending = g_pending_point_updates[g_pending_point_update_head];
         g_pending_point_update_head = (g_pending_point_update_head + 1u) % kMaxPendingPointUpdates;
@@ -1618,7 +1638,9 @@ bool copy_string_state_by_path(const char* feature, const char* point_id, char* 
     out_value[0] = '\0';
 
     bool found = false;
-    state_lock();
+    if (!state_try_lock(kStateReadLockTimeoutTicks)) {
+        return false;
+    }
     const CachedStateRecord* state_record = nullptr;
     if (find_state_record_by_path_locked(feature, point_id, kPointValueTypeString, &state_record)) {
         std::strncpy(out_value, state_record->string_value, out_size - 1u);
@@ -1636,7 +1658,9 @@ bool copy_bool_state_by_path(const char* feature, const char* point_id, bool* ou
     }
 
     bool found = false;
-    state_lock();
+    if (!state_try_lock(kStateReadLockTimeoutTicks)) {
+        return false;
+    }
     const CachedStateRecord* state_record = nullptr;
     if (find_state_record_by_path_locked(feature, point_id, kPointValueTypeBool, &state_record)) {
         *out_value = (state_record->record.value_bits & 0x1u) != 0u;
@@ -1653,7 +1677,9 @@ bool copy_u32_state_by_path(const char* feature, const char* point_id, uint32_t*
     }
 
     bool found = false;
-    state_lock();
+    if (!state_try_lock(kStateReadLockTimeoutTicks)) {
+        return false;
+    }
     const CachedStateRecord* state_record = nullptr;
     if (find_state_record_by_path_locked(feature, point_id, kPointValueTypeUint32, &state_record)) {
         *out_value = state_record->record.value_bits;
