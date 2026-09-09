@@ -279,6 +279,11 @@ input {
   animation: button-spin 0.75s linear infinite;
 }
 
+.secondary-button .button-spinner {
+  border-color: rgba(16, 42, 67, 0.2);
+  border-top-color: var(--ink);
+}
+
 @keyframes button-spin {
   from {
     transform: rotate(0deg);
