@@ -42,6 +42,7 @@ constexpr uint8_t kBootPercentSnapshotBase = 45u;
 constexpr uint8_t kBootPercentSnapshotSpan = 54u;
 constexpr size_t kMaxPendingPointUpdates = 512u;
 constexpr TickType_t kStateReadLockTimeoutTicks = 1u;
+constexpr TickType_t kCapsResponseTimeoutTicks = pdMS_TO_TICKS(250u);
 
 struct PendingPointUpdate {
     uint16_t point_index;
@@ -87,6 +88,8 @@ uint32_t g_states_sequence = 0u;
 bool g_refresh_requested = false;
 bool g_write_state_request_sent = false;
 PendingWriteStateRequest g_pending_write_state = {};
+TickType_t g_caps_request_tick = 0u;
+uint32_t g_caps_request_attempt_count = 0u;
 SemaphoreHandle_t g_state_mutex = nullptr;
 std::vector<plclink::DefinitionRecordV1> g_definition_records;
 std::vector<CachedStateRecord> g_state_records;
@@ -166,6 +169,7 @@ void begin_full_resync(uint32_t new_defs_generation)
     g_resync_pending = true;
     g_caps_request_sent = false;
     g_caps_response_seen = false;
+    g_caps_request_tick = 0u;
     g_defs_request_sent = false;
     g_defs_response_seen = false;
     g_states_request_sent = false;
@@ -185,6 +189,13 @@ void begin_full_resync(uint32_t new_defs_generation)
     g_pending_write_state = {};
     reset_defs_cache();
     reset_state_cache(0u);
+}
+
+void note_caps_request_sent()
+{
+    g_caps_request_sent = true;
+    g_caps_request_tick = xTaskGetTickCount();
+    ++g_caps_request_attempt_count;
 }
 
 esp_err_t send_write_state_request(const PendingWriteStateRequest& request)
@@ -1029,12 +1040,34 @@ esp_err_t poll()
         ESP_RETURN_ON_ERROR(write_request(request_buffer, sizeof(request_buffer)),
                             kLogTag,
                             "write_request failed during resync");
-        g_caps_request_sent = true;
+        note_caps_request_sent();
         ESP_LOGI(kLogTag,
-                 "TX plcLink get_caps request for resync len=%u request_id=%u",
+                 "TX plcLink get_caps request for resync len=%u request_id=%u attempt=%lu",
                  static_cast<unsigned>(sizeof(request_buffer)),
-                 static_cast<unsigned>(header.request_id));
+                 static_cast<unsigned>(header.request_id),
+                 static_cast<unsigned long>(g_caps_request_attempt_count));
         return ESP_OK;
+    }
+
+    if (g_caps_request_sent && !g_caps_response_seen) {
+        const TickType_t now = xTaskGetTickCount();
+        if ((now - g_caps_request_tick) >= kCapsResponseTimeoutTicks) {
+            ESP_LOGW(kLogTag,
+                     "Timeout waiting for plcLink caps response attempt=%lu status=0x%04x irq=%d rx_ready=%u tx_loaded=%u tx_ready_for_esp32=%u; restarting link sync",
+                     static_cast<unsigned long>(g_caps_request_attempt_count),
+                     static_cast<unsigned>(status),
+                     irq_level,
+                     static_cast<unsigned>(status_bit(status, 0)),
+                     static_cast<unsigned>(status_bit(status, 4)),
+                     static_cast<unsigned>(status_bit(status, 5)));
+            if ((status_bit(status, 0) != 0u) || (status_bit(status, 4) != 0u) || (status_bit(status, 6) != 0u)) {
+                ESP_RETURN_ON_ERROR(write_control(kControlResetMailbox),
+                                    kLogTag,
+                                    "caps timeout mailbox reset failed");
+            }
+            begin_full_resync(0u);
+            return ESP_OK;
+        }
     }
 
     if (g_write_state_request_sent && (status_bit(status, 5) != 0u)) {
@@ -1172,11 +1205,12 @@ esp_err_t poll()
         ESP_RETURN_ON_ERROR(write_request(request_buffer, sizeof(request_buffer)),
                             kLogTag,
                             "write_request failed");
-        g_caps_request_sent = true;
+        note_caps_request_sent();
         ESP_LOGI(kLogTag,
-                 "TX plcLink get_caps request len=%u request_id=%u",
+                 "TX plcLink get_caps request len=%u request_id=%u attempt=%lu",
                  static_cast<unsigned>(sizeof(request_buffer)),
-                 static_cast<unsigned>(header.request_id));
+                 static_cast<unsigned>(header.request_id),
+                 static_cast<unsigned long>(g_caps_request_attempt_count));
         return ESP_OK;
     }
 
@@ -1212,6 +1246,7 @@ esp_err_t poll()
             ++g_frame_count;
             g_caps_request_sent = false;
             g_caps_response_seen = true;
+            g_caps_request_tick = 0u;
             plclink::CapsResponsePayload caps = {};
             std::memcpy(&caps, &payload[plclink::kHeaderSize], sizeof(caps));
             g_point_count = caps.point_count;
