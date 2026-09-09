@@ -95,6 +95,13 @@ h1 {
   margin-top: 12px;
 }
 
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: -4px 0 20px;
+}
+
 form {
   display: grid;
   gap: 16px;
@@ -114,6 +121,18 @@ label {
   gap: 8px;
 }
 
+.field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.field-hint {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 input {
   width: 100%;
   padding: 14px 16px;
@@ -130,6 +149,10 @@ select {
   border: 1px solid rgba(31, 41, 51, 0.18);
   background: rgba(255, 255, 255, 0.9);
   font: inherit;
+}
+
+#ssidSelect {
+  margin-top: 2px;
 }
 
 .toggle-row {
@@ -171,6 +194,26 @@ button,
 .secondary {
   margin-top: 8px;
   background: rgba(31, 41, 51, 0.9);
+}
+
+.ghost {
+  margin-top: 0;
+  background: rgba(31, 41, 51, 0.9);
+}
+
+.compact-button {
+  padding: 14px 16px;
+  white-space: nowrap;
+}
+
+.danger {
+  margin-top: 0;
+  background: linear-gradient(135deg, #8b1e1e 0%, #5f0f0f 100%);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 @media (max-width: 640px) {

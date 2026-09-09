@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+
 #include <esp_err.h>
 
 namespace wifi_manager {
@@ -19,10 +22,19 @@ struct SiteSettings {
     bool anonymous_access;
 };
 
+struct ScanResult {
+    char ssid[33];
+    int8_t rssi;
+    uint8_t authmode;
+};
+
 esp_err_t init();
 esp_err_t preload_site_settings();
 bool has_saved_credentials();
 esp_err_t set_station_credentials(const char* ssid, const char* password);
+esp_err_t disconnect_station();
+esp_err_t forget_station_credentials();
+size_t scan_networks(ScanResult* results, size_t max_results);
 bool is_anonymous_access_allowed();
 SiteSettings get_site_settings();
 esp_err_t set_site_settings(const char* language, bool anonymous_access);

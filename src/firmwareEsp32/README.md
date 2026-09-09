@@ -14,6 +14,14 @@ This directory contains the ESP32 sidecar firmware used for:
 - framework: ESP-IDF
 - board id: `wemos_d1_mini32`
 
+## Web Transport Policy
+
+- current target: stay on `HTTP` with the current `wemos_d1_mini32` hardware
+- reason: this keeps RAM risk lower while the main runtime, UI, and web application bricks are still being integrated
+- planned evolution: if the project later moves to an `ESP32-S3 N16R8`, the intended next step is to keep the setup portal on `HTTP` and move the main web application only to `HTTPS`
+- certificate direction for that future `HTTPS` app path: allow uploading a server certificate and private key rather than hard-coding a single certificate into the firmware
+- decision gate: continue advancing the application on the current board first, then re-evaluate the `ESP32-S3 N16R8` migration once the main features are in place
+
 ## Current Scope
 
 The initial skeleton only brings up:

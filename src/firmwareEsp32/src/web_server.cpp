@@ -189,6 +189,24 @@ std::string make_settings_json_message(const wifi_manager::SiteSettings& setting
     return buffer;
 }
 
+std::string make_wifi_scan_json_message(const wifi_manager::ScanResult* results, size_t count)
+{
+    std::string body;
+    body.reserve(64u + (count * 64u));
+    body += "{\"type\":\"wifi_scan\",\"networks\":[";
+    for (size_t index = 0u; index < count; ++index) {
+        if (index != 0u) {
+            body += ',';
+        }
+        body += "{\"ssid\":\"" + json_escape(results[index].ssid) + "\"";
+        body += ",\"rssi\":" + std::to_string(static_cast<int>(results[index].rssi));
+        body += ",\"authmode\":" + std::to_string(static_cast<unsigned>(results[index].authmode));
+        body += '}';
+    }
+    body += "]}";
+    return body;
+}
+
 std::string make_system_info_json()
 {
     const spi_link::BootProgress boot = spi_link::get_boot_progress();
@@ -415,6 +433,11 @@ std::string map_uri_to_file(const char* uri)
         return {};
     }
 
+    const size_t query_pos = path.find_first_of("?#");
+    if (query_pos != std::string::npos) {
+        path.erase(query_pos);
+    }
+
     if (path == "/startup") {
         path = "/startup/index.html";
     } else if (path == "/startup/") {
@@ -462,6 +485,22 @@ esp_err_t serve_file(httpd_req_t* req, const std::string& path)
 
 esp_err_t handle_root(httpd_req_t* req)
 {
+    const wifi_manager::Status wifi = wifi_manager::get_status();
+    char host[64] = {};
+    const size_t host_length = httpd_req_get_hdr_value_len(req, "Host");
+    if ((host_length > 0u) && (host_length < sizeof(host)) &&
+        (httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) == ESP_OK)) {
+        char* port = std::strchr(host, ':');
+        if (port != nullptr) {
+            *port = '\0';
+        }
+        if ((wifi.ap_ip[0] != '\0') && (std::strcmp(host, wifi.ap_ip) == 0)) {
+            httpd_resp_set_status(req, "302 Found");
+            httpd_resp_set_hdr(req, "Location", "/startup/");
+            return httpd_resp_send(req, nullptr, 0);
+        }
+    }
+
     httpd_resp_set_status(req, "302 Found");
     const bool can_open_app = wifi_manager::has_saved_credentials() && wifi_manager::is_anonymous_access_allowed();
     httpd_resp_set_hdr(req, "Location", can_open_app ? "/app/" : "/startup/");
@@ -487,6 +526,13 @@ esp_err_t handle_system_info(httpd_req_t* req)
 esp_err_t handle_wifi_status(httpd_req_t* req)
 {
     return send_json(req, make_wifi_json_message(wifi_manager::get_status()));
+}
+
+esp_err_t handle_wifi_scan(httpd_req_t* req)
+{
+    wifi_manager::ScanResult results[16] = {};
+    const size_t count = wifi_manager::scan_networks(results, sizeof(results) / sizeof(results[0]));
+    return send_json(req, make_wifi_scan_json_message(results, count));
 }
 
 esp_err_t handle_settings_get(httpd_req_t* req)
@@ -520,6 +566,18 @@ esp_err_t handle_wifi_config(httpd_req_t* req)
     ESP_RETURN_ON_ERROR(wifi_manager::set_station_credentials(ssid.c_str(), password.c_str()),
                         kLogTag,
                         "set_station_credentials failed");
+    return send_json(req, make_wifi_json_message(wifi_manager::get_status()));
+}
+
+esp_err_t handle_wifi_disconnect(httpd_req_t* req)
+{
+    ESP_RETURN_ON_ERROR(wifi_manager::disconnect_station(), kLogTag, "disconnect_station failed");
+    return send_json(req, make_wifi_json_message(wifi_manager::get_status()));
+}
+
+esp_err_t handle_wifi_forget(httpd_req_t* req)
+{
+    ESP_RETURN_ON_ERROR(wifi_manager::forget_station_credentials(), kLogTag, "forget_station_credentials failed");
     return send_json(req, make_wifi_json_message(wifi_manager::get_status()));
 }
 
@@ -713,6 +771,15 @@ esp_err_t start()
         .handle_ws_control_frames = false,
         .supported_subprotocol = nullptr,
     };
+    const httpd_uri_t wifi_scan_uri = {
+        .uri = "/api/wifi/scan",
+        .method = HTTP_GET,
+        .handler = handle_wifi_scan,
+        .user_ctx = nullptr,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr,
+    };
     const httpd_uri_t settings_get_uri = {
         .uri = "/api/settings",
         .method = HTTP_GET,
@@ -726,6 +793,24 @@ esp_err_t start()
         .uri = "/api/wifi/config",
         .method = HTTP_POST,
         .handler = handle_wifi_config,
+        .user_ctx = nullptr,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr,
+    };
+    const httpd_uri_t wifi_disconnect_uri = {
+        .uri = "/api/wifi/disconnect",
+        .method = HTTP_POST,
+        .handler = handle_wifi_disconnect,
+        .user_ctx = nullptr,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr,
+    };
+    const httpd_uri_t wifi_forget_uri = {
+        .uri = "/api/wifi/forget",
+        .method = HTTP_POST,
+        .handler = handle_wifi_forget,
         .user_ctx = nullptr,
         .is_websocket = false,
         .handle_ws_control_frames = false,
@@ -789,8 +874,11 @@ esp_err_t start()
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &root_uri), kLogTag, "register root failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &system_info_uri), kLogTag, "register system failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &wifi_status_uri), kLogTag, "register wifi status failed");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &wifi_scan_uri), kLogTag, "register wifi scan failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &settings_get_uri), kLogTag, "register settings get failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &wifi_config_uri), kLogTag, "register wifi config failed");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &wifi_disconnect_uri), kLogTag, "register wifi disconnect failed");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &wifi_forget_uri), kLogTag, "register wifi forget failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &settings_post_uri), kLogTag, "register settings post failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &defs_uri), kLogTag, "register defs failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &snapshot_uri), kLogTag, "register snapshot failed");

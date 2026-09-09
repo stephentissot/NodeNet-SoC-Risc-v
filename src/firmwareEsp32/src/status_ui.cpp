@@ -239,11 +239,11 @@ void update_slots_from_snapshot()
 
 void update_footer(const wifi_manager::Status& wifi)
 {
-    if (wifi.sta_connected && (wifi.sta_ip[0] != '\0')) {
+    if (wifi.sta_ip[0] != '\0') {
         std::snprintf(g_footer_text,
                       sizeof(g_footer_text),
-                      "%s %s",
-                      ui_text::footer_ip_label(g_language),
+                      "%s = %s",
+                      wifi.sta_ssid[0] != '\0' ? wifi.sta_ssid : ui_text::footer_ip_label(g_language),
                       wifi.sta_ip);
     } else {
         std::snprintf(g_footer_text,

@@ -3,8 +3,10 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 #include <esp_check.h>
 #include <esp_event.h>
@@ -34,6 +36,7 @@ bool g_initialized = false;
 bool g_ap_started = false;
 bool g_sta_has_credentials = false;
 bool g_sta_connected = false;
+bool g_sta_should_connect = false;
 bool g_anonymous_access = true;
 char g_ap_ssid[33] = {};
 char g_sta_ssid[33] = {};
@@ -119,6 +122,30 @@ esp_err_t save_station_credentials_to_nvs(const char* ssid, const char* password
     return result;
 }
 
+esp_err_t clear_station_credentials_from_nvs()
+{
+    nvs_handle_t handle = 0;
+    ESP_RETURN_ON_ERROR(nvs_open(kNamespace, NVS_READWRITE, &handle), kLogTag, "nvs_open failed");
+
+    esp_err_t result = nvs_erase_key(handle, kKeySsid);
+    if (result == ESP_ERR_NVS_NOT_FOUND) {
+        result = ESP_OK;
+    }
+    if (result == ESP_OK) {
+        esp_err_t password_result = nvs_erase_key(handle, kKeyPassword);
+        if (password_result == ESP_ERR_NVS_NOT_FOUND) {
+            password_result = ESP_OK;
+        }
+        result = password_result;
+    }
+    if (result == ESP_OK) {
+        result = nvs_commit(handle);
+    }
+
+    nvs_close(handle);
+    return result;
+}
+
 bool is_supported_language(const char* language)
 {
     if ((language == nullptr) || (language[0] == '\0')) {
@@ -194,6 +221,31 @@ void update_sta_ip(const esp_ip4_addr_t& address)
     unlock();
 }
 
+void refresh_live_sta_status()
+{
+    lock();
+    const bool should_refresh = (g_sta_netif != nullptr) && g_sta_has_credentials && g_sta_should_connect;
+    unlock();
+    if (!should_refresh) {
+        return;
+    }
+
+    esp_netif_ip_info_t ip_info = {};
+    const esp_err_t ip_err = esp_netif_get_ip_info(g_sta_netif, &ip_info);
+
+    lock();
+    if ((ip_err == ESP_OK) && (ip_info.ip.addr != 0u)) {
+        g_sta_connected = true;
+        std::snprintf(g_sta_ip,
+                      sizeof(g_sta_ip),
+                      IPSTR,
+                      IP2STR(&ip_info.ip));
+    } else if (!g_sta_connected) {
+        g_sta_ip[0] = '\0';
+    }
+    unlock();
+}
+
 void wifi_event_handler(void*, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
     (void)event_data;
@@ -207,19 +259,21 @@ void wifi_event_handler(void*, esp_event_base_t event_base, int32_t event_id, vo
             ESP_LOGI(kLogTag, "Setup AP started ssid=%s ip=%s", g_ap_ssid, g_ap_ip);
             break;
         case WIFI_EVENT_STA_START:
-            if (g_sta_has_credentials) {
+            if (g_sta_has_credentials && g_sta_should_connect) {
                 esp_wifi_connect();
             }
             break;
-        case WIFI_EVENT_STA_DISCONNECTED:
+        case WIFI_EVENT_STA_DISCONNECTED: {
             lock();
             g_sta_connected = false;
             g_sta_ip[0] = '\0';
+            const bool should_reconnect = g_sta_has_credentials && g_sta_should_connect;
             unlock();
-            if (g_sta_has_credentials) {
+            if (should_reconnect) {
                 esp_wifi_connect();
             }
             break;
+        }
         default:
             break;
         }
@@ -228,7 +282,9 @@ void wifi_event_handler(void*, esp_event_base_t event_base, int32_t event_id, vo
     if ((event_base == IP_EVENT) && (event_id == IP_EVENT_STA_GOT_IP)) {
         const auto* got_ip = static_cast<ip_event_got_ip_t*>(event_data);
         lock();
-        g_sta_connected = true;
+        if (g_sta_should_connect) {
+            g_sta_connected = true;
+        }
         unlock();
         update_sta_ip(got_ip->ip_info.ip);
         ESP_LOGI(kLogTag, "STA connected ip=" IPSTR, IP2STR(&got_ip->ip_info.ip));
@@ -239,6 +295,7 @@ void apply_runtime_status(const char* sta_ssid, bool has_credentials)
 {
     lock();
     g_sta_has_credentials = has_credentials;
+    g_sta_should_connect = has_credentials;
     copy_text(g_ap_ssid, sizeof(g_ap_ssid), app_config::kSetupApSsid);
     copy_text(g_sta_ssid, sizeof(g_sta_ssid), has_credentials ? sta_ssid : "");
     if (!has_credentials) {
@@ -248,7 +305,7 @@ void apply_runtime_status(const char* sta_ssid, bool has_credentials)
     unlock();
 }
 
-esp_err_t apply_station_config(const char* ssid, const char* password)
+esp_err_t set_station_config(const char* ssid, const char* password)
 {
     wifi_config_t sta_config = {};
     copy_text(reinterpret_cast<char*>(sta_config.sta.ssid), sizeof(sta_config.sta.ssid), ssid);
@@ -259,7 +316,12 @@ esp_err_t apply_station_config(const char* ssid, const char* password)
     sta_config.sta.pmf_cfg.capable = true;
     sta_config.sta.pmf_cfg.required = false;
 
-    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &sta_config), kLogTag, "esp_wifi_set_config(sta) failed");
+    return esp_wifi_set_config(WIFI_IF_STA, &sta_config);
+}
+
+esp_err_t apply_station_config(const char* ssid, const char* password)
+{
+    ESP_RETURN_ON_ERROR(set_station_config(ssid, password), kLogTag, "esp_wifi_set_config(sta) failed");
     ESP_RETURN_ON_ERROR(esp_wifi_disconnect(), kLogTag, "esp_wifi_disconnect failed");
     return esp_wifi_connect();
 }
@@ -314,7 +376,9 @@ esp_err_t init()
     copy_text(reinterpret_cast<char*>(ap_config.ap.password), sizeof(ap_config.ap.password), app_config::kSetupApPassword);
     ap_config.ap.ssid_len = std::strlen(app_config::kSetupApSsid);
     ap_config.ap.channel = 1;
+    ap_config.ap.ssid_hidden = 0;
     ap_config.ap.max_connection = 4;
+    ap_config.ap.beacon_interval = 100;
     ap_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
     ap_config.ap.pmf_cfg.required = false;
 
@@ -326,7 +390,7 @@ esp_err_t init()
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_APSTA), kLogTag, "esp_wifi_set_mode failed");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap_config), kLogTag, "esp_wifi_set_config(ap) failed");
     if (have_credentials) {
-        ESP_RETURN_ON_ERROR(apply_station_config(sta_ssid, sta_password), kLogTag, "apply stored station config failed");
+        ESP_RETURN_ON_ERROR(set_station_config(sta_ssid, sta_password), kLogTag, "set stored station config failed");
     }
     ESP_RETURN_ON_ERROR(esp_wifi_start(), kLogTag, "esp_wifi_start failed");
     if (have_credentials) {
@@ -406,6 +470,8 @@ esp_err_t set_site_settings(const char* language, bool anonymous_access)
 
 Status get_status()
 {
+    refresh_live_sta_status();
+
     Status status = {};
     lock();
     status.ap_started = g_ap_started;
@@ -417,6 +483,119 @@ Status get_status()
     copy_text(status.sta_ip, sizeof(status.sta_ip), g_sta_ip);
     unlock();
     return status;
+}
+
+esp_err_t disconnect_station()
+{
+    lock();
+    g_sta_should_connect = false;
+    g_sta_connected = false;
+    g_sta_ip[0] = '\0';
+    unlock();
+
+    if (!g_initialized) {
+        return ESP_OK;
+    }
+
+    const esp_err_t disconnect_result = esp_wifi_disconnect();
+    if ((disconnect_result == ESP_OK) ||
+        (disconnect_result == ESP_ERR_WIFI_NOT_CONNECT) ||
+        (disconnect_result == ESP_ERR_WIFI_NOT_STARTED) ||
+        (disconnect_result == ESP_ERR_WIFI_NOT_INIT)) {
+        return ESP_OK;
+    }
+
+    return disconnect_result;
+}
+
+esp_err_t forget_station_credentials()
+{
+    ESP_RETURN_ON_ERROR(clear_station_credentials_from_nvs(), kLogTag, "nvs erase failed");
+
+    lock();
+    g_sta_has_credentials = false;
+    g_sta_should_connect = false;
+    g_sta_connected = false;
+    g_sta_ssid[0] = '\0';
+    g_sta_ip[0] = '\0';
+    unlock();
+
+    if (!g_initialized) {
+        return ESP_OK;
+    }
+
+    wifi_config_t sta_config = {};
+    esp_err_t result = esp_wifi_set_config(WIFI_IF_STA, &sta_config);
+    if (result != ESP_OK) {
+        return result;
+    }
+
+    result = esp_wifi_disconnect();
+    if ((result == ESP_OK) ||
+        (result == ESP_ERR_WIFI_NOT_CONNECT) ||
+        (result == ESP_ERR_WIFI_NOT_STARTED) ||
+        (result == ESP_ERR_WIFI_NOT_INIT)) {
+        return ESP_OK;
+    }
+
+    return result;
+}
+
+size_t scan_networks(ScanResult* results, size_t max_results)
+{
+    if ((results == nullptr) || (max_results == 0u) || !g_initialized) {
+        return 0u;
+    }
+
+    wifi_scan_config_t scan_config = {};
+    scan_config.show_hidden = false;
+
+    const esp_err_t scan_result = esp_wifi_scan_start(&scan_config, true);
+    if (scan_result != ESP_OK) {
+        return 0u;
+    }
+
+    uint16_t ap_count = 0u;
+    if (esp_wifi_scan_get_ap_num(&ap_count) != ESP_OK || ap_count == 0u) {
+        return 0u;
+    }
+
+    std::vector<wifi_ap_record_t> ap_records(ap_count);
+    uint16_t record_count = ap_count;
+    if (esp_wifi_scan_get_ap_records(&record_count, ap_records.data()) != ESP_OK) {
+        return 0u;
+    }
+
+    std::sort(ap_records.begin(), ap_records.begin() + record_count, [](const wifi_ap_record_t& lhs, const wifi_ap_record_t& rhs) {
+        return lhs.rssi > rhs.rssi;
+    });
+
+    size_t copied = 0u;
+    for (uint16_t index = 0u; (index < record_count) && (copied < max_results); ++index) {
+        const wifi_ap_record_t& record = ap_records[index];
+        const char* ssid = reinterpret_cast<const char*>(record.ssid);
+        if ((ssid == nullptr) || (ssid[0] == '\0')) {
+            continue;
+        }
+
+        bool duplicate = false;
+        for (size_t result_index = 0u; result_index < copied; ++result_index) {
+            if (std::strcmp(results[result_index].ssid, ssid) == 0) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            continue;
+        }
+
+        copy_text(results[copied].ssid, sizeof(results[copied].ssid), ssid);
+        results[copied].rssi = record.rssi;
+        results[copied].authmode = static_cast<uint8_t>(record.authmode);
+        ++copied;
+    }
+
+    return copied;
 }
 
 } // namespace wifi_manager
