@@ -2005,6 +2005,80 @@ bool NodeNetCore::buildPlcLinkPointState(uint16_t point_index, PointState& state
     return true;
 }
 
+uint8_t NodeNetCore::writePlcLinkPointState(uint16_t point_index,
+                                            uint8_t expected_value_type,
+                                            uint8_t write_flags,
+                                            uint32_t value_bits,
+                                            uint8_t* out_applied_value_type,
+                                            uint32_t* out_result_sequence)
+{
+    (void)write_flags;
+
+    if (point_index >= _pointCatalog.size()) {
+        return 0x06u;
+    }
+
+    const PointDefinition& definition = _pointCatalog.entries()[point_index];
+    if (out_applied_value_type != nullptr) {
+        *out_applied_value_type = static_cast<uint8_t>(definition.value_type);
+    }
+    if (expected_value_type != static_cast<uint8_t>(definition.value_type)) {
+        if (out_result_sequence != nullptr) {
+            *out_result_sequence = _pointCatalog.statesSequence();
+        }
+        return 0x05u;
+    }
+
+    JsonDocument value_doc;
+    switch (definition.value_type) {
+    case PointValueType::Bool:
+        value_doc.set(value_bits != 0u);
+        break;
+
+    case PointValueType::Uint16:
+        value_doc.set(static_cast<uint16_t>(value_bits));
+        break;
+
+    case PointValueType::Int16:
+        value_doc.set(static_cast<int16_t>(value_bits & 0xFFFFu));
+        break;
+
+    case PointValueType::Uint32:
+        value_doc.set(static_cast<uint32_t>(value_bits));
+        break;
+
+    case PointValueType::Int32:
+        value_doc.set(static_cast<int32_t>(value_bits));
+        break;
+
+    case PointValueType::Float: {
+        float parsed = 0.0f;
+        std::memcpy(&parsed, &value_bits, sizeof(parsed));
+        value_doc.set(parsed);
+        break;
+    }
+
+    case PointValueType::Enum:
+        value_doc.set(static_cast<int32_t>(value_bits));
+        break;
+
+    case PointValueType::String:
+    default:
+        if (out_result_sequence != nullptr) {
+            *out_result_sequence = _pointCatalog.statesSequence();
+        }
+        return 0x05u;
+    }
+
+    const bool ok = handleLocalPlcPointWrite(point_index,
+                                             definition,
+                                             value_doc.as<JsonVariantConst>());
+    if (out_result_sequence != nullptr) {
+        *out_result_sequence = _pointCatalog.statesSequence();
+    }
+    return ok ? 0x00u : 0x07u;
+}
+
 bool NodeNetCore::publishVirtualPointStateIfChanged(const PointIdentity& id)
 {
     const size_t point_index = _pointCatalog.findIndex(id);

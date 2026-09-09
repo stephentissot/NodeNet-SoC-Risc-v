@@ -79,6 +79,11 @@ const translations = {
     plcSnapshot: 'PLC snapshot',
     pointsLoaded: 'points loaded',
     refreshSnapshot: 'Request snapshot refresh',
+    slotStart: 'Start',
+    slotStop: 'Stop',
+    slotReset: 'Reset',
+    slotClearFault: 'Clear fault',
+    slotActionFailed: 'PLC slot action failed:',
     point: 'Point',
     type: 'Type',
     flags: 'Flags',
@@ -156,6 +161,11 @@ const translations = {
     plcSnapshot: 'Snapshot PLC',
     pointsLoaded: 'points charges',
     refreshSnapshot: 'Relancer un snapshot',
+    slotStart: 'Start',
+    slotStop: 'Stop',
+    slotReset: 'Reset',
+    slotClearFault: 'Clear Fault',
+    slotActionFailed: 'Echec action slot PLC :',
     point: 'Point',
     type: 'Type',
     flags: 'Flags',
@@ -192,6 +202,7 @@ const wifiSsid = ref('');
 const wifiPassword = ref('');
 const wifiScanResults = ref([]);
 const selectedScanSsid = ref('');
+const slotActionKey = ref('');
 
 let socket = null;
 let socketReconnectEnabled = false;
@@ -343,6 +354,23 @@ async function requestRefresh() {
   }
 }
 
+async function writePlcPoint(record, valueBits, writeFlags = 1) {
+  if (!record) {
+    throw new Error('missing point record');
+  }
+
+  await fetchJson('/api/plc/write', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      point_index: Number(record.point_index),
+      value_type: Number(record.value_type),
+      value_bits: Number(valueBits) >>> 0,
+      write_flags: Number(writeFlags) >>> 0,
+    }),
+  });
+}
+
 async function saveSettings() {
   const payload = await fetchJson('/api/settings', {
     method: 'POST',
@@ -423,6 +451,10 @@ function applySnapshotMeta(snapshot) {
       ...snapshot,
     },
   };
+}
+
+function slotActionBusy(slotId, action) {
+  return slotActionKey.value === `${slotId}:${action}`;
 }
 
 function connectSocket() {
@@ -616,6 +648,10 @@ const app = {
         const loadedRecord = slotRecords.loaded;
         const runEnabledRecord = slotRecords.runEnabled;
         const statusRecord = slotRecords.status;
+        const startRecord = slotRecords.start;
+        const stopRecord = slotRecords.stop;
+        const resetRecord = slotRecords.reset;
+        const clearFaultRecord = slotRecords.clearFault;
 
         let stateCode = '?';
         let sourceLabel = t('slotSourceMissing');
@@ -639,6 +675,14 @@ const app = {
           stateLabel: t(stateLabelKey(stateCode)),
           stateClass: stateClass(stateCode),
           sourceLabel,
+          canStart: stateCode === 'S' && !!startRecord,
+          canStop: stateCode === 'R' && !!stopRecord,
+          canReset: (stateCode === 'R' || stateCode === 'S' || stateCode === 'L' || stateCode === 'F') && !!resetRecord,
+          canClearFault: stateCode === 'F' && !!clearFaultRecord,
+          startRecord,
+          stopRecord,
+          resetRecord,
+          clearFaultRecord,
         });
       }
       return nextSlots;
@@ -677,6 +721,7 @@ const app = {
       pointCount,
       settingsMessage,
       socketState,
+      slotActionBusy,
       slots,
       states,
       systemInfo,
@@ -722,6 +767,21 @@ const app = {
           await requestRefresh();
         } catch (error) {
           errorText.value = error.message;
+        }
+      },
+      triggerSlotAction: async (slot, action) => {
+        const record = slot?.[`${action}Record`];
+        if (!record) {
+          return;
+        }
+
+        slotActionKey.value = `${slot.id}:${action}`;
+        try {
+          await writePlcPoint(record, 1, 1);
+        } catch (error) {
+          errorText.value = `${t('slotActionFailed')} ${error.message}`;
+        } finally {
+          slotActionKey.value = '';
         }
       },
       saveSettings: async () => {
@@ -829,6 +889,12 @@ const app = {
               </div>
               <strong>{{ slot.stateLabel }}</strong>
               <small>{{ slot.sourceLabel }}</small>
+              <div class="slot-actions" v-if="slot.canStart || slot.canStop || slot.canReset || slot.canClearFault">
+                <button v-if="slot.canStart" class="slot-action-button" :disabled="slotActionBusy(slot.id, 'start')" @click="triggerSlotAction(slot, 'start')">{{ t('slotStart') }}</button>
+                <button v-if="slot.canStop" class="slot-action-button secondary-button" :disabled="slotActionBusy(slot.id, 'stop')" @click="triggerSlotAction(slot, 'stop')">{{ t('slotStop') }}</button>
+                <button v-if="slot.canReset" class="slot-action-button secondary-button" :disabled="slotActionBusy(slot.id, 'reset')" @click="triggerSlotAction(slot, 'reset')">{{ t('slotReset') }}</button>
+                <button v-if="slot.canClearFault" class="slot-action-button danger-button" :disabled="slotActionBusy(slot.id, 'clearFault')" @click="triggerSlotAction(slot, 'clearFault')">{{ t('slotClearFault') }}</button>
+              </div>
             </article>
           </div>
         </section>

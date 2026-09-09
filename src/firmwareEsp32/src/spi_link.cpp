@@ -46,6 +46,14 @@ struct PendingPointUpdate {
     uint32_t sequence;
 };
 
+struct PendingWriteStateRequest {
+    bool valid;
+    uint16_t point_index;
+    uint8_t expected_value_type;
+    uint8_t write_flags;
+    uint32_t value_bits;
+};
+
 DMA_ATTR uint8_t g_mailbox_tx_buffer[3 + kMaxMailboxPayload] = {};
 DMA_ATTR uint8_t g_mailbox_rx_buffer[3 + kMaxMailboxPayload] = {};
 spi_device_handle_t g_fpga_device = nullptr;
@@ -74,6 +82,8 @@ uint16_t g_snapshot_chunk_count = 0u;
 uint16_t g_snapshot_record_count = 0u;
 uint32_t g_states_sequence = 0u;
 bool g_refresh_requested = false;
+bool g_write_state_request_sent = false;
+PendingWriteStateRequest g_pending_write_state = {};
 SemaphoreHandle_t g_state_mutex = nullptr;
 std::vector<plclink::DefinitionRecordV1> g_definition_records;
 std::vector<CachedStateRecord> g_state_records;
@@ -84,6 +94,8 @@ size_t g_pending_point_update_count = 0u;
 esp_err_t write_control(uint16_t control_word);
 esp_err_t finalize_response_read(const char* context);
 esp_err_t read_response(uint8_t* out_payload, uint16_t capacity, uint16_t* out_payload_len);
+esp_err_t write_request(const uint8_t* payload, uint16_t payload_len);
+uint8_t next_request_id();
 
 void state_lock()
 {
@@ -157,8 +169,45 @@ void begin_full_resync(uint32_t new_defs_generation)
     g_next_states_start_index = 0u;
     g_snapshot_chunk_count = 0u;
     g_snapshot_record_count = 0u;
+    g_write_state_request_sent = false;
+    g_pending_write_state = {};
     reset_defs_cache();
     reset_state_cache(0u);
+}
+
+esp_err_t send_write_state_request(const PendingWriteStateRequest& request)
+{
+    uint8_t request_buffer[plclink::kHeaderSize + sizeof(plclink::WriteStateRequestV1)] = {};
+    plclink::ProtocolHeader header = {};
+    header.magic = plclink::kMagic;
+    header.version = plclink::kVersion;
+    header.message_type = plclink::kMsgWriteStateReq;
+    header.flags = static_cast<uint8_t>(plclink::kFlagRequest);
+    header.request_id = next_request_id();
+    header.fragment_index = 0u;
+    header.fragment_count = 1u;
+    header.payload_length = static_cast<uint16_t>(sizeof(plclink::WriteStateRequestV1));
+    if (!plclink::encodeHeader(header, request_buffer, sizeof(request_buffer))) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    plclink::WriteStateRequestV1 payload = {};
+    payload.point_index = request.point_index;
+    payload.expected_value_type = request.expected_value_type;
+    payload.write_flags = request.write_flags;
+    payload.value_bits = request.value_bits;
+    std::memcpy(&request_buffer[plclink::kHeaderSize], &payload, sizeof(payload));
+
+    ESP_RETURN_ON_ERROR(write_request(request_buffer, sizeof(request_buffer)),
+                        kLogTag,
+                        "write state request failed");
+    g_write_state_request_sent = true;
+    ESP_LOGI(kLogTag,
+             "TX plcLink write_state request point=%u type=%u flags=0x%02x",
+             static_cast<unsigned>(payload.point_index),
+             static_cast<unsigned>(payload.expected_value_type),
+             static_cast<unsigned>(payload.write_flags));
+    return ESP_OK;
 }
 
 uint16_t compute_max_defs_payload_bytes()
@@ -920,6 +969,56 @@ esp_err_t poll()
         return ESP_OK;
     }
 
+    if (g_write_state_request_sent && (status_bit(status, 5) != 0u)) {
+        uint8_t payload[kMaxMailboxPayload + 1] = {};
+        uint16_t payload_len = 0u;
+        ESP_RETURN_ON_ERROR(read_response(payload, kMaxMailboxPayload, &payload_len),
+                            kLogTag,
+                            "read write_state response failed");
+        ESP_RETURN_ON_ERROR(finalize_response_read("write_state"),
+                            kLogTag,
+                            "finalize write_state response failed");
+
+        if (payload_len < plclink::kHeaderSize) {
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+
+        plclink::ProtocolHeader header = {};
+        if (!plclink::decodeHeader(header, payload, payload_len)) {
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+
+        g_write_state_request_sent = false;
+        g_pending_write_state = {};
+
+        if (header.message_type == plclink::kMsgWriteStateRes) {
+            if (payload_len < (plclink::kHeaderSize + sizeof(plclink::WriteStateResponseV1))) {
+                return ESP_ERR_INVALID_RESPONSE;
+            }
+
+            plclink::WriteStateResponseV1 response = {};
+            std::memcpy(&response, &payload[plclink::kHeaderSize], sizeof(response));
+            if (response.status_code != plclink::kErrorOk) {
+                ESP_LOGW(kLogTag,
+                         "RX plcLink write_state rejected code=%u type=%u seq=%lu",
+                         static_cast<unsigned>(response.status_code),
+                         static_cast<unsigned>(response.applied_value_type),
+                         static_cast<unsigned long>(response.result_sequence));
+            }
+            return ESP_OK;
+        }
+
+        if (header.message_type == plclink::kMsgStatesUpdatesRes) {
+            return process_state_update_frame(payload, payload_len, " while waiting for write_state");
+        }
+
+        if (header.message_type == plclink::kMsgError) {
+            return ESP_OK;
+        }
+
+        return ESP_OK;
+    }
+
     if (is_runtime_idle_ready() && (status_bit(status, 5) != 0u)) {
         ++g_runtime_status5_ready_count;
         if (kEnableMailboxTraceLogs) {
@@ -978,6 +1077,13 @@ esp_err_t poll()
         g_states_response_seen = false;
         g_next_states_start_index = 0u;
         return send_states_snapshot_request(0u);
+    }
+
+    if (g_pending_write_state.valid &&
+        !g_write_state_request_sent &&
+        is_runtime_idle_ready() &&
+        (status_bit(status, 3) != 0u)) {
+        return send_write_state_request(g_pending_write_state);
     }
 
     if (!g_caps_request_sent && !g_caps_response_seen && status_bit(status, 3) != 0u) {
@@ -1279,7 +1385,8 @@ bool is_busy()
 {
     return (g_fpga_device != nullptr) &&
            (!g_caps_response_seen || !g_defs_response_seen || !g_states_response_seen ||
-            g_caps_request_sent || g_defs_request_sent || g_states_request_sent || g_refresh_requested);
+            g_caps_request_sent || g_defs_request_sent || g_states_request_sent ||
+            g_refresh_requested || g_write_state_request_sent || g_pending_write_state.valid);
 }
 
 BootProgress get_boot_progress()
@@ -1510,6 +1617,30 @@ esp_err_t request_states_refresh()
 
     g_refresh_requested = true;
     return ESP_OK;
+}
+
+esp_err_t request_write_state(uint16_t point_index,
+                              uint8_t expected_value_type,
+                              uint8_t write_flags,
+                              uint32_t value_bits)
+{
+    if (!g_caps_response_seen || !g_states_response_seen) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t result = ESP_OK;
+    state_lock();
+    if (g_pending_write_state.valid || g_write_state_request_sent) {
+        result = ESP_ERR_INVALID_STATE;
+    } else {
+        g_pending_write_state.valid = true;
+        g_pending_write_state.point_index = point_index;
+        g_pending_write_state.expected_value_type = expected_value_type;
+        g_pending_write_state.write_flags = write_flags;
+        g_pending_write_state.value_bits = value_bits;
+    }
+    state_unlock();
+    return result;
 }
 
 } // namespace spi_link

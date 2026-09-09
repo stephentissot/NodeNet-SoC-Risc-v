@@ -370,12 +370,50 @@ bool extract_json_bool(const std::string& payload, const char* key, bool* out_va
         *out_value = true;
         return true;
     }
+
     if (payload.compare(value_pos, 5u, "false") == 0) {
         *out_value = false;
         return true;
     }
 
     return false;
+}
+
+bool extract_json_u32(const std::string& payload, const char* key, uint32_t* out_value)
+{
+    if (out_value == nullptr) {
+        return false;
+    }
+
+    const std::string quoted_key = std::string("\"") + key + "\"";
+    const size_t key_pos = payload.find(quoted_key);
+    if (key_pos == std::string::npos) {
+        return false;
+    }
+
+    const size_t colon_pos = payload.find(':', key_pos + quoted_key.size());
+    if (colon_pos == std::string::npos) {
+        return false;
+    }
+
+    size_t value_pos = colon_pos + 1u;
+    while ((value_pos < payload.size()) && is_json_whitespace(payload[value_pos])) {
+        ++value_pos;
+    }
+    if (value_pos >= payload.size()) {
+        return false;
+    }
+
+    size_t end_pos = value_pos;
+    while ((end_pos < payload.size()) && (payload[end_pos] >= '0') && (payload[end_pos] <= '9')) {
+        ++end_pos;
+    }
+    if (end_pos == value_pos) {
+        return false;
+    }
+
+    *out_value = static_cast<uint32_t>(std::strtoul(payload.substr(value_pos, end_pos - value_pos).c_str(), nullptr, 10));
+    return true;
 }
 
 FakeAuthState make_anonymous_auth_state(bool anonymous_access)
@@ -966,6 +1004,37 @@ esp_err_t handle_snapshot_refresh(httpd_req_t* req)
     return send_json(req, "{\"accepted\":true}");
 }
 
+esp_err_t handle_plc_write(httpd_req_t* req)
+{
+    ESP_RETURN_ON_ERROR(reject_if_unauthenticated(req), kLogTag, "request authentication failed");
+
+    std::string payload;
+    if (!read_request_body(req, &payload)) {
+        return send_error(req, "400 Bad Request", "request body truncated");
+    }
+
+    uint32_t point_index = 0u;
+    uint32_t value_type = 0u;
+    uint32_t value_bits = 0u;
+    uint32_t write_flags = 1u;
+    if (!extract_json_u32(payload, "point_index", &point_index) ||
+        !extract_json_u32(payload, "value_type", &value_type) ||
+        !extract_json_u32(payload, "value_bits", &value_bits)) {
+        return send_error(req, "400 Bad Request", "invalid plc write payload");
+    }
+    (void)extract_json_u32(payload, "write_flags", &write_flags);
+
+    const esp_err_t result = spi_link::request_write_state(static_cast<uint16_t>(point_index),
+                                                           static_cast<uint8_t>(value_type),
+                                                           static_cast<uint8_t>(write_flags),
+                                                           value_bits);
+    if (result != ESP_OK) {
+        return send_error(req, "409 Conflict", "plc write refused");
+    }
+
+    return send_json(req, "{\"accepted\":true}");
+}
+
 esp_err_t handle_ws(httpd_req_t* req)
 {
     ESP_RETURN_ON_ERROR(reject_if_unauthenticated(req), kLogTag, "request authentication failed");
@@ -1146,6 +1215,15 @@ esp_err_t start()
         .handle_ws_control_frames = false,
         .supported_subprotocol = nullptr,
     };
+    const httpd_uri_t plc_write_uri = {
+        .uri = "/api/plc/write",
+        .method = HTTP_POST,
+        .handler = handle_plc_write,
+        .user_ctx = nullptr,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr,
+    };
     const httpd_uri_t ws_uri = {
         .uri = "/ws",
         .method = HTTP_GET,
@@ -1180,6 +1258,7 @@ esp_err_t start()
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &defs_uri), kLogTag, "register defs failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &snapshot_uri), kLogTag, "register snapshot failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &refresh_uri), kLogTag, "register refresh failed");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &plc_write_uri), kLogTag, "register plc write failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &ws_uri), kLogTag, "register ws failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &static_uri), kLogTag, "register static failed");
 

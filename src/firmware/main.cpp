@@ -34,6 +34,26 @@ bool resolvePlcLinkPointState(void* context,
     return static_cast<const NodeNetCore*>(context)->buildPlcLinkPointState(point_index, out_state);
 }
 
+plclink::ErrorCode writePlcLinkPointState(void* context,
+                                          uint16_t point_index,
+                                          uint8_t expected_value_type,
+                                          uint8_t write_flags,
+                                          uint32_t value_bits,
+                                          uint8_t* out_applied_value_type,
+                                          uint32_t* out_result_sequence)
+{
+    if (context == nullptr) {
+        return plclink::kErrorWriteRejected;
+    }
+
+    return static_cast<plclink::ErrorCode>(static_cast<NodeNetCore*>(context)->writePlcLinkPointState(point_index,
+                                                                                                       expected_value_type,
+                                                                                                       write_flags,
+                                                                                                       value_bits,
+                                                                                                       out_applied_value_type,
+                                                                                                       out_result_sequence));
+}
+
 void handleSpiMailboxProtocol(SpiMailbox& mailbox, const NodeNetCore& nodeNetCore)
 {
     PointCatalog& point_catalog = const_cast<NodeNetCore&>(nodeNetCore).pointCatalog();
@@ -47,6 +67,7 @@ void handleSpiMailboxProtocol(SpiMailbox& mailbox, const NodeNetCore& nodeNetCor
     (void)plclink_mailbox_service::service(mailbox,
                                            point_catalog,
                                            resolvePlcLinkPointState,
+                                           writePlcLinkPointState,
                                            const_cast<NodeNetCore*>(&nodeNetCore),
                                            defs_generation,
                                            states_sequence);

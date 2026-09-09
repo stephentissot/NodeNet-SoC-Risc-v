@@ -153,6 +153,7 @@ bool send_error(SpiMailbox& mailbox,
 bool service(SpiMailbox& mailbox,
              PointCatalog& point_catalog,
              ResolvePointStateFn resolve_point_state,
+             WritePointStateFn write_point_state,
              void* resolve_context,
              uint32_t defs_generation,
              uint32_t states_sequence)
@@ -415,6 +416,71 @@ bool service(SpiMailbox& mailbox,
         }
         return mailbox.SendMessage(tx_buffer,
                                    static_cast<uint16_t>(plclink::kHeaderSize + response_header.payload_length));
+    }
+    case plclink::kMsgWriteStateReq: {
+        if (request_header.payload_length != sizeof(plclink::WriteStateRequestV1) ||
+            request_length < (plclink::kHeaderSize + sizeof(plclink::WriteStateRequestV1))) {
+            return send_error(mailbox,
+                              request_header.request_id,
+                              request_header.message_type,
+                              plclink::kErrorMalformedPayload);
+        }
+
+        plclink::WriteStateRequestV1 write_request = {};
+        std::memcpy(&write_request,
+                    &rx_buffer[plclink::kHeaderSize],
+                    sizeof(write_request));
+
+        if (write_request.point_index >= point_catalog.size()) {
+            return send_error(mailbox,
+                              request_header.request_id,
+                              request_header.message_type,
+                              plclink::kErrorPointIndexOutOfRange);
+        }
+
+        const PointDefinition& definition = point_catalog.entries()[write_request.point_index];
+        if (write_request.expected_value_type != static_cast<uint8_t>(definition.value_type)) {
+            return send_error(mailbox,
+                              request_header.request_id,
+                              request_header.message_type,
+                              plclink::kErrorTypeMismatch);
+        }
+
+        plclink::WriteStateResponseV1 payload = {};
+        payload.applied_value_type = static_cast<uint8_t>(definition.value_type);
+        payload.result_sequence = point_catalog.statesSequence();
+
+        if (write_point_state == nullptr) {
+            payload.status_code = plclink::kErrorWriteRejected;
+        } else {
+            payload.status_code = static_cast<uint8_t>(write_point_state(resolve_context,
+                                                                         write_request.point_index,
+                                                                         write_request.expected_value_type,
+                                                                         write_request.write_flags,
+                                                                         write_request.value_bits,
+                                                                         &payload.applied_value_type,
+                                                                         &payload.result_sequence));
+        }
+
+        uint8_t tx_buffer[SpiMailbox::kMaxPayloadSize] = {};
+        plclink::ProtocolHeader response_header = {};
+        response_header.magic = plclink::kMagic;
+        response_header.version = plclink::kVersion;
+        response_header.message_type = plclink::kMsgWriteStateRes;
+        response_header.flags = static_cast<uint8_t>(plclink::kFlagResponse);
+        response_header.request_id = request_header.request_id;
+        response_header.fragment_index = 0u;
+        response_header.fragment_count = 1u;
+        response_header.payload_length = static_cast<uint16_t>(sizeof(payload));
+        response_header.generation = defs_generation;
+        response_header.sequence = point_catalog.statesSequence();
+
+        if (!plclink::encodeHeader(response_header, tx_buffer, sizeof(tx_buffer))) {
+            return false;
+        }
+        std::memcpy(&tx_buffer[plclink::kHeaderSize], &payload, sizeof(payload));
+        return mailbox.SendMessage(tx_buffer,
+                                   static_cast<uint16_t>(plclink::kHeaderSize + sizeof(payload)));
     }
     default:
         return send_error(mailbox,

@@ -248,6 +248,21 @@ input {
   gap: 8px;
 }
 
+.slot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.slot-action-button {
+  padding: 10px 14px;
+}
+
+.danger-button {
+  background: linear-gradient(135deg, var(--danger) 0%, #d64550 100%);
+}
+
 .slot-card-top {
   display: flex;
   justify-content: space-between;

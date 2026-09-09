@@ -66,6 +66,10 @@ bool pop_point_update(PointUpdate* out_update);
 bool copy_string_state_by_path(const char* feature, const char* point_id, char* out_value, size_t out_size);
 bool copy_bool_state_by_path(const char* feature, const char* point_id, bool* out_value);
 bool copy_u32_state_by_path(const char* feature, const char* point_id, uint32_t* out_value);
+esp_err_t request_write_state(uint16_t point_index,
+							  uint8_t expected_value_type,
+							  uint8_t write_flags,
+							  uint32_t value_bits);
 esp_err_t request_states_refresh();
 
 } // namespace spi_link
