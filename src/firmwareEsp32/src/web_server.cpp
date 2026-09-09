@@ -612,6 +612,17 @@ void add_ws_client(int fd)
     }
 }
 
+bool is_ws_client_registered(int fd)
+{
+    for (size_t index = 0; index < kMaxWsClients; ++index) {
+        if (g_ws_clients[index] == fd) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 void broadcast_text(const std::string& payload)
 {
     if (g_server == nullptr) {
@@ -1037,8 +1048,8 @@ esp_err_t handle_plc_write(httpd_req_t* req)
 
 esp_err_t handle_ws(httpd_req_t* req)
 {
-    ESP_RETURN_ON_ERROR(reject_if_unauthenticated(req), kLogTag, "request authentication failed");
     if (req->method == HTTP_GET) {
+        ESP_RETURN_ON_ERROR(reject_if_unauthenticated(req), kLogTag, "request authentication failed");
         const int fd = httpd_req_to_sockfd(req);
         add_ws_client(fd);
 
@@ -1048,6 +1059,11 @@ esp_err_t handle_ws(httpd_req_t* req)
         frame.payload = reinterpret_cast<uint8_t*>(const_cast<char*>(hello.c_str()));
         frame.len = hello.size();
         return httpd_ws_send_frame(req, &frame);
+    }
+
+    const int fd = httpd_req_to_sockfd(req);
+    if (!is_ws_client_registered(fd)) {
+        return send_error(req, "401 Unauthorized", "authentication required");
     }
 
     httpd_ws_frame_t frame = {};
