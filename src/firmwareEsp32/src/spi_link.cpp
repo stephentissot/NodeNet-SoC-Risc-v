@@ -566,6 +566,11 @@ bool is_runtime_idle_ready()
            !g_states_request_sent;
 }
 
+bool can_send_request(uint16_t status)
+{
+    return (status & 0x0001u) == 0u;
+}
+
 uint8_t compute_snapshot_percent()
 {
     if (!g_caps_response_seen) {
@@ -995,7 +1000,7 @@ esp_err_t poll()
         }
     }
 
-    if (g_resync_pending && !g_caps_request_sent && status_bit(status, 3) != 0u) {
+    if (g_resync_pending && !g_caps_request_sent && can_send_request(status)) {
         g_resync_pending = false;
         uint8_t request_buffer[plclink::kHeaderSize] = {};
         plclink::ProtocolHeader header = {};
@@ -1125,7 +1130,7 @@ esp_err_t poll()
         }
     }
 
-    if (g_refresh_requested && g_caps_response_seen && g_states_response_seen && !g_states_request_sent && (status_bit(status, 3) != 0u)) {
+    if (g_refresh_requested && g_caps_response_seen && g_states_response_seen && !g_states_request_sent && can_send_request(status)) {
         g_refresh_requested = false;
         g_states_response_seen = false;
         g_next_states_start_index = 0u;
@@ -1135,11 +1140,11 @@ esp_err_t poll()
     if (g_pending_write_state.valid &&
         !g_write_state_request_sent &&
         is_runtime_idle_ready() &&
-        (status_bit(status, 3) != 0u)) {
+        can_send_request(status)) {
         return send_write_state_request(g_pending_write_state);
     }
 
-    if (!g_caps_request_sent && !g_caps_response_seen && status_bit(status, 3) != 0u) {
+    if (!g_caps_request_sent && !g_caps_response_seen && can_send_request(status)) {
         uint8_t request_buffer[plclink::kHeaderSize] = {};
         plclink::ProtocolHeader header = {};
         header.magic = plclink::kMagic;
@@ -1282,7 +1287,7 @@ esp_err_t poll()
         return ESP_OK;
     }
 
-    if (g_caps_response_seen && !g_defs_request_sent && !g_defs_response_seen && (status_bit(status, 3) != 0u)) {
+    if (g_caps_response_seen && !g_defs_request_sent && !g_defs_response_seen && can_send_request(status)) {
         return send_defs_snapshot_request(g_next_defs_offset);
     }
 
@@ -1344,7 +1349,7 @@ esp_err_t poll()
         return ESP_OK;
     }
 
-    if (g_defs_response_seen && !g_states_request_sent && !g_states_response_seen && (status_bit(status, 3) != 0u)) {
+    if (g_defs_response_seen && !g_states_request_sent && !g_states_response_seen && can_send_request(status)) {
         return send_states_snapshot_request(g_next_states_start_index);
     }
 
