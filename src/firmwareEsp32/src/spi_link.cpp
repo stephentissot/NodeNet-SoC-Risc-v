@@ -34,6 +34,7 @@ constexpr uint8_t kOpcodeWriteRequest = 0x02;
 constexpr uint8_t kOpcodeReadResponse = 0x03;
 constexpr uint8_t kOpcodeWriteControl = 0x04;
 constexpr uint16_t kControlClearIrq = 1u << 2;
+constexpr uint16_t kControlResetMailbox = 1u << 3;
 constexpr size_t kMaxMailboxPayload = 256;
 constexpr uint8_t kBootPercentLinkReady = 25u;
 constexpr uint8_t kBootPercentCapsReady = 45u;
@@ -622,6 +623,27 @@ esp_err_t read_status(uint16_t* out_status, uint8_t* out_rx)
     return ESP_OK;
 }
 
+esp_err_t recover_startup_mailbox(uint16_t status, int irq_level)
+{
+    if (status_bit(status, 0) == 0u && status_bit(status, 4) == 0u && status_bit(status, 6) == 0u) {
+        return ESP_OK;
+    }
+
+    ESP_LOGW(kLogTag,
+             "Resetting stale startup mailbox status=0x%04x irq=%d rx_ready=%u tx_loaded=%u tx_ready_for_esp32=%u",
+             static_cast<unsigned>(status),
+             irq_level,
+             static_cast<unsigned>(status_bit(status, 0)),
+             static_cast<unsigned>(status_bit(status, 4)),
+             static_cast<unsigned>(status_bit(status, 5)));
+
+    ESP_RETURN_ON_ERROR(write_control(kControlResetMailbox),
+                        kLogTag,
+                        "startup mailbox reset failed");
+    begin_full_resync(0u);
+    return ESP_OK;
+}
+
 esp_err_t write_request(const uint8_t* payload, uint16_t payload_len)
 {
     if ((g_fpga_device == nullptr) || ((payload_len != 0u) && (payload == nullptr))) {
@@ -941,6 +963,15 @@ esp_err_t poll()
                  static_cast<unsigned>(status_bit(status, 9)));
     }
     g_last_status = status;
+
+    if (!g_caps_request_sent && !g_caps_response_seen) {
+        ESP_RETURN_ON_ERROR(recover_startup_mailbox(status, irq_level),
+                            kLogTag,
+                            "startup mailbox recovery failed");
+        if (g_resync_pending) {
+            return ESP_OK;
+        }
+    }
 
     if (g_resync_pending && !g_caps_request_sent && status_bit(status, 3) != 0u) {
         g_resync_pending = false;
