@@ -1,12 +1,18 @@
 :root {
   color-scheme: light;
   --ink: #102a43;
-  --muted: #486581;
-  --paper: rgba(247, 250, 252, 0.9);
-  --line: rgba(16, 42, 67, 0.14);
+  --muted: #52606d;
+  --paper: rgba(248, 250, 252, 0.92);
+  --line: rgba(16, 42, 67, 0.12);
   --accent: #005f73;
   --accent-strong: #0a9396;
+  --accent-soft: rgba(10, 147, 150, 0.12);
   --warm: #ee9b00;
+  --danger: #a61b3c;
+  --danger-soft: rgba(166, 27, 60, 0.12);
+  --ok: #0f6a46;
+  --ok-soft: rgba(15, 106, 70, 0.16);
+  --neutral-soft: rgba(81, 97, 123, 0.16);
 }
 
 * {
@@ -30,8 +36,13 @@ body {
   padding: 32px 0 48px;
 }
 
-.hero {
-  margin-bottom: 24px;
+.hero,
+.menu,
+.page-section,
+.login-panel,
+.message-panel,
+.table-panel {
+  margin-bottom: 20px;
 }
 
 .hero-top {
@@ -41,10 +52,22 @@ body {
   gap: 16px;
 }
 
-.toolbar {
+.identity-card {
   display: grid;
-  gap: 12px;
-  min-width: 240px;
+  gap: 10px;
+  min-width: 250px;
+  padding: 18px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid var(--line);
+}
+
+.identity-mode {
+  font-size: 0.76rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .eyebrow {
@@ -67,6 +90,11 @@ h1 {
   line-height: 1.6;
 }
 
+.hint {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -81,8 +109,49 @@ h1 {
   backdrop-filter: blur(14px);
 }
 
+.page-section {
+  padding: 22px;
+}
+
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.section-head.compact {
+  margin-bottom: 18px;
+}
+
 .metric {
   padding: 20px;
+}
+
+.metric-card {
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid var(--line);
+}
+
+.metric-card h3 {
+  margin: 0 0 8px;
+}
+
+.metric-card strong {
+  display: block;
+  font-size: 1.3rem;
+  margin-bottom: 6px;
+}
+
+.metric-card span {
+  color: var(--muted);
+}
+
+.metric-card.wide {
+  grid-column: span 2;
 }
 
 .metric strong {
@@ -93,15 +162,6 @@ h1 {
 
 .metric span {
   color: var(--muted);
-}
-
-.actions {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  margin: 20px 0;
-  padding: 20px;
 }
 
 button {
@@ -115,6 +175,19 @@ button {
   cursor: pointer;
 }
 
+.secondary-button {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--line);
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 select {
   width: 100%;
   padding: 12px 14px;
@@ -125,9 +198,114 @@ select {
   color: var(--ink);
 }
 
-.settings-panel {
-  margin: 20px 0;
-  padding: 20px;
+input {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.92);
+  font: inherit;
+  color: var(--ink);
+}
+
+.menu {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+}
+
+.menu-button {
+  flex: 1 1 0;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.menu-button.active {
+  color: white;
+  border-color: rgba(255, 255, 255, 0.2);
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+}
+
+.page-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 20px;
+}
+
+.slot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 14px;
+}
+
+.slot-card {
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.72);
+  display: grid;
+  gap: 8px;
+}
+
+.slot-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.slot-id {
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.slot-glyph {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: rgba(16, 42, 67, 0.08);
+  font-weight: 800;
+}
+
+.slot-card strong {
+  font-size: 1.05rem;
+}
+
+.slot-card small {
+  color: var(--muted);
+}
+
+.slot-card.running {
+  background: linear-gradient(180deg, rgba(15, 106, 70, 0.2), rgba(255, 255, 255, 0.92));
+  border-color: rgba(15, 106, 70, 0.26);
+}
+
+.slot-card.faulted {
+  background: linear-gradient(180deg, rgba(166, 27, 60, 0.18), rgba(255, 255, 255, 0.92));
+  border-color: rgba(166, 27, 60, 0.24);
+}
+
+.slot-card.stopped {
+  background: linear-gradient(180deg, rgba(238, 155, 0, 0.2), rgba(255, 255, 255, 0.92));
+  border-color: rgba(238, 155, 0, 0.3);
+}
+
+.slot-card.loaded {
+  background: linear-gradient(180deg, rgba(0, 95, 115, 0.16), rgba(255, 255, 255, 0.92));
+  border-color: rgba(0, 95, 115, 0.24);
+}
+
+.slot-card.empty {
+  background: linear-gradient(180deg, rgba(81, 97, 123, 0.1), rgba(255, 255, 255, 0.92));
+}
+
+.slot-card.unknown {
+  background: linear-gradient(180deg, rgba(16, 42, 67, 0.08), rgba(255, 255, 255, 0.92));
 }
 
 .settings-grid {
@@ -135,6 +313,13 @@ select {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 16px;
   align-items: end;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
 }
 
 .field {
@@ -162,6 +347,38 @@ select {
   line-height: 1.4;
 }
 
+.info-strip {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 18px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid var(--line);
+}
+
+.login-panel {
+  padding: 22px;
+  display: grid;
+  gap: 20px;
+}
+
+.login-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+  align-items: end;
+}
+
+.inline-login {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.admin-lock {
+  display: grid;
+  gap: 14px;
+}
+
 .table-panel {
   overflow: hidden;
 }
@@ -182,9 +399,11 @@ thead {
   background: rgba(0, 95, 115, 0.08);
 }
 
-.error {
-  margin: 16px 0;
+.message-panel {
   padding: 16px 18px;
+}
+
+.error {
   color: #7f1d1d;
   border-color: rgba(153, 27, 27, 0.18);
   background: rgba(254, 226, 226, 0.86);
@@ -199,12 +418,28 @@ thead {
     flex-direction: column;
   }
 
-  .actions {
+  .menu {
     flex-direction: column;
-    align-items: flex-start;
+  }
+
+  .page-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .section-head {
+    flex-direction: column;
+  }
+
+  .button-row {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .table-panel {
     overflow-x: auto;
+  }
+
+  .metric-card.wide {
+    grid-column: span 1;
   }
 }

@@ -145,7 +145,9 @@ extern "C" void app_main()
     for (;;) {
         const wifi_manager::Status wifi = wifi_manager::get_status();
         const wifi_manager::SiteSettings settings = wifi_manager::get_site_settings();
-        status_ui::update(settings.language, wifi);
+        if (g_runtime_screen_shown) {
+            status_ui::update(settings.language, wifi);
+        }
 
         lvgl_port::task_handler();
         web_server::poll();

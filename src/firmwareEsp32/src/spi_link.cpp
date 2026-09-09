@@ -39,6 +39,13 @@ constexpr uint8_t kBootPercentLinkReady = 25u;
 constexpr uint8_t kBootPercentCapsReady = 45u;
 constexpr uint8_t kBootPercentSnapshotBase = 45u;
 constexpr uint8_t kBootPercentSnapshotSpan = 54u;
+constexpr size_t kMaxPendingPointUpdates = 512u;
+
+struct PendingPointUpdate {
+    uint16_t point_index;
+    uint32_t sequence;
+};
+
 DMA_ATTR uint8_t g_mailbox_tx_buffer[3 + kMaxMailboxPayload] = {};
 DMA_ATTR uint8_t g_mailbox_rx_buffer[3 + kMaxMailboxPayload] = {};
 spi_device_handle_t g_fpga_device = nullptr;
@@ -70,6 +77,9 @@ bool g_refresh_requested = false;
 SemaphoreHandle_t g_state_mutex = nullptr;
 std::vector<plclink::DefinitionRecordV1> g_definition_records;
 std::vector<CachedStateRecord> g_state_records;
+PendingPointUpdate g_pending_point_updates[kMaxPendingPointUpdates] = {};
+size_t g_pending_point_update_head = 0u;
+size_t g_pending_point_update_count = 0u;
 
 esp_err_t write_control(uint16_t control_word);
 esp_err_t finalize_response_read(const char* context);
@@ -89,12 +99,32 @@ void state_unlock()
     }
 }
 
+void clear_pending_point_updates_locked()
+{
+    g_pending_point_update_head = 0u;
+    g_pending_point_update_count = 0u;
+}
+
+void enqueue_pending_point_update_locked(uint16_t point_index, uint32_t sequence)
+{
+    if (g_pending_point_update_count == kMaxPendingPointUpdates) {
+        g_pending_point_update_head = (g_pending_point_update_head + 1u) % kMaxPendingPointUpdates;
+        --g_pending_point_update_count;
+    }
+
+    const size_t tail = (g_pending_point_update_head + g_pending_point_update_count) % kMaxPendingPointUpdates;
+    g_pending_point_updates[tail].point_index = point_index;
+    g_pending_point_updates[tail].sequence = sequence;
+    ++g_pending_point_update_count;
+}
+
 void reset_state_cache(uint16_t point_count)
 {
     state_lock();
     g_state_records.clear();
     g_state_records.resize(point_count);
     g_states_sequence = 0u;
+    clear_pending_point_updates_locked();
     state_unlock();
 }
 
@@ -258,6 +288,7 @@ void store_snapshot_chunk(const plclink::StatesSnapshotChunkPrefix& prefix, cons
         const size_t target_index = static_cast<size_t>(cached.record.point_index);
         if (target_index < g_state_records.size()) {
             g_state_records[target_index] = cached;
+            enqueue_pending_point_update_locked(cached.record.point_index, prefix.states_sequence_base);
         }
     }
 
@@ -336,6 +367,7 @@ void store_update_chunk(const plclink::StatesUpdatePrefix& prefix,
             g_state_records.resize(target_index + 1u);
         }
         g_state_records[target_index] = cached;
+        enqueue_pending_point_update_locked(cached.record.point_index, prefix.states_sequence);
     }
 
     g_states_sequence = prefix.states_sequence;
@@ -1278,12 +1310,11 @@ BootProgress get_boot_progress()
 SnapshotInfo get_snapshot_info()
 {
     SnapshotInfo info = {};
+    state_lock();
     info.point_count = g_point_count;
-    info.loaded_points = g_snapshot_record_count;
+    info.loaded_points = static_cast<uint16_t>(std::min<size_t>(g_snapshot_record_count, g_state_records.size()));
     info.max_payload = g_max_fragment_payload;
     info.complete = g_states_response_seen;
-
-    state_lock();
     info.sequence = g_states_sequence;
     state_unlock();
     return info;
@@ -1292,10 +1323,9 @@ SnapshotInfo get_snapshot_info()
 DefinitionsInfo get_definitions_info()
 {
     DefinitionsInfo info = {};
+    state_lock();
     info.point_count = g_point_count;
     info.complete = g_defs_response_seen;
-
-    state_lock();
     info.generation = g_defs_generation;
     info.loaded_bytes = g_defs_loaded_bytes;
     info.total_bytes = g_defs_total_bytes;
@@ -1348,6 +1378,70 @@ size_t copy_definition_records(plclink::DefinitionRecordV1* out_records, size_t 
     }
     state_unlock();
     return copy_count;
+}
+
+bool copy_cached_state_record(size_t index, CachedStateRecord* out_record)
+{
+    if (out_record == nullptr) {
+        return false;
+    }
+
+    bool copied = false;
+    state_lock();
+    if (index < g_state_records.size()) {
+        *out_record = g_state_records[index];
+        copied = true;
+    }
+    state_unlock();
+    return copied;
+}
+
+bool copy_definition_record(size_t index, plclink::DefinitionRecordV1* out_record)
+{
+    if (out_record == nullptr) {
+        return false;
+    }
+
+    bool copied = false;
+    state_lock();
+    if (index < g_definition_records.size()) {
+        *out_record = g_definition_records[index];
+        copied = true;
+    }
+    state_unlock();
+    return copied;
+}
+
+bool pop_point_update(PointUpdate* out_update)
+{
+    if (out_update == nullptr) {
+        return false;
+    }
+
+    bool copied = false;
+    state_lock();
+    if (g_pending_point_update_count != 0u) {
+        const PendingPointUpdate pending = g_pending_point_updates[g_pending_point_update_head];
+        g_pending_point_update_head = (g_pending_point_update_head + 1u) % kMaxPendingPointUpdates;
+        --g_pending_point_update_count;
+
+        const size_t index = static_cast<size_t>(pending.point_index);
+        if (index < g_state_records.size()) {
+            *out_update = {};
+            out_update->sequence = pending.sequence;
+            out_update->point_count = g_point_count;
+            out_update->loaded_points = static_cast<uint16_t>(std::min<size_t>(g_snapshot_record_count, g_state_records.size()));
+            out_update->complete = g_states_response_seen;
+            out_update->state = g_state_records[index];
+            if (index < g_definition_records.size()) {
+                out_update->definition = g_definition_records[index];
+                out_update->has_definition = true;
+            }
+            copied = true;
+        }
+    }
+    state_unlock();
+    return copied;
 }
 
 bool copy_string_state_by_path(const char* feature, const char* point_id, char* out_value, size_t out_size)

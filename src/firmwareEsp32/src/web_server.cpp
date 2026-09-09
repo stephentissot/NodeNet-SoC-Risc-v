@@ -13,6 +13,7 @@
 #include <esp_http_server.h>
 #include <esp_littlefs.h>
 #include <esp_log.h>
+#include <esp_random.h>
 #include <sys/stat.h>
 
 #include "app_config.h"
@@ -25,6 +26,11 @@ namespace {
 constexpr const char* kLogTag = "web-server";
 constexpr size_t kMaxWsClients = 4;
 constexpr uint8_t kPointValueTypeString = 7u;
+constexpr const char* kAuthCookieName = "nodenet_auth";
+constexpr const char* kFakeAdminUsername = "admin";
+constexpr const char* kFakeAdminPassword = "admin";
+constexpr const char* kFakeAdminGroup = "admin";
+constexpr const char* kFakeAdminPermission = "canAdmin";
 
 httpd_handle_t g_server = nullptr;
 int g_ws_clients[kMaxWsClients] = {-1, -1, -1, -1};
@@ -37,8 +43,19 @@ bool g_have_last_snapshot = false;
 bool g_have_last_wifi = false;
 bool g_have_last_settings = false;
 bool g_fs_mounted = false;
+char g_auth_token[33] = {};
+bool g_auth_token_valid = false;
 
 constexpr const char* kSupportedLanguagesJson = "[\"uk\",\"fr\",\"de\",\"es\",\"zh-Hans\"]";
+
+struct FakeAuthState {
+    bool anonymous_access = true;
+    bool login_required = false;
+    bool authenticated = false;
+    bool can_admin = false;
+    char username[16] = {};
+    char group[16] = {};
+};
 
 esp_err_t send_error(httpd_req_t* req, const char* status, const char* message);
 
@@ -159,6 +176,41 @@ std::string make_snapshot_json(const spi_link::SnapshotInfo& info)
                   static_cast<unsigned>(info.max_payload),
                   info.complete ? "true" : "false");
     return buffer;
+}
+
+std::string make_point_update_json(const spi_link::PointUpdate& update)
+{
+    const auto& record = update.state.record;
+    const std::string path = update.has_definition
+        ? build_point_path(update.definition.device_id, update.definition.feature, update.definition.point_id)
+        : std::string();
+
+    std::string body;
+    body.reserve(384u);
+    body += "{\"type\":\"plc_point_update\",\"snapshot\":{";
+    body += "\"sequence\":" + std::to_string(static_cast<unsigned long>(update.sequence));
+    body += ",\"point_count\":" + std::to_string(update.point_count);
+    body += ",\"loaded_points\":" + std::to_string(update.loaded_points);
+    body += ",\"complete\":" + std::string(update.complete ? "true" : "false");
+    body += "},\"record\":{";
+    body += "\"point_index\":" + std::to_string(record.point_index);
+    if (update.has_definition) {
+        body += ",\"path\":\"" + json_escape(path.c_str()) + "\"";
+        body += ",\"device_id\":\"" + json_escape(update.definition.device_id) + "\"";
+        body += ",\"feature\":\"" + json_escape(update.definition.feature) + "\"";
+        body += ",\"point_id\":\"" + json_escape(update.definition.point_id) + "\"";
+        body += ",\"display_name\":\"" + json_escape(update.definition.display_name) + "\"";
+    }
+    body += ",\"value_type\":" + std::to_string(record.value_type);
+    body += ",\"state_flags\":" + std::to_string(record.state_flags);
+    body += ",\"value_bits\":" + std::to_string(static_cast<unsigned long>(record.value_bits));
+    body += ",\"quality\":" + std::to_string(static_cast<unsigned long>(record.quality));
+    body += ",\"timestamp_ms\":" + std::to_string(static_cast<unsigned long>(record.timestamp_ms));
+    if (record.value_type == kPointValueTypeString) {
+        body += ",\"string_value\":\"" + json_escape(update.state.string_value) + "\"";
+    }
+    body += "}}";
+    return body;
 }
 
 std::string make_wifi_json_message(const wifi_manager::Status& status)
@@ -326,7 +378,121 @@ bool extract_json_bool(const std::string& payload, const char* key, bool* out_va
     return false;
 }
 
-bool is_startup_or_settings_uri(const char* uri)
+FakeAuthState make_anonymous_auth_state(bool anonymous_access)
+{
+    FakeAuthState state = {};
+    state.anonymous_access = anonymous_access;
+    state.login_required = !anonymous_access;
+    state.authenticated = anonymous_access;
+    state.can_admin = false;
+    std::strncpy(state.username, anonymous_access ? "anonymous" : "", sizeof(state.username) - 1u);
+    std::strncpy(state.group, anonymous_access ? "public" : "", sizeof(state.group) - 1u);
+    return state;
+}
+
+FakeAuthState make_admin_auth_state(bool anonymous_access)
+{
+    FakeAuthState state = {};
+    state.anonymous_access = anonymous_access;
+    state.login_required = !anonymous_access;
+    state.authenticated = true;
+    state.can_admin = true;
+    std::strncpy(state.username, kFakeAdminUsername, sizeof(state.username) - 1u);
+    std::strncpy(state.group, kFakeAdminGroup, sizeof(state.group) - 1u);
+    return state;
+}
+
+void clear_auth_token()
+{
+    g_auth_token[0] = '\0';
+    g_auth_token_valid = false;
+}
+
+void generate_auth_token()
+{
+    const uint32_t token_a = esp_random();
+    const uint32_t token_b = esp_random();
+    std::snprintf(g_auth_token,
+                  sizeof(g_auth_token),
+                  "%08lx%08lx",
+                  static_cast<unsigned long>(token_a),
+                  static_cast<unsigned long>(token_b));
+    g_auth_token_valid = true;
+}
+
+bool request_has_valid_auth_cookie(httpd_req_t* req)
+{
+    if ((req == nullptr) || !g_auth_token_valid || (g_auth_token[0] == '\0')) {
+        return false;
+    }
+
+    const size_t cookie_length = httpd_req_get_hdr_value_len(req, "Cookie");
+    if ((cookie_length == 0u) || (cookie_length > 255u)) {
+        return false;
+    }
+
+    std::vector<char> cookie(cookie_length + 1u, '\0');
+    if (httpd_req_get_hdr_value_str(req, "Cookie", cookie.data(), cookie.size()) != ESP_OK) {
+        return false;
+    }
+
+    const std::string all_cookies(cookie.data());
+    const std::string expected = std::string(kAuthCookieName) + '=' + g_auth_token;
+    const size_t pos = all_cookies.find(expected);
+    if (pos == std::string::npos) {
+        return false;
+    }
+
+    if ((pos != 0u) && (all_cookies[pos - 1u] != ';') && (all_cookies[pos - 1u] != ' ')) {
+        return false;
+    }
+
+    const size_t end = pos + expected.size();
+    return (end == all_cookies.size()) || (all_cookies[end] == ';');
+}
+
+FakeAuthState get_auth_state_for_request(httpd_req_t* req)
+{
+    const bool anonymous_access = wifi_manager::is_anonymous_access_allowed();
+    if (anonymous_access) {
+        return make_anonymous_auth_state(true);
+    }
+    if (request_has_valid_auth_cookie(req)) {
+        return make_admin_auth_state(false);
+    }
+    return make_anonymous_auth_state(false);
+}
+
+std::string make_auth_json_message(const FakeAuthState& auth)
+{
+    std::string body;
+    body.reserve(240u);
+    body += "{\"type\":\"auth\",\"auth\":{\"anonymous_access\":";
+    body += auth.anonymous_access ? "true" : "false";
+    body += ",\"login_required\":";
+    body += auth.login_required ? "true" : "false";
+    body += ",\"authenticated\":";
+    body += auth.authenticated ? "true" : "false";
+    body += ",\"can_admin\":";
+    body += auth.can_admin ? "true" : "false";
+    body += ",\"user\":";
+    if (auth.username[0] == '\0') {
+        body += "null";
+    } else {
+        body += "{\"username\":\"" + json_escape(auth.username) + "\",\"group\":\"" +
+                json_escape(auth.group) + "\",\"permissions\":[";
+        if (auth.can_admin) {
+            body += "\"";
+            body += kFakeAdminPermission;
+            body += "\"";
+        }
+        body += "]}";
+    }
+    body += "}}";
+    return body;
+}
+
+bool is_public_uri(const char* uri)
 {
     if (uri == nullptr) {
         return false;
@@ -335,23 +501,46 @@ bool is_startup_or_settings_uri(const char* uri)
     const std::string path(uri);
     return (path == "/") ||
            (path.rfind("/startup", 0) == 0) ||
+           (path.rfind("/app", 0) == 0) ||
+           (path.rfind("/vendor", 0) == 0) ||
            (path.rfind("/api/wifi/", 0) == 0) ||
+           (path.rfind("/api/auth/", 0) == 0) ||
            (path == "/api/settings");
 }
 
-esp_err_t reject_if_anonymous_disabled(httpd_req_t* req)
+esp_err_t reject_if_unauthenticated(httpd_req_t* req)
 {
-    if ((req == nullptr) || wifi_manager::is_anonymous_access_allowed() || is_startup_or_settings_uri(req->uri)) {
+    if ((req == nullptr) || is_public_uri(req->uri)) {
         return ESP_OK;
     }
 
-    return send_error(req, "403 Forbidden", "anonymous access disabled");
+    const FakeAuthState auth = get_auth_state_for_request(req);
+    if (auth.authenticated) {
+        return ESP_OK;
+    }
+
+    return send_error(req, "401 Unauthorized", "authentication required");
 }
 
 esp_err_t send_json(httpd_req_t* req, const std::string& body, const char* status = "200 OK")
 {
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_status(req, status);
+    return httpd_resp_send(req, body.c_str(), static_cast<ssize_t>(body.size()));
+}
+
+esp_err_t send_json_with_cookie(httpd_req_t* req,
+                                const std::string& body,
+                                const char* status,
+                                const char* cookie_header)
+{
+    if ((req == nullptr) || (cookie_header == nullptr)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_status(req, status);
+    httpd_resp_set_hdr(req, "Set-Cookie", cookie_header);
     return httpd_resp_send(req, body.c_str(), static_cast<ssize_t>(body.size()));
 }
 
@@ -409,7 +598,7 @@ void broadcast_text(const std::string& payload)
     }
 }
 
-std::string guess_content_type(const std::string& path)
+const char* guess_content_type(const std::string& path)
 {
     if (path.ends_with(".html")) {
         return "text/html";
@@ -462,7 +651,7 @@ esp_err_t serve_file(httpd_req_t* req, const std::string& path)
         return send_error(req, "404 Not Found", "asset not found");
     }
 
-    httpd_resp_set_type(req, guess_content_type(path).c_str());
+    httpd_resp_set_type(req, guess_content_type(path));
     char buffer[1024] = {};
     while (true) {
         const size_t read_count = std::fread(buffer, 1u, sizeof(buffer), file);
@@ -502,14 +691,14 @@ esp_err_t handle_root(httpd_req_t* req)
     }
 
     httpd_resp_set_status(req, "302 Found");
-    const bool can_open_app = wifi_manager::has_saved_credentials() && wifi_manager::is_anonymous_access_allowed();
+    const bool can_open_app = wifi_manager::has_saved_credentials();
     httpd_resp_set_hdr(req, "Location", can_open_app ? "/app/" : "/startup/");
     return httpd_resp_send(req, nullptr, 0);
 }
 
 esp_err_t handle_static(httpd_req_t* req)
 {
-    ESP_RETURN_ON_ERROR(reject_if_anonymous_disabled(req), kLogTag, "anonymous access blocked");
+    ESP_RETURN_ON_ERROR(reject_if_unauthenticated(req), kLogTag, "request authentication failed");
     const std::string path = map_uri_to_file(req->uri);
     if (path.empty()) {
         return send_error(req, "404 Not Found", "unknown path");
@@ -519,7 +708,7 @@ esp_err_t handle_static(httpd_req_t* req)
 
 esp_err_t handle_system_info(httpd_req_t* req)
 {
-    ESP_RETURN_ON_ERROR(reject_if_anonymous_disabled(req), kLogTag, "anonymous access blocked");
+    ESP_RETURN_ON_ERROR(reject_if_unauthenticated(req), kLogTag, "request authentication failed");
     return send_json(req, make_system_info_json());
 }
 
@@ -538,6 +727,64 @@ esp_err_t handle_wifi_scan(httpd_req_t* req)
 esp_err_t handle_settings_get(httpd_req_t* req)
 {
     return send_json(req, make_settings_json_message(wifi_manager::get_site_settings()));
+}
+
+esp_err_t handle_auth_status(httpd_req_t* req)
+{
+    return send_json(req, make_auth_json_message(get_auth_state_for_request(req)));
+}
+
+esp_err_t handle_auth_login(httpd_req_t* req)
+{
+    std::string payload;
+    if (!read_request_body(req, &payload)) {
+        return send_error(req, "400 Bad Request", "request body truncated");
+    }
+
+    const std::string username = extract_json_string(payload, "username");
+    const std::string password = extract_json_string(payload, "password");
+    if ((username == std::string("\x01")) || (password == std::string("\x01"))) {
+        return send_error(req, "400 Bad Request", "invalid login payload");
+    }
+
+    if ((username != kFakeAdminUsername) || (password != kFakeAdminPassword)) {
+        clear_auth_token();
+        char cookie_header[96] = {};
+        std::snprintf(cookie_header,
+                      sizeof(cookie_header),
+                      "%s=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
+                      kAuthCookieName);
+        return send_json_with_cookie(req,
+                                     std::string("{\"error\":\"invalid username or password\"}"),
+                                     "401 Unauthorized",
+                                     cookie_header);
+    }
+
+    generate_auth_token();
+    char cookie_header[128] = {};
+    std::snprintf(cookie_header,
+                  sizeof(cookie_header),
+                  "%s=%s; Path=/; HttpOnly; SameSite=Lax",
+                  kAuthCookieName,
+                  g_auth_token);
+    return send_json_with_cookie(req,
+                                 make_auth_json_message(make_admin_auth_state(wifi_manager::is_anonymous_access_allowed())),
+                                 "200 OK",
+                                 cookie_header);
+}
+
+esp_err_t handle_auth_logout(httpd_req_t* req)
+{
+    clear_auth_token();
+    char cookie_header[96] = {};
+    std::snprintf(cookie_header,
+                  sizeof(cookie_header),
+                  "%s=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
+                  kAuthCookieName);
+    return send_json_with_cookie(req,
+                                 make_auth_json_message(get_auth_state_for_request(req)),
+                                 "200 OK",
+                                 cookie_header);
 }
 
 esp_err_t handle_wifi_config(httpd_req_t* req)
@@ -604,7 +851,7 @@ esp_err_t handle_settings_post(httpd_req_t* req)
 
 esp_err_t handle_defs(httpd_req_t* req)
 {
-    ESP_RETURN_ON_ERROR(reject_if_anonymous_disabled(req), kLogTag, "anonymous access blocked");
+    ESP_RETURN_ON_ERROR(reject_if_unauthenticated(req), kLogTag, "request authentication failed");
     const spi_link::DefinitionsInfo defs = spi_link::get_definitions_info();
     std::vector<plclink::DefinitionRecordV1> records(defs.point_count);
     const size_t copied = spi_link::copy_definition_records(records.data(), records.size());
@@ -642,56 +889,76 @@ esp_err_t handle_defs(httpd_req_t* req)
 
 esp_err_t handle_snapshot(httpd_req_t* req)
 {
-    ESP_RETURN_ON_ERROR(reject_if_anonymous_disabled(req), kLogTag, "anonymous access blocked");
+    ESP_RETURN_ON_ERROR(reject_if_unauthenticated(req), kLogTag, "request authentication failed");
     const spi_link::SnapshotInfo snapshot = spi_link::get_snapshot_info();
-    std::vector<spi_link::CachedStateRecord> records(snapshot.loaded_points);
-    std::vector<plclink::DefinitionRecordV1> defs(snapshot.point_count);
-    const size_t copied = spi_link::copy_cached_state_records(records.data(), records.size());
-    const size_t defs_copied = spi_link::copy_definition_records(defs.data(), defs.size());
 
-    std::string body;
-    body.reserve(128u + (copied * 196u));
-    body += "{\"sequence\":" + std::to_string(static_cast<unsigned long>(snapshot.sequence));
-    body += ",\"point_count\":" + std::to_string(snapshot.point_count);
-    body += ",\"loaded_points\":" + std::to_string(snapshot.loaded_points);
-    body += ",\"complete\":" + std::string(snapshot.complete ? "true" : "false");
-    body += ",\"records\":[";
-    for (size_t index = 0; index < copied; ++index) {
-        const auto& cached = records[index];
-        const auto& record = cached.record;
-        const plclink::DefinitionRecordV1* definition =
-            (record.point_index < defs_copied) ? &defs[record.point_index] : nullptr;
-        const std::string path = (definition != nullptr)
-            ? build_point_path(definition->device_id, definition->feature, definition->point_id)
-            : std::string();
-        if (index != 0u) {
-            body += ',';
-        }
-        body += "{\"point_index\":" + std::to_string(record.point_index);
-        if (definition != nullptr) {
-            body += ",\"path\":\"" + json_escape(path.c_str()) + "\"";
-            body += ",\"device_id\":\"" + json_escape(definition->device_id) + "\"";
-            body += ",\"feature\":\"" + json_escape(definition->feature) + "\"";
-            body += ",\"point_id\":\"" + json_escape(definition->point_id) + "\"";
-            body += ",\"display_name\":\"" + json_escape(definition->display_name) + "\"";
-        }
-        body += ",\"value_type\":" + std::to_string(record.value_type);
-        body += ",\"state_flags\":" + std::to_string(record.state_flags);
-        body += ",\"value_bits\":" + std::to_string(static_cast<unsigned long>(record.value_bits));
-        body += ",\"quality\":" + std::to_string(static_cast<unsigned long>(record.quality));
-        body += ",\"timestamp_ms\":" + std::to_string(static_cast<unsigned long>(record.timestamp_ms));
-        if (record.value_type == kPointValueTypeString) {
-            body += ",\"string_value\":\"" + json_escape(cached.string_value) + "\"";
-        }
-        body += '}';
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_status(req, "200 OK");
+
+    std::string chunk;
+    chunk.reserve(256u);
+    chunk += "{\"sequence\":" + std::to_string(static_cast<unsigned long>(snapshot.sequence));
+    chunk += ",\"point_count\":" + std::to_string(snapshot.point_count);
+    chunk += ",\"loaded_points\":" + std::to_string(snapshot.loaded_points);
+    chunk += ",\"complete\":" + std::string(snapshot.complete ? "true" : "false");
+    chunk += ",\"records\":[";
+    esp_err_t err = httpd_resp_sendstr_chunk(req, chunk.c_str());
+    if (err != ESP_OK) {
+        return err;
     }
-    body += "]}";
-    return send_json(req, body);
+
+    for (size_t index = 0u; index < snapshot.loaded_points; ++index) {
+        spi_link::CachedStateRecord cached = {};
+        if (!spi_link::copy_cached_state_record(index, &cached)) {
+            break;
+        }
+
+        const auto& record = cached.record;
+        plclink::DefinitionRecordV1 definition = {};
+        const bool has_definition = spi_link::copy_definition_record(record.point_index, &definition);
+        const std::string path = has_definition
+            ? build_point_path(definition.device_id, definition.feature, definition.point_id)
+            : std::string();
+
+        chunk.clear();
+        if (index != 0u) {
+            chunk += ',';
+        }
+        chunk += "{\"point_index\":" + std::to_string(record.point_index);
+        if (has_definition) {
+            chunk += ",\"path\":\"" + json_escape(path.c_str()) + "\"";
+            chunk += ",\"device_id\":\"" + json_escape(definition.device_id) + "\"";
+            chunk += ",\"feature\":\"" + json_escape(definition.feature) + "\"";
+            chunk += ",\"point_id\":\"" + json_escape(definition.point_id) + "\"";
+            chunk += ",\"display_name\":\"" + json_escape(definition.display_name) + "\"";
+        }
+        chunk += ",\"value_type\":" + std::to_string(record.value_type);
+        chunk += ",\"state_flags\":" + std::to_string(record.state_flags);
+        chunk += ",\"value_bits\":" + std::to_string(static_cast<unsigned long>(record.value_bits));
+        chunk += ",\"quality\":" + std::to_string(static_cast<unsigned long>(record.quality));
+        chunk += ",\"timestamp_ms\":" + std::to_string(static_cast<unsigned long>(record.timestamp_ms));
+        if (record.value_type == kPointValueTypeString) {
+            chunk += ",\"string_value\":\"" + json_escape(cached.string_value) + "\"";
+        }
+        chunk += '}';
+
+        err = httpd_resp_sendstr_chunk(req, chunk.c_str());
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+
+    err = httpd_resp_sendstr_chunk(req, "]}");
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    return httpd_resp_sendstr_chunk(req, nullptr);
 }
 
 esp_err_t handle_snapshot_refresh(httpd_req_t* req)
 {
-    ESP_RETURN_ON_ERROR(reject_if_anonymous_disabled(req), kLogTag, "anonymous access blocked");
+    ESP_RETURN_ON_ERROR(reject_if_unauthenticated(req), kLogTag, "request authentication failed");
     const esp_err_t result = spi_link::request_states_refresh();
     if ((result != ESP_OK) && (result != ESP_ERR_INVALID_STATE)) {
         return send_error(req, "409 Conflict", "snapshot refresh refused");
@@ -701,7 +968,7 @@ esp_err_t handle_snapshot_refresh(httpd_req_t* req)
 
 esp_err_t handle_ws(httpd_req_t* req)
 {
-    ESP_RETURN_ON_ERROR(reject_if_anonymous_disabled(req), kLogTag, "anonymous access blocked");
+    ESP_RETURN_ON_ERROR(reject_if_unauthenticated(req), kLogTag, "request authentication failed");
     if (req->method == HTTP_GET) {
         const int fd = httpd_req_to_sockfd(req);
         add_ws_client(fd);
@@ -740,7 +1007,7 @@ esp_err_t start()
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 20;
 
     ESP_RETURN_ON_ERROR(httpd_start(&g_server, &config), kLogTag, "httpd_start failed");
 
@@ -784,6 +1051,33 @@ esp_err_t start()
         .uri = "/api/settings",
         .method = HTTP_GET,
         .handler = handle_settings_get,
+        .user_ctx = nullptr,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr,
+    };
+    const httpd_uri_t auth_status_uri = {
+        .uri = "/api/auth/status",
+        .method = HTTP_GET,
+        .handler = handle_auth_status,
+        .user_ctx = nullptr,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr,
+    };
+    const httpd_uri_t auth_login_uri = {
+        .uri = "/api/auth/login",
+        .method = HTTP_POST,
+        .handler = handle_auth_login,
+        .user_ctx = nullptr,
+        .is_websocket = false,
+        .handle_ws_control_frames = false,
+        .supported_subprotocol = nullptr,
+    };
+    const httpd_uri_t auth_logout_uri = {
+        .uri = "/api/auth/logout",
+        .method = HTTP_POST,
+        .handler = handle_auth_logout,
         .user_ctx = nullptr,
         .is_websocket = false,
         .handle_ws_control_frames = false,
@@ -876,6 +1170,9 @@ esp_err_t start()
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &wifi_status_uri), kLogTag, "register wifi status failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &wifi_scan_uri), kLogTag, "register wifi scan failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &settings_get_uri), kLogTag, "register settings get failed");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &auth_status_uri), kLogTag, "register auth status failed");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &auth_login_uri), kLogTag, "register auth login failed");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &auth_logout_uri), kLogTag, "register auth logout failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &wifi_config_uri), kLogTag, "register wifi config failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &wifi_disconnect_uri), kLogTag, "register wifi disconnect failed");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(g_server, &wifi_forget_uri), kLogTag, "register wifi forget failed");
@@ -911,6 +1208,14 @@ void poll()
         g_last_snapshot = snapshot;
         g_have_last_snapshot = true;
         broadcast_text(make_snapshot_json(snapshot));
+    }
+
+    for (size_t sent = 0u; sent < 16u; ++sent) {
+        spi_link::PointUpdate update = {};
+        if (!spi_link::pop_point_update(&update)) {
+            break;
+        }
+        broadcast_text(make_point_update_json(update));
     }
 
     if (!g_have_last_wifi || !wifi_equal(wifi, g_last_wifi)) {
