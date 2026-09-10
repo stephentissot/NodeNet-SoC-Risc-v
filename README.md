@@ -20,6 +20,7 @@ Current project status:
 - relocatable `objectFileV1` PLC upload, firmware-side link/load, linked-bytecode readback, and object-file readback
 - 16 PLC slots with reboot persistence in the raw PLC flash package and automatic restore after boot
 - OLED boot progress screen plus post-boot slot status screen
+- ESP32 SPI coprocessor for local web API is in progress on the current branch; the shared SPI link, snapshot bootstrap, incremental state updates, and web UI runtime path are now working together on hardware, while broader validation and the MQTT bridge remain pending
 
 ## Features
 
@@ -40,6 +41,7 @@ PLC documentation index:
 - Command surface and JSON examples: [README_NODENET_PLC_COMMANDS.md](README_NODENET_PLC_COMMANDS.md)
 - PLC VM runtime architecture and ABI: [Documentation/plc_vm_spec_v1.md](Documentation/plc_vm_spec_v1.md)
 - PLC assembly / object-file format: [Documentation/plc_assembly_spec_v1.md](Documentation/plc_assembly_spec_v1.md)
+- ESP32 SPI bridge pinout and PlatformIO notes: [Documentation/esp32_spi_bridge_notes.md](Documentation/esp32_spi_bridge_notes.md)
 - Firmware runtime and flash layout: [src/firmware/README.md](src/firmware/README.md)
 - Stage0 boot flow and runtime handoff: [src/firmware/README_BOOT.md](src/firmware/README_BOOT.md)
 - NodeNet transport details: [src/wbDevices/README_NODENET.md](src/wbDevices/README_NODENET.md)
@@ -494,7 +496,7 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
 - [ ] Dual Ethernet breakout using i9 onboard Broadcom PHYs (2x RJ45 with magnetics)
 - [x] RJ45 LEDs integrated through `wb_led` at dedicated addresses
 - [ ] Final RJ45 firmware policy (link/activity/status) for production runtime
-- [ ] ESP32 module SPI coprocessor for web API and MQTT bridge
+- [ ] ESP32 module SPI coprocessor for web API and MQTT bridge (in progress: shared SPI link, HTTP app, websocket updates, and plcLink snapshot/resync path validated on hardware; MQTT bridge still pending)
 - [ ] Power option study: use ESP32 module 3.3V rail vs dedicated 12V->3.3V buck
 - [x] Modbus RTU master module + firmware driver (`wb_modbus_master` + `ModbusMaster`)
 - [ ] Modbus RTU slave mode

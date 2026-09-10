@@ -9,6 +9,7 @@
 #include "sdram.h"
 
 namespace {
+constexpr bool kEnableModbusWriteTraceLogs = false;
 constexpr const char* kFlashDbConfigKey = "nodenet.config";
 constexpr const char* kFlashDbModbus0Key = "nodenet.modbus0";
 constexpr const char* kFlashDbPointCatalogKey = "nodenet.points";
@@ -33,6 +34,33 @@ constexpr uint8_t kBootNodeServicesProgressStart = 10u;
 constexpr uint8_t kBootNodeServicesProgressEnd = 34u;
 constexpr uint8_t kBootRestoreProgressStart = 70u;
 constexpr uint8_t kBootRestoreProgressEnd = 95u;
+PointState* g_plclink_state_shadow = nullptr;
+size_t g_plclink_state_shadow_count = 0u;
+bool g_plclink_state_shadow_ready = false;
+
+constexpr const char* kPlcSlotRuntimePointIds[] = {
+    "loaded",
+    "state",
+    "runEnabled",
+    "status",
+    "faultCode",
+    "faultInfo",
+    "bytecodeSize",
+    "loadEpoch",
+    "objectSize",
+    "paramsSummary",
+};
+
+constexpr const char* kPlcGlobalRuntimePointIds[] = {
+    "activeSlotCount",
+    "faultedSlotCount",
+    "engineEnabled",
+    "engineBusy",
+    "engineActiveSlot",
+    "engineLastFaultCode",
+    "engineLastFaultSlot",
+    "engineScanIntervalCycles",
+};
 
 uint8_t boot_node_services_progress(uint16_t slot_index)
 {
@@ -207,6 +235,84 @@ static bool point_state_payload_equal(PointValueType value_type,
     default:
         return false;
     }
+}
+
+static bool ensure_plclink_state_shadow(const PointCatalog& catalog, bool reseed)
+{
+    const size_t count = catalog.size();
+    if (count == 0u) {
+        g_plclink_state_shadow_ready = true;
+        g_plclink_state_shadow_count = 0u;
+        return true;
+    }
+
+    if (g_plclink_state_shadow_count != count) {
+        void* resized = realloc(g_plclink_state_shadow, count * sizeof(PointState));
+        if (resized == nullptr) {
+            return false;
+        }
+        g_plclink_state_shadow = static_cast<PointState*>(resized);
+        g_plclink_state_shadow_count = count;
+        reseed = true;
+    }
+
+    if (!g_plclink_state_shadow_ready || reseed) {
+        const PointState* states = catalog.states();
+        if (states == nullptr) {
+            return false;
+        }
+        std::memcpy(g_plclink_state_shadow, states, count * sizeof(PointState));
+        g_plclink_state_shadow_ready = true;
+    }
+
+    return true;
+}
+
+static void sync_plclink_state_shadow_index(const PointCatalog& catalog, size_t index)
+{
+    if (!ensure_plclink_state_shadow(catalog, false)) {
+        return;
+    }
+    if (index >= g_plclink_state_shadow_count) {
+        return;
+    }
+
+    const PointState* states = catalog.states();
+    if (states == nullptr) {
+        return;
+    }
+
+    g_plclink_state_shadow[index] = states[index];
+}
+
+static size_t recover_plc_vm_overflow_dirty_states(PointCatalog& catalog)
+{
+    if (!ensure_plclink_state_shadow(catalog, false)) {
+        return static_cast<size_t>(-1);
+    }
+
+    const size_t count = catalog.size();
+    const PointDefinition* definitions = catalog.entries();
+    const PointState* states = catalog.states();
+    if ((definitions == nullptr) || (states == nullptr)) {
+        return static_cast<size_t>(-1);
+    }
+
+    size_t recovered_count = 0u;
+    for (size_t index = 0u; index < count; ++index) {
+        if (point_state_payload_equal(definitions[index].value_type,
+                                      g_plclink_state_shadow[index],
+                                      states[index])) {
+            continue;
+        }
+
+        g_plclink_state_shadow[index] = states[index];
+        if (catalog.notifyStateChanged(index)) {
+            ++recovered_count;
+        }
+    }
+
+    return recovered_count;
 }
 
 static bool publish_builtin_state_if_changed(NodeNetCore& core,
@@ -1009,6 +1115,30 @@ static uint32_t plc_engine_scan_interval_cycles()
     return *plc_reg_ptr(0x10u);
 }
 
+static uint32_t plc_vm_signature()
+{
+    return *plc_reg_ptr(0x0Cu);
+}
+
+static uint32_t plc_vm_dirty_event_snapshot()
+{
+    return *plc_reg_ptr(0x14u);
+}
+
+static void plc_vm_dirty_event_clear(bool clear_valid, bool clear_overflow)
+{
+    uint32_t control = 0u;
+    if (clear_valid) {
+        control |= 0x1u;
+    }
+    if (clear_overflow) {
+        control |= 0x2u;
+    }
+    if (control != 0u) {
+        *plc_reg_ptr(0x14u) = control;
+    }
+}
+
 static void plc_engine_set_enabled(bool enabled)
 {
     *plc_reg_ptr(0x00u) = enabled ? 0x1u : 0x0u;
@@ -1542,6 +1672,7 @@ void NodeNetCore::begin()
     oled::showBootProgress("Node services: builtins", 18u);
     registerBuiltinPointDefinitions();
     _pointCatalogAutosaveEnabled = true;
+    (void)ensure_plclink_state_shadow(_pointCatalog, true);
     if (_pointCatalogDirty) {
         oled::showBootProgress("Node services: save catalog", 30u);
         (void)savePointCatalog();
@@ -1558,6 +1689,12 @@ void NodeNetCore::begin()
     oled::showBootProgress("Node services: plc core", 33u);
     _plcCore.begin(&_pointCatalog, _modbus0, _logger);
     _plcCore.setModbusBatchMaxGap(modbus0Settings.comSettings.max_gap);
+    if (_logger != nullptr) {
+        _logger->Info("PLC VM regs signature=0x%08lx dirty_raw=0x%08lx scan_cycles=%lu",
+                      static_cast<unsigned long>(plc_vm_signature()),
+                      static_cast<unsigned long>(plc_vm_dirty_event_snapshot()),
+                      static_cast<unsigned long>(plc_engine_scan_interval_cycles()));
+    }
 
     oled::showBootProgress("Node services: publish", 34u);
     publishBuiltinPointStates();
@@ -1576,6 +1713,7 @@ void NodeNetCore::loop()
     processInputQueue();
 
     _plcCore.loop();
+    drainPlcVmStateEvents();
     refreshLoadedMirrorProgramRuntimeMapsIfNeeded();
 
     const uint32_t now_ms = millis();
@@ -1587,6 +1725,84 @@ void NodeNetCore::loop()
     processOutputQueue();
     processPendingPlcErase();
     processPendingPlcAutoLoad();
+}
+
+void NodeNetCore::drainPlcVmStateEvents()
+{
+    constexpr uint32_t kDirtyEventValidMask = 0x1u;
+    constexpr uint32_t kDirtyEventOverflowMask = 0x2u;
+    constexpr uint32_t kDirtyEventOffsetQ16Shift = 2u;
+    constexpr uint32_t kDirtyEventOffsetQ16Mask = 0x1FFFu;
+    constexpr uint32_t kDirtyEventOffsetShift = 4u;
+    constexpr uint8_t kMaxEventsPerLoop = 8u;
+
+    // Once a full sync is pending, incremental dirty events are obsolete.
+    if (_pointCatalog.runtimeFullSyncRequired()) {
+        (void)ensure_plclink_state_shadow(_pointCatalog, true);
+        const uint32_t raw = plc_vm_dirty_event_snapshot();
+        if ((raw & (kDirtyEventValidMask | kDirtyEventOverflowMask)) != 0u) {
+            plc_vm_dirty_event_clear(true, true);
+        }
+        return;
+    }
+
+    for (uint8_t attempt = 0u; attempt < kMaxEventsPerLoop; ++attempt) {
+        const uint32_t raw = plc_vm_dirty_event_snapshot();
+        const bool valid = (raw & kDirtyEventValidMask) != 0u;
+        const bool overflow = (raw & kDirtyEventOverflowMask) != 0u;
+
+        if (overflow) {
+            const size_t recovered_count = recover_plc_vm_overflow_dirty_states(_pointCatalog);
+            plc_vm_dirty_event_clear(true, true);
+            if (recovered_count == static_cast<size_t>(-1)) {
+                _pointCatalog.requestRuntimeFullSync();
+                if (_logger != nullptr) {
+                    _logger->Warning("PLC VM dirty-state event overflow; requesting full plcLink state resync");
+                }
+            }
+            break;
+        }
+
+        if (!valid) {
+            break;
+        }
+
+        const uint32_t offset_q16 = (raw >> kDirtyEventOffsetQ16Shift) & kDirtyEventOffsetQ16Mask;
+        const uint32_t point_state_offset = offset_q16 << kDirtyEventOffsetShift;
+        if ((point_state_offset % sizeof(PointState)) != 0u) {
+            _pointCatalog.requestRuntimeFullSync();
+            plc_vm_dirty_event_clear(true, true);
+            if (_logger != nullptr) {
+                _logger->Warning("PLC VM dirty-state event had invalid offset 0x%08lx; requesting full resync",
+                                 static_cast<unsigned long>(point_state_offset));
+            }
+            break;
+        }
+
+        const size_t point_index = point_state_offset / sizeof(PointState);
+        if (point_index >= _pointCatalog.size()) {
+            _pointCatalog.requestRuntimeFullSync();
+            plc_vm_dirty_event_clear(true, true);
+            if (_logger != nullptr) {
+                _logger->Warning("PLC VM dirty-state event index out of range idx=%lu size=%lu; requesting full resync",
+                                 static_cast<unsigned long>(point_index),
+                                 static_cast<unsigned long>(_pointCatalog.size()));
+            }
+            break;
+        }
+
+        if (_logger != nullptr) {
+            _logger->Info("PLC VM dirty-state event raw=0x%08lx offset=0x%08lx idx=%lu overflow=%u",
+                          static_cast<unsigned long>(raw),
+                          static_cast<unsigned long>(point_state_offset),
+                          static_cast<unsigned long>(point_index),
+                          static_cast<unsigned>(overflow ? 1u : 0u));
+        }
+
+        (void)_pointCatalog.notifyStateChanged(point_index);
+        sync_plclink_state_shadow_index(_pointCatalog, point_index);
+        plc_vm_dirty_event_clear(true, false);
+    }
 }
 
 void NodeNetCore::savePreferences()
@@ -1762,7 +1978,11 @@ void NodeNetCore::syncPlcRuntimeDefinitions()
 
 bool NodeNetCore::updatePointState(const PointIdentity& id, const PointState& state)
 {
-    return _pointCatalog.updateState(id, state);
+    const bool updated = _pointCatalog.updateState(id, state);
+    if (updated) {
+        sync_plclink_state_shadow_index(_pointCatalog, _pointCatalog.findIndex(id));
+    }
+    return updated;
 }
 
 bool NodeNetCore::updatePointCommandState(const PointIdentity& id, const PointCommandState& state)
@@ -1960,6 +2180,136 @@ bool NodeNetCore::buildVirtualPlcPointState(const PointDefinition& definition,
     }
 
     return true;
+}
+
+bool NodeNetCore::buildPlcLinkPointState(uint16_t point_index, PointState& state) const
+{
+    if (point_index >= _pointCatalog.size()) {
+        return false;
+    }
+
+    const PointDefinition* definitions = _pointCatalog.entries();
+    const PointState* states = _pointCatalog.states();
+    const uint32_t now_ms = millis();
+    const PointCatalog::PlcPointMeta& plc_meta = _pointCatalog.plcPointMeta(point_index);
+    if (buildVirtualPlcPointState(definitions[point_index], plc_meta, now_ms, state)) {
+        return true;
+    }
+
+    state = states[point_index];
+    return true;
+}
+
+uint8_t NodeNetCore::writePlcLinkPointState(uint16_t point_index,
+                                            uint8_t expected_value_type,
+                                            uint8_t write_flags,
+                                            uint32_t value_bits,
+                                            uint8_t* out_applied_value_type,
+                                            uint32_t* out_result_sequence)
+{
+    (void)write_flags;
+
+    if (point_index >= _pointCatalog.size()) {
+        return 0x06u;
+    }
+
+    const PointDefinition& definition = _pointCatalog.entries()[point_index];
+    if (out_applied_value_type != nullptr) {
+        *out_applied_value_type = static_cast<uint8_t>(definition.value_type);
+    }
+    if (expected_value_type != static_cast<uint8_t>(definition.value_type)) {
+        if (out_result_sequence != nullptr) {
+            *out_result_sequence = _pointCatalog.statesSequence();
+        }
+        return 0x05u;
+    }
+
+    JsonDocument value_doc;
+    switch (definition.value_type) {
+    case PointValueType::Bool:
+        value_doc.set(value_bits != 0u);
+        break;
+
+    case PointValueType::Uint16:
+        value_doc.set(static_cast<uint16_t>(value_bits));
+        break;
+
+    case PointValueType::Int16:
+        value_doc.set(static_cast<int16_t>(value_bits & 0xFFFFu));
+        break;
+
+    case PointValueType::Uint32:
+        value_doc.set(static_cast<uint32_t>(value_bits));
+        break;
+
+    case PointValueType::Int32:
+        value_doc.set(static_cast<int32_t>(value_bits));
+        break;
+
+    case PointValueType::Float: {
+        float parsed = 0.0f;
+        std::memcpy(&parsed, &value_bits, sizeof(parsed));
+        value_doc.set(parsed);
+        break;
+    }
+
+    case PointValueType::Enum:
+        value_doc.set(static_cast<int32_t>(value_bits));
+        break;
+
+    case PointValueType::String:
+    default:
+        if (out_result_sequence != nullptr) {
+            *out_result_sequence = _pointCatalog.statesSequence();
+        }
+        return 0x05u;
+    }
+
+    const bool ok = handleLocalPlcPointWrite(point_index,
+                                             definition,
+                                             value_doc.as<JsonVariantConst>());
+    if (out_result_sequence != nullptr) {
+        *out_result_sequence = _pointCatalog.statesSequence();
+    }
+    return ok ? 0x00u : 0x07u;
+}
+
+bool NodeNetCore::publishVirtualPointStateIfChanged(const PointIdentity& id)
+{
+    const size_t point_index = _pointCatalog.findIndex(id);
+    if (point_index >= _pointCatalog.size()) {
+        return false;
+    }
+
+    PointState next_state = {};
+    if (!buildVirtualPlcPointState(_pointCatalog.entries()[point_index],
+                                   _pointCatalog.plcPointMeta(point_index),
+                                   millis(),
+                                   next_state)) {
+        return false;
+    }
+
+    return updatePointState(id, next_state);
+}
+
+void NodeNetCore::publishPlcSlotRuntimeStates(uint16_t slot_id)
+{
+    char slot_feature[32] = {};
+    (void)std::snprintf(slot_feature, sizeof(slot_feature), "plc.slot%u", static_cast<unsigned>(slot_id));
+    for (const char* point_id : kPlcSlotRuntimePointIds) {
+        PointIdentity id = {};
+        make_point_identity(id, deviceId, slot_feature, point_id);
+        (void)publishVirtualPointStateIfChanged(id);
+    }
+}
+
+void NodeNetCore::publishPlcGlobalRuntimeStates()
+{
+    for (const char* point_id : kPlcGlobalRuntimePointIds) {
+        PointIdentity id = {};
+        make_point_identity(id, deviceId, "plc", point_id);
+        (void)publishVirtualPointStateIfChanged(id);
+    }
 }
 
 bool NodeNetCore::refreshMirrorProgramRuntimeMap(uint16_t slot_id, uint32_t runtime_store_epoch)
@@ -2443,6 +2793,18 @@ bool NodeNetCore::updateProperty(const JsonDocument& request)
     }
 
     const bool next_value = value.as<bool>();
+    const PointState current_state = _pointCatalog.states()[point_index];
+    const uint32_t sequence_before = _pointCatalog.statesSequence();
+    if (kEnableModbusWriteTraceLogs && _logger != nullptr) {
+        _logger->Info("UpdateProperty modbus begin point=%s idx=%u slave=%u addr=%u prev=%u prev_q=%u req=%u",
+                      propertyName,
+                      static_cast<unsigned>(point_index),
+                      static_cast<unsigned>(definition.ref.modbus.slave_address),
+                      static_cast<unsigned>(definition.ref.modbus.address),
+                      current_state.value.b ? 1u : 0u,
+                      static_cast<unsigned>(current_state.quality),
+                      next_value ? 1u : 0u);
+    }
     const bool ok = _modbus0->writeSingleCoil(definition.ref.modbus.slave_address,
                                               definition.ref.modbus.address,
                                               next_value);
@@ -2453,7 +2815,8 @@ bool NodeNetCore::updateProperty(const JsonDocument& request)
     command_state.pending = false;
 
     PointState next_state = {};
-    next_state = _pointCatalog.states()[point_index];
+    next_state = current_state;
+    bool state_update_ok = false;
 
     if (ok) {
         command_state.command_quality = PointCommandQuality::Acked;
@@ -2462,15 +2825,26 @@ bool NodeNetCore::updateProperty(const JsonDocument& request)
         next_state.quality = PointQuality::Good;
         next_state.last_update_ms = command_state.last_command_ts_ms;
         next_state.last_good_update_ms = command_state.last_command_ts_ms;
-        (void)updatePointState(definition.id, next_state);
+        state_update_ok = updatePointState(definition.id, next_state);
     } else {
         command_state.command_quality = PointCommandQuality::ProtocolError;
         next_state.quality = PointQuality::BadProtocolError;
         next_state.last_update_ms = command_state.last_command_ts_ms;
-        (void)updatePointState(definition.id, next_state);
+        state_update_ok = updatePointState(definition.id, next_state);
     }
 
     (void)updatePointCommandState(definition.id, command_state);
+    if (kEnableModbusWriteTraceLogs && _logger != nullptr) {
+        _logger->Info("UpdateProperty modbus end point=%s write_ok=%u state_update_ok=%u seq_before=%lu seq_after=%lu prev=%u next=%u next_q=%u",
+                      propertyName,
+                      ok ? 1u : 0u,
+                      state_update_ok ? 1u : 0u,
+                      static_cast<unsigned long>(sequence_before),
+                      static_cast<unsigned long>(_pointCatalog.statesSequence()),
+                      current_state.value.b ? 1u : 0u,
+                      next_state.value.b ? 1u : 0u,
+                      static_cast<unsigned>(next_state.quality));
+    }
     return ok;
 }
 
@@ -2508,12 +2882,16 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
             plc_engine_set_enabled(requested);
             ok = (plc_engine_enabled() == requested);
             if (ok) {
+                publishPlcGlobalRuntimeStates();
                 savePreferences();
             }
         } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::EngineClearFault) {
             if (requested) {
                 plc_engine_clear_fault_latch();
                 ok = plc_engine_last_fault_code() == 0u;
+                if (ok) {
+                    publishPlcGlobalRuntimeStates();
+                }
             }
         } else {
             return false;
@@ -2662,6 +3040,8 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
                 control_block->status = kPlcSlotStatusLoadedV1;
             }
             ok = true;
+            publishPlcSlotRuntimeStates(slot_id);
+            publishPlcGlobalRuntimeStates();
             savePreferences();
         }
     } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotStop) {
@@ -2671,6 +3051,8 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
                 control_block->status = kPlcSlotStatusLoadedV1;
             }
             ok = true;
+            publishPlcSlotRuntimeStates(slot_id);
+            publishPlcGlobalRuntimeStates();
             savePreferences();
         }
     } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotReset) {
@@ -2690,6 +3072,8 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
                 control_block->status = kPlcSlotStatusLoadedV1;
             }
             ok = true;
+            publishPlcSlotRuntimeStates(slot_id);
+            publishPlcGlobalRuntimeStates();
         }
     } else if (plc_meta.point_kind == PointCatalog::PlcPointKind::SlotClearFault) {
         if (requested && loaded) {
@@ -2699,6 +3083,8 @@ bool NodeNetCore::handleLocalPlcPointWrite(size_t point_index,
                 control_block->status = kPlcSlotStatusLoadedV1;
             }
             ok = true;
+            publishPlcSlotRuntimeStates(slot_id);
+            publishPlcGlobalRuntimeStates();
         }
     } else {
         return false;
@@ -3377,6 +3763,8 @@ bool NodeNetCore::handlePlcLoadRequest(const JsonDocument& request, JsonDocument
         static_cast<uintptr_t>(PlcSlotLoaderV1::slotControlAddress(slot_id)));
     response["state"] = plc_slot_state_name(*control_block, slot_id);
     response["faultCode"] = control_block->fault_code;
+    publishPlcSlotRuntimeStates(slot_id);
+    publishPlcGlobalRuntimeStates();
     return true;
 }
 
@@ -3632,6 +4020,8 @@ erase_cleanup:
         plc_engine_set_enabled(true);
     }
     _pendingPlcErase = {};
+    publishPlcSlotRuntimeStates(slot_id);
+    publishPlcGlobalRuntimeStates();
     refreshScreen();
 }
 
@@ -3939,6 +4329,9 @@ void NodeNetCore::processPendingPlcAutoLoad()
         }
         control_block->status = kPlcSlotStatusLoadedV1;
     }
+
+    publishPlcSlotRuntimeStates(slot_id);
+    publishPlcGlobalRuntimeStates();
 
     const uint32_t runtime_store_epoch_after = _plcRuntimePublisher->headerSnapshot().store_epoch;
     if (runtime_store_epoch_after != runtime_store_epoch_before) {
@@ -4791,4 +5184,5 @@ void NodeNetCore::publishBuiltinPointStates()
     state.quality = PointQuality::Good;
     (void)publish_builtin_state_if_changed(*this, id, state, now_ms);
 }
+
 
