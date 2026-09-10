@@ -53,6 +53,7 @@ class NodeNetCore
         void attachPlcRuntimePublisher(const PlcRuntimePublisherV1* publisher);
         uint16_t restorePersistedPlcSlots();
         bool hasActiveRealtimeWork() const { return _plcCore.pollTransactionActive(); }
+        void drainPlcVmStateEvents();
         bool buildPlcLinkPointState(uint16_t point_index, PointState& state) const;
         uint8_t writePlcLinkPointState(uint16_t point_index,
                            uint8_t expected_value_type,

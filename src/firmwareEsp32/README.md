@@ -24,12 +24,31 @@ This directory contains the ESP32 sidecar firmware used for:
 
 ## Current Scope
 
-The initial skeleton only brings up:
+The current branch now brings up:
 
 - boot logging on UART
 - ST7789 bring-up through a direct ESP-IDF SPI driver using the validated panel wiring and init sequence
 - a one-shot ST7789 full-screen red / green / blue test at boot
 - FPGA SPI-link initialization on the same shared SPI bus
+- HTTP web application served locally by the ESP32
+- websocket push path for boot progress, snapshot availability, and incremental PLC point updates
+- plcLink bootstrapping with `get_caps`, definitions snapshot, states snapshot, and runtime state-update handling on hardware
+
+## Current Status Snapshot
+
+- current baseline is usable enough to pause and resume later: the ESP32 app can connect to the FPGA mailbox bridge, load the PLC snapshot, keep the page stable during runtime state-only resyncs, and apply incremental point updates without replaying the whole snapshot over websocket
+- the shared SPI bus is validated with the display at `10 MHz` and the FPGA mailbox link at `1 MHz`
+- definitions are preserved across state-only runtime resyncs when `defs_generation` is unchanged
+- the web application no longer treats a runtime state resync as a cold boot reload
+- completed state snapshots no longer emit one websocket `plc_point_update` per cached point
+- MQTT publication and Home Assistant discovery are still not implemented on this baseline
+
+## Known Resume Points
+
+- continue hardware/runtime validation of plcLink under heavier PLC state churn; the recent work stabilized the ESP32 side, but more soak testing is still needed
+- the remaining protocol risk is on the Pico/FPGA producer side when the PLC VM generates many closely spaced state changes
+- if runtime resync behavior regresses, inspect `src/spi_link.cpp`, `www/app/main.js`, `src/firmware/lib/spi_mailbox/plclink_mailbox_service.cpp`, and `src/firmware/lib/plc/PointCatalog.cpp` first
+- MQTT bridge, Home Assistant discovery, and any HTTPS migration are future steps, not part of the currently validated baseline
 
 ## Display Driver
 
@@ -84,5 +103,5 @@ pio device monitor
 `GPIO33` is a good candidate for a future display `TE` input if you dedicate it to the display.
 Do not share that same wire between the FPGA reserved sideband and the display reset or tearing signal.
 
-The current bring-up build is now back on pure ESP-IDF with the FPGA link reattached on the shared SPI bus.
-The next step is to validate FPGA transactions on this baseline, then raise the FPGA-side SPI speed if the slave logic and signal integrity allow it.
+The current bring-up build is now back on pure ESP-IDF with the FPGA link reattached on the shared SPI bus, and the FPGA mailbox transaction path is working on hardware for snapshot load plus runtime updates.
+The next step is broader validation on this baseline, then raising the FPGA-side SPI speed if the slave logic and signal integrity allow it.

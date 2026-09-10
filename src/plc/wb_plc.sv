@@ -914,6 +914,8 @@ module wb_plc #(
     localparam [31:0] SHARED_POINT_STATE_LAST_GOOD_UPDATE_OFFSET = 32'd76;
     localparam [31:0] SHARED_POINT_STATE_STRIDE = 32'd80;
     localparam [31:0] SHARED_POINT_STATE_WINDOW_BYTES = SHARED_POINT_STATE_STRIDE * EDGE_STATE_BITS;
+    localparam [12:0] SHARED_POINT_STATE_BASE_Q16 = SHARED_POINT_STATE_BASE[16:4];
+    localparam [12:0] SHARED_POINT_STATE_OFFSET_Q16_MAX = SHARED_POINT_STATE_WINDOW_BYTES[16:4];
     localparam [31:0] TIMER_FLAG_RUNNING = 32'h0000_0001;
     localparam [31:0] TIMER_FLAG_DONE = 32'h0000_0002;
     localparam [31:0] TIMER_FLAG_INPUT_HIGH = 32'h0000_0004;
@@ -1049,12 +1051,19 @@ module wb_plc #(
     reg [31:0] current_immediate_u32;
     reg [7:0]  current_opcode;
     reg [15:0] current_runtime_index;
+    reg [31:0] timer_entry_base_addr;
     reg [31:0] runtime_value_addr;
     reg [31:0] runtime_status_addr;
     reg [31:0] slot_scratch_base;
     reg [31:0] value_word0;
     reg [31:0] value_word1;
     reg [31:0] value_word2;
+    reg        timer_status_running;
+    reg        timer_status_done;
+    reg        timer_status_input_high;
+    reg        timer_status_elapsed_lt_preset;
+    reg        timer_status_elapsed_ge_immediate;
+    reg        timer_status_immediate_is_zero;
     reg [31:0] fault_code_pending;
     reg [31:0] fault_info_pending;
     reg        cached_word_valid;
@@ -1066,6 +1075,9 @@ module wb_plc #(
     reg        fdiv_result_valid;
     reg [4:0]  fdiv_result_slot;
     reg [31:0] fdiv_result_value_latched;
+    reg        dirty_event_valid;
+    reg        dirty_event_overflow;
+    reg [12:0] dirty_event_offset_q16;
     reg [1:0]  slot_wait_state [0:SLOT_COUNT-1];
     reg [31:0] slot_wait_pc [0:SLOT_COUNT-1];
     reg [31:0] slot_wait_instruction_count [0:SLOT_COUNT-1];
@@ -1077,6 +1089,8 @@ module wb_plc #(
     wire wb_hit = wb_cyc_i && wb_stb_i && (wb_adr_i[31:5] == ADDR[31:5]);
     wire busy = (state != ST_IDLE);
     wire clear_fault_request = wb_hit && wb_we_i && (wb_adr_i[4:2] == 3'd0) && wb_sel_i[0] && wb_dat_i[1];
+    wire clear_dirty_event_valid_request = wb_hit && wb_we_i && (wb_adr_i[4:2] == 3'd5) && wb_sel_i[0] && wb_dat_i[0];
+    wire clear_dirty_event_overflow_request = wb_hit && wb_we_i && (wb_adr_i[4:2] == 3'd5) && wb_sel_i[0] && wb_dat_i[1];
     wire [31:0] stack_top_value32 = (stack_depth >= 3'd1) ? stack0_value : 32'd0;
     wire [31:0] stack_next_value32 = (stack_depth >= 3'd2) ? stack1_value : 32'd0;
     wire [31:0] stack_third_value32 = (stack_depth >= 3'd3) ? stack2_value : 32'd0;
@@ -1776,6 +1790,20 @@ module wb_plc #(
         end
     endtask
 
+    task automatic capture_dirty_point_state_offset_q16;
+        input [12:0] point_state_offset_q16;
+        begin
+            if (point_state_offset_q16 > SHARED_POINT_STATE_OFFSET_Q16_MAX) begin
+                dirty_event_overflow <= 1'b1;
+            end else if (!dirty_event_valid) begin
+                dirty_event_valid <= 1'b1;
+                dirty_event_offset_q16 <= point_state_offset_q16;
+            end else if (dirty_event_offset_q16 != point_state_offset_q16) begin
+                dirty_event_overflow <= 1'b1;
+            end
+        end
+    endtask
+
     always @(posedge clk) begin
         wb_ack_o <= wb_hit;
         if (wb_hit) begin
@@ -1785,6 +1813,7 @@ module wb_plc #(
                 3'd2: wb_dat_o <= last_fault_code;
                 3'd3: wb_dat_o <= 32'h3156_4D31;
                 3'd4: wb_dat_o <= scan_interval_cycles;
+                3'd5: wb_dat_o <= {17'd0, dirty_event_offset_q16, dirty_event_overflow, dirty_event_valid};
                 default: wb_dat_o <= 32'd0;
             endcase
         end
@@ -1850,12 +1879,19 @@ module wb_plc #(
             current_immediate_u32 <= 32'd0;
             current_opcode <= 8'd0;
             current_runtime_index <= 16'd0;
+            timer_entry_base_addr <= 32'd0;
             runtime_value_addr <= 32'd0;
             runtime_status_addr <= 32'd0;
             slot_scratch_base <= 32'd0;
             value_word0 <= 32'd0;
             value_word1 <= 32'd0;
             value_word2 <= 32'd0;
+            timer_status_running <= 1'b0;
+            timer_status_done <= 1'b0;
+            timer_status_input_high <= 1'b0;
+            timer_status_elapsed_lt_preset <= 1'b0;
+            timer_status_elapsed_ge_immediate <= 1'b0;
+            timer_status_immediate_is_zero <= 1'b0;
             fault_code_pending <= 32'd0;
             fault_info_pending <= 32'd0;
             cached_word_valid <= 1'b0;
@@ -1867,6 +1903,9 @@ module wb_plc #(
             fdiv_result_valid <= 1'b0;
             fdiv_result_slot <= 5'd0;
             fdiv_result_value_latched <= 32'd0;
+            dirty_event_valid <= 1'b0;
+            dirty_event_overflow <= 1'b0;
+            dirty_event_offset_q16 <= 13'd0;
             scan_countdown <= DEFAULT_SCAN_INTERVAL_CYCLES;
             scan_counter <= 32'd0;
             last_fault_code <= 32'd0;
@@ -1888,6 +1927,12 @@ module wb_plc #(
                 fdiv_result_valid <= 1'b1;
                 fdiv_result_slot <= fdiv_owner_slot;
                 fdiv_result_value_latched <= fdiv_result_value;
+            end
+            if (clear_dirty_event_valid_request) begin
+                dirty_event_valid <= 1'b0;
+            end
+            if (clear_dirty_event_overflow_request) begin
+                dirty_event_overflow <= 1'b0;
             end
             if (clear_fault_request) begin
                 last_fault_code <= 32'd0;
@@ -2800,6 +2845,7 @@ module wb_plc #(
                     end else if (stack_top_type != STACK_TYPE_BOOL) begin
                         begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                     end else begin
+                        timer_entry_base_addr <= timer_entry_addr(cb_timer_base, current_runtime_index);
                         pending_stack_value <= stack_top_value32;
                         stack_drop1();
                         state <= ST_TIMER_READ_WORD0;
@@ -2817,7 +2863,7 @@ module wb_plc #(
                                  stack_depth >= STACK_DEPTH_MAX) begin
                         begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                     end else if (!m_cyc_o) begin
-                        start_read(timer_entry_addr(cb_timer_base, current_runtime_index));
+                        start_read(timer_entry_base_addr);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         value_word0 <= m_dat_i;
@@ -2829,7 +2875,7 @@ module wb_plc #(
                     if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
                         begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
                     end else if (!m_cyc_o) begin
-                        start_read(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd4);
+                        start_read(timer_entry_base_addr + 32'd4);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         value_word1 <= m_dat_i;
@@ -2841,10 +2887,18 @@ module wb_plc #(
                     if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
                         begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
                     end else if (!m_cyc_o) begin
-                        start_read(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8);
+                        start_read(timer_entry_base_addr + 32'd8);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         value_word2 <= m_dat_i;
+                        timer_status_running <= timer_running(m_dat_i);
+                        timer_status_done <= timer_done_stored(m_dat_i);
+                        timer_status_input_high <= timer_input_high(m_dat_i);
+                        timer_status_elapsed_lt_preset <=
+                            (timer_elapsed_value(value_word0, value_word1, m_dat_i, ms_counter) < value_word1);
+                        timer_status_elapsed_ge_immediate <=
+                            ((ms_counter - value_word0) >= current_immediate_u32);
+                        timer_status_immediate_is_zero <= (current_immediate_u32 == 32'd0);
                         if (current_opcode == OPCODE_TON_DONE ||
                             current_opcode == OPCODE_TOF_DONE ||
                             current_opcode == OPCODE_TP_DONE) begin
@@ -2874,29 +2928,28 @@ module wb_plc #(
                         if (current_opcode == OPCODE_TON_RESET ||
                             current_opcode == OPCODE_TOF_RESET ||
                             current_opcode == OPCODE_TP_RESET) begin
-                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index), 32'd0);
+                            start_write(timer_entry_base_addr, 32'd0);
                         end else if (current_opcode == OPCODE_TON_START) begin
-                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index),
+                            start_write(timer_entry_base_addr,
                                         !pending_stack_value[0]
                                             ? 32'd0
-                                            : (!timer_running(value_word2) && !timer_done_stored(value_word2))
+                                            : (!timer_status_running && !timer_status_done)
                                                 ? ms_counter
                                                 : value_word0);
                         end else if (current_opcode == OPCODE_TOF_START) begin
-                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index),
+                            start_write(timer_entry_base_addr,
                                         pending_stack_value[0]
                                             ? 32'd0
-                                            : timer_input_high(value_word2)
+                                            : timer_status_input_high
                                                 ? ms_counter
-                                                : timer_running(value_word2)
+                                                : timer_status_running
                                                     ? value_word0
                                                     : 32'd0);
                         end else begin
-                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index),
-                                        (timer_running(value_word2) &&
-                                         (timer_elapsed_value(value_word0, value_word1, value_word2, ms_counter) < value_word1))
+                            start_write(timer_entry_base_addr,
+                                        (timer_status_running && timer_status_elapsed_lt_preset)
                                             ? value_word0
-                                            : (pending_stack_value[0] && !timer_input_high(value_word2))
+                                            : (pending_stack_value[0] && !timer_status_input_high)
                                                 ? ms_counter
                                                 : 32'd0);
                         end
@@ -2910,7 +2963,7 @@ module wb_plc #(
                     if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
                         begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
                     end else if (!m_cyc_o) begin
-                        start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd4,
+                        start_write(timer_entry_base_addr + 32'd4,
                                     (current_opcode == OPCODE_TON_RESET ||
                                      current_opcode == OPCODE_TOF_RESET ||
                                      current_opcode == OPCODE_TP_RESET ||
@@ -2931,40 +2984,47 @@ module wb_plc #(
                             current_opcode == OPCODE_TOF_RESET ||
                             current_opcode == OPCODE_TP_RESET ||
                             (current_opcode == OPCODE_TON_START && !pending_stack_value[0])) begin
-                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8, 32'd0);
+                            start_write(timer_entry_base_addr + 32'd8, 32'd0);
                         end else if (current_opcode == OPCODE_TON_START) begin
-                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8,
+                            start_write(timer_entry_base_addr + 32'd8,
                                         timer_pack_flags(TIMER_MODE_TON,
                                                          1'b1,
                                                          1'b1,
-                                                         timer_done_stored(value_word2) ||
-                                                         (current_immediate_u32 == 32'd0) ||
-                                                         ((!timer_running(value_word2) && !timer_done_stored(value_word2))
-                                                             ? 1'b0
-                                                             : ((ms_counter - value_word0) >= current_immediate_u32))));
+                                                         timer_status_done ||
+                                                         timer_status_immediate_is_zero ||
+                                                         (timer_status_running && timer_status_elapsed_ge_immediate)));
                         end else if (current_opcode == OPCODE_TOF_START) begin
-                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8,
-                                        pending_stack_value[0]
-                                            ? timer_pack_flags(TIMER_MODE_TOF, 1'b1, 1'b0, 1'b1)
-                                            : timer_input_high(value_word2)
-                                                ? ((current_immediate_u32 == 32'd0)
-                                                    ? timer_pack_flags(TIMER_MODE_TOF, 1'b0, 1'b0, 1'b0)
-                                                    : timer_pack_flags(TIMER_MODE_TOF, 1'b0, 1'b1, 1'b1))
-                                                : (timer_running(value_word2) && ((ms_counter - value_word0) < value_word1))
-                                                    ? timer_pack_flags(TIMER_MODE_TOF, 1'b0, 1'b1, 1'b1)
-                                                    : timer_pack_flags(TIMER_MODE_TOF, 1'b0, 1'b0, 1'b0));
+                            if (pending_stack_value[0]) begin
+                                start_write(timer_entry_base_addr + 32'd8,
+                                            timer_pack_flags(TIMER_MODE_TOF, 1'b1, 1'b0, 1'b1));
+                            end else if (timer_status_input_high) begin
+                                start_write(timer_entry_base_addr + 32'd8,
+                                            timer_status_immediate_is_zero
+                                                ? timer_pack_flags(TIMER_MODE_TOF, 1'b0, 1'b0, 1'b0)
+                                                : timer_pack_flags(TIMER_MODE_TOF, 1'b0, 1'b1, 1'b1));
+                            end else if (timer_status_running && timer_status_elapsed_lt_preset) begin
+                                start_write(timer_entry_base_addr + 32'd8,
+                                            timer_pack_flags(TIMER_MODE_TOF, 1'b0, 1'b1, 1'b1));
+                            end else begin
+                                start_write(timer_entry_base_addr + 32'd8,
+                                            timer_pack_flags(TIMER_MODE_TOF, 1'b0, 1'b0, 1'b0));
+                            end
                         end else begin
-                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8,
-                                        (timer_running(value_word2) &&
-                                         (timer_elapsed_value(value_word0, value_word1, value_word2, ms_counter) < value_word1))
-                                            ? timer_pack_flags(TIMER_MODE_TP, pending_stack_value[0], 1'b1, 1'b1)
-                                            : (pending_stack_value[0] && !timer_input_high(value_word2))
-                                                ? ((current_immediate_u32 == 32'd0)
-                                                    ? timer_pack_flags(TIMER_MODE_TP, 1'b1, 1'b0, 1'b1)
-                                                    : timer_pack_flags(TIMER_MODE_TP, 1'b1, 1'b1, 1'b1))
-                                                : pending_stack_value[0]
-                                                    ? timer_pack_flags(TIMER_MODE_TP, 1'b1, 1'b0, 1'b0)
-                                                    : timer_pack_flags(TIMER_MODE_TP, 1'b0, 1'b0, 1'b0));
+                            if (timer_status_running && timer_status_elapsed_lt_preset) begin
+                                start_write(timer_entry_base_addr + 32'd8,
+                                            timer_pack_flags(TIMER_MODE_TP, pending_stack_value[0], 1'b1, 1'b1));
+                            end else if (pending_stack_value[0] && !timer_status_input_high) begin
+                                start_write(timer_entry_base_addr + 32'd8,
+                                            timer_status_immediate_is_zero
+                                                ? timer_pack_flags(TIMER_MODE_TP, 1'b1, 1'b0, 1'b1)
+                                                : timer_pack_flags(TIMER_MODE_TP, 1'b1, 1'b1, 1'b1));
+                            end else if (pending_stack_value[0]) begin
+                                start_write(timer_entry_base_addr + 32'd8,
+                                            timer_pack_flags(TIMER_MODE_TP, 1'b1, 1'b0, 1'b0));
+                            end else begin
+                                start_write(timer_entry_base_addr + 32'd8,
+                                            timer_pack_flags(TIMER_MODE_TP, 1'b0, 1'b0, 1'b0));
+                            end
                         end
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
@@ -2980,6 +3040,7 @@ module wb_plc #(
                     end else if (stack_top_type != STACK_TYPE_BOOL) begin
                         begin_fault(FAULT_TYPE_MISMATCH, current_runtime_index);
                     end else begin
+                        timer_entry_base_addr <= timer_entry_addr(cb_timer_base, current_runtime_index);
                         pending_stack_value <= stack_top_value32;
                         stack_drop1();
                         state <= ST_COUNTER_READ_WORD0;
@@ -2996,7 +3057,7 @@ module wb_plc #(
                                  stack_depth >= STACK_DEPTH_MAX) begin
                         begin_fault(FAULT_STACK_OVERFLOW, stack_depth);
                     end else if (!m_cyc_o) begin
-                        start_read(timer_entry_addr(cb_timer_base, current_runtime_index));
+                        start_read(timer_entry_base_addr);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         value_word0 <= m_dat_i;
@@ -3008,7 +3069,7 @@ module wb_plc #(
                     if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
                         begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
                     end else if (!m_cyc_o) begin
-                        start_read(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd4);
+                        start_read(timer_entry_base_addr + 32'd4);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         value_word1 <= m_dat_i;
@@ -3020,7 +3081,7 @@ module wb_plc #(
                     if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
                         begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
                     end else if (!m_cyc_o) begin
-                        start_read(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8);
+                        start_read(timer_entry_base_addr + 32'd8);
                     end else if (m_ack_i) begin
                         finish_bus_cycle();
                         value_word2 <= m_dat_i;
@@ -3042,15 +3103,15 @@ module wb_plc #(
                         begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
                     end else if (!m_cyc_o) begin
                         if (current_opcode == OPCODE_CTU_RESET || current_opcode == OPCODE_CTD_RESET) begin
-                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index),
+                            start_write(timer_entry_base_addr,
                                         sign_extend_i16(counter_reset_value(current_opcode, value_word1[15:0])));
                         end else if (current_opcode == OPCODE_CTU_COUNT) begin
-                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index),
+                            start_write(timer_entry_base_addr,
                                         sign_extend_i16(counter_up_next_value(value_word0[15:0],
                                                                              value_word2,
                                                                              pending_stack_value[0])));
                         end else begin
-                            start_write(timer_entry_addr(cb_timer_base, current_runtime_index),
+                            start_write(timer_entry_base_addr,
                                         sign_extend_i16(counter_down_next_value(value_word0[15:0],
                                                                                current_immediate_u32[15:0],
                                                                                value_word2,
@@ -3066,7 +3127,7 @@ module wb_plc #(
                     if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
                         begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
                     end else if (!m_cyc_o) begin
-                        start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd4,
+                        start_write(timer_entry_base_addr + 32'd4,
                                     (current_opcode == OPCODE_CTU_COUNT || current_opcode == OPCODE_CTD_COUNT)
                                         ? sign_extend_i16(current_immediate_u32[15:0])
                                         : value_word1);
@@ -3080,7 +3141,7 @@ module wb_plc #(
                     if (cb_timer_base == 32'd0 || current_runtime_index >= cb_timer_count) begin
                         begin_fault(FAULT_POINT_INDEX_OUT_OF_RANGE, current_runtime_index);
                     end else if (!m_cyc_o) begin
-                        start_write(timer_entry_addr(cb_timer_base, current_runtime_index) + 32'd8,
+                        start_write(timer_entry_base_addr + 32'd8,
                                     counter_pack_flags(counter_mode_from_opcode(current_opcode),
                                                        (current_opcode == OPCODE_CTU_COUNT || current_opcode == OPCODE_CTD_COUNT)
                                                            ? pending_stack_value[0]
@@ -3142,6 +3203,7 @@ module wb_plc #(
                 end
 
                 ST_STORE_BOOL_WRITE_STATUS3: begin
+                    capture_dirty_point_state_offset_q16(runtime_value_addr[16:4] - SHARED_POINT_STATE_BASE_Q16);
                     state <= ST_FETCH_OPCODE;
                 end
 
@@ -3252,6 +3314,7 @@ module wb_plc #(
                 end
 
                 ST_INT16_WRITE_STATUS3: begin
+                    capture_dirty_point_state_offset_q16(runtime_value_addr[16:4] - SHARED_POINT_STATE_BASE_Q16);
                     state <= ST_FETCH_OPCODE;
                 end
 

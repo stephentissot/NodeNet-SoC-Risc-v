@@ -66,6 +66,8 @@ uint32_t g_frame_count = 0;
 uint16_t g_last_status = 0xFFFFu;
 uint32_t g_runtime_status5_ready_count = 0u;
 uint32_t g_runtime_suspicious_mailbox_count = 0u;
+uint32_t g_last_stale_zero_record_sequence = 0u;
+uint32_t g_stale_zero_record_repeat_count = 0u;
 bool g_startup_irq_inconsistent_logged = false;
 bool g_caps_request_sent = false;
 bool g_caps_response_seen = false;
@@ -74,6 +76,8 @@ bool g_defs_response_seen = false;
 bool g_states_request_sent = false;
 bool g_states_response_seen = false;
 bool g_resync_pending = false;
+bool g_preserve_defs_on_resync = false;
+bool g_runtime_resync_view_active = false;
 uint32_t g_defs_generation = 0u;
 uint32_t g_defs_total_bytes = 0u;
 uint32_t g_defs_loaded_bytes = 0u;
@@ -85,6 +89,11 @@ uint16_t g_max_fragment_payload = 0u;
 uint16_t g_snapshot_chunk_count = 0u;
 uint16_t g_snapshot_record_count = 0u;
 uint32_t g_states_sequence = 0u;
+uint32_t g_published_snapshot_sequence = 0u;
+uint16_t g_published_snapshot_point_count = 0u;
+uint16_t g_published_snapshot_loaded_points = 0u;
+uint16_t g_published_snapshot_max_payload = 0u;
+bool g_have_published_snapshot = false;
 bool g_refresh_requested = false;
 bool g_write_state_request_sent = false;
 PendingWriteStateRequest g_pending_write_state = {};
@@ -166,29 +175,47 @@ void reset_defs_cache()
 
 void begin_full_resync(uint32_t new_defs_generation)
 {
+    const bool preserve_defs =
+        (new_defs_generation != 0u) &&
+        (new_defs_generation == g_defs_generation) &&
+        g_defs_response_seen;
+    const bool preserve_runtime_view = preserve_defs && g_states_response_seen && g_have_published_snapshot;
+
     g_resync_pending = true;
+    g_preserve_defs_on_resync = preserve_defs;
+    g_runtime_resync_view_active = preserve_runtime_view;
     g_caps_request_sent = false;
     g_caps_response_seen = false;
     g_caps_request_tick = 0u;
     g_defs_request_sent = false;
-    g_defs_response_seen = false;
+    g_defs_response_seen = preserve_defs;
     g_states_request_sent = false;
     g_states_response_seen = false;
     g_refresh_requested = false;
-    g_point_count = 0u;
-    g_max_fragment_payload = 0u;
+    if (!preserve_defs) {
+        g_point_count = 0u;
+        g_max_fragment_payload = 0u;
+    }
     g_defs_generation = new_defs_generation;
     g_states_sequence = 0u;
-    g_defs_total_bytes = 0u;
-    g_defs_loaded_bytes = 0u;
-    g_next_defs_offset = 0u;
+    if (!preserve_defs) {
+        g_defs_total_bytes = 0u;
+        g_defs_loaded_bytes = 0u;
+        g_next_defs_offset = 0u;
+    }
     g_next_states_start_index = 0u;
     g_snapshot_chunk_count = 0u;
     g_snapshot_record_count = 0u;
+    g_last_stale_zero_record_sequence = 0u;
+    g_stale_zero_record_repeat_count = 0u;
     g_write_state_request_sent = false;
     g_pending_write_state = {};
-    reset_defs_cache();
-    reset_state_cache(0u);
+    if (!preserve_defs) {
+        reset_defs_cache();
+    }
+    if (!preserve_runtime_view) {
+        reset_state_cache(0u);
+    }
 }
 
 void note_caps_request_sent()
@@ -360,7 +387,6 @@ void store_snapshot_chunk(const plclink::StatesSnapshotChunkPrefix& prefix, cons
         const size_t target_index = static_cast<size_t>(cached.record.point_index);
         if (target_index < g_state_records.size()) {
             g_state_records[target_index] = cached;
-            enqueue_pending_point_update_locked(cached.record.point_index, prefix.states_sequence_base);
         }
     }
 
@@ -487,6 +513,45 @@ esp_err_t process_state_update_frame(const uint8_t* payload,
         return ESP_OK;
     }
 
+    if (prefix.update_count == 0u) {
+        if (!g_defs_response_seen || !g_states_response_seen) {
+            ESP_LOGW(kLogTag,
+                     "Ignored plcLink zero-record state update%s during snapshot bootstrap seq=%lu",
+                     context,
+                     static_cast<unsigned long>(prefix.states_sequence));
+            return ESP_OK;
+        }
+        if (prefix.states_sequence <= g_states_sequence) {
+            if (g_last_stale_zero_record_sequence != prefix.states_sequence) {
+                g_last_stale_zero_record_sequence = prefix.states_sequence;
+                g_stale_zero_record_repeat_count = 1u;
+                ESP_LOGW(kLogTag,
+                         "Ignored stale plcLink zero-record state update%s local_seq=%lu remote_seq=%lu",
+                         context,
+                         static_cast<unsigned long>(g_states_sequence),
+                         static_cast<unsigned long>(prefix.states_sequence));
+            } else {
+                g_stale_zero_record_repeat_count += 1u;
+                if ((g_stale_zero_record_repeat_count % 64u) == 0u) {
+                    ESP_LOGW(kLogTag,
+                             "Ignored repeated stale plcLink zero-record state update%s seq=%lu repeats=%lu",
+                             context,
+                             static_cast<unsigned long>(prefix.states_sequence),
+                             static_cast<unsigned long>(g_stale_zero_record_repeat_count));
+                }
+            }
+            return ESP_OK;
+        }
+        ESP_LOGW(kLogTag,
+                 "RX plcLink zero-record state update%s seq=%lu; requesting full resync",
+                 context,
+                 static_cast<unsigned long>(prefix.states_sequence));
+        begin_full_resync(header.generation);
+        return ESP_OK;
+    }
+
+    const uint32_t previous_sequence = g_states_sequence;
+
     ++g_frame_count;
     store_update_chunk(prefix, chunk_bytes, expected_records_payload);
     plclink::StateRecordV1 first_record = {};
@@ -503,6 +568,22 @@ esp_err_t process_state_update_frame(const uint8_t* payload,
                  static_cast<unsigned>(first_record.value_type),
                  context);
     }
+
+    if (g_caps_response_seen &&
+        previous_sequence != 0u &&
+        prefix.states_sequence > previous_sequence) {
+        const uint32_t sequence_delta = prefix.states_sequence - previous_sequence;
+        const uint32_t expected_delta = prefix.update_count == 0u ? 1u : static_cast<uint32_t>(prefix.update_count);
+        if (sequence_delta > expected_delta) {
+            ESP_LOGW(kLogTag,
+                     "plcLink state sequence gap local=%lu remote=%lu updates=%u; requesting full resync",
+                     static_cast<unsigned long>(previous_sequence),
+                     static_cast<unsigned long>(prefix.states_sequence),
+                     static_cast<unsigned>(prefix.update_count));
+            begin_full_resync(g_defs_generation);
+        }
+    }
+
     return ESP_OK;
 }
 
@@ -662,6 +743,26 @@ esp_err_t recover_startup_mailbox(uint16_t status, int irq_level)
                      static_cast<unsigned>(status));
             g_startup_irq_inconsistent_logged = true;
         }
+        return ESP_OK;
+    }
+
+    if (status_bit(status, 5) != 0u) {
+        uint8_t payload[kMaxMailboxPayload + 1] = {};
+        uint16_t payload_len = 0u;
+        ESP_LOGW(kLogTag,
+                 "Draining stale startup mailbox response status=0x%04x irq=%d rx_ready=%u tx_loaded=%u tx_ready_for_esp32=%u",
+                 static_cast<unsigned>(status),
+                 irq_level,
+                 static_cast<unsigned>(status_bit(status, 0)),
+                 static_cast<unsigned>(status_bit(status, 4)),
+                 static_cast<unsigned>(status_bit(status, 5)));
+        ESP_RETURN_ON_ERROR(read_response(payload, kMaxMailboxPayload, &payload_len),
+                            kLogTag,
+                            "startup stale read_response failed");
+        ESP_RETURN_ON_ERROR(finalize_response_read("startup stale"),
+                            kLogTag,
+                            "startup stale finalize failed");
+        begin_full_resync(0u);
         return ESP_OK;
     }
 
@@ -847,8 +948,10 @@ esp_err_t send_states_snapshot_request(uint16_t start_index)
     g_states_request_sent = true;
     if (start_index == 0u) {
         g_snapshot_chunk_count = 0u;
-        g_snapshot_record_count = 0u;
-        reset_state_cache(g_point_count);
+        if (!g_runtime_resync_view_active) {
+            g_snapshot_record_count = 0u;
+            reset_state_cache(g_point_count);
+        }
         ESP_LOGI(kLogTag,
                  "TX plcLink states snapshot start len=%u request_id=%u max_records=%u point_count=%u max_payload=%u",
                  static_cast<unsigned>(sizeof(request_buffer)),
@@ -1012,7 +1115,7 @@ esp_err_t poll()
     }
     g_last_status = status;
 
-    if (!g_caps_request_sent && !g_caps_response_seen) {
+    if (!g_resync_pending && !g_caps_request_sent && !g_caps_response_seen) {
         ESP_RETURN_ON_ERROR(recover_startup_mailbox(status, irq_level),
                             kLogTag,
                             "startup mailbox recovery failed");
@@ -1047,27 +1150,6 @@ esp_err_t poll()
                  static_cast<unsigned>(header.request_id),
                  static_cast<unsigned long>(g_caps_request_attempt_count));
         return ESP_OK;
-    }
-
-    if (g_caps_request_sent && !g_caps_response_seen) {
-        const TickType_t now = xTaskGetTickCount();
-        if ((now - g_caps_request_tick) >= kCapsResponseTimeoutTicks) {
-            ESP_LOGW(kLogTag,
-                     "Timeout waiting for plcLink caps response attempt=%lu status=0x%04x irq=%d rx_ready=%u tx_loaded=%u tx_ready_for_esp32=%u; restarting link sync",
-                     static_cast<unsigned long>(g_caps_request_attempt_count),
-                     static_cast<unsigned>(status),
-                     irq_level,
-                     static_cast<unsigned>(status_bit(status, 0)),
-                     static_cast<unsigned>(status_bit(status, 4)),
-                     static_cast<unsigned>(status_bit(status, 5)));
-            if ((status_bit(status, 0) != 0u) || (status_bit(status, 4) != 0u) || (status_bit(status, 6) != 0u)) {
-                ESP_RETURN_ON_ERROR(write_control(kControlResetMailbox),
-                                    kLogTag,
-                                    "caps timeout mailbox reset failed");
-            }
-            begin_full_resync(0u);
-            return ESP_OK;
-        }
     }
 
     if (g_write_state_request_sent && (status_bit(status, 5) != 0u)) {
@@ -1129,14 +1211,6 @@ esp_err_t poll()
                      static_cast<unsigned>(status),
                      irq_level);
         }
-        return handle_unsolicited_response();
-    }
-
-    if (g_caps_response_seen && !g_defs_request_sent && !g_defs_response_seen && (status_bit(status, 5) != 0u)) {
-        return handle_unsolicited_response();
-    }
-
-    if (g_defs_response_seen && !g_states_request_sent && !g_states_response_seen && (status_bit(status, 5) != 0u)) {
         return handle_unsolicited_response();
     }
 
@@ -1249,16 +1323,25 @@ esp_err_t poll()
             g_caps_request_tick = 0u;
             plclink::CapsResponsePayload caps = {};
             std::memcpy(&caps, &payload[plclink::kHeaderSize], sizeof(caps));
+            const bool preserve_defs =
+                g_preserve_defs_on_resync &&
+                g_defs_response_seen &&
+                (caps.defs_generation == g_defs_generation);
             g_point_count = caps.point_count;
             g_max_fragment_payload = caps.max_fragment_payload;
             g_defs_generation = caps.defs_generation;
             g_states_sequence = caps.states_sequence;
             g_defs_request_sent = false;
-            g_defs_response_seen = false;
-            g_next_defs_offset = 0u;
+            g_defs_response_seen = preserve_defs;
+            g_next_defs_offset = preserve_defs ? g_next_defs_offset : 0u;
             g_resync_pending = false;
-            reset_state_cache(g_point_count);
-            reset_defs_cache();
+            g_preserve_defs_on_resync = false;
+            if (!g_runtime_resync_view_active) {
+                reset_state_cache(g_point_count);
+            }
+            if (!preserve_defs) {
+                reset_defs_cache();
+            }
             ESP_LOGI(kLogTag,
                      "RX plcLink caps #%lu protocol=%u caps=0x%04x max_payload=%u point_count=%u defs_generation=%lu states_sequence=%lu",
                      static_cast<unsigned long>(g_frame_count),
@@ -1332,8 +1415,33 @@ esp_err_t poll()
         return ESP_OK;
     }
 
+    if (g_caps_request_sent && !g_caps_response_seen) {
+        const TickType_t now = xTaskGetTickCount();
+        if ((now - g_caps_request_tick) >= kCapsResponseTimeoutTicks) {
+            ESP_LOGW(kLogTag,
+                     "Timeout waiting for plcLink caps response attempt=%lu status=0x%04x irq=%d rx_ready=%u tx_loaded=%u tx_ready_for_esp32=%u; restarting link sync",
+                     static_cast<unsigned long>(g_caps_request_attempt_count),
+                     static_cast<unsigned>(status),
+                     irq_level,
+                     static_cast<unsigned>(status_bit(status, 0)),
+                     static_cast<unsigned>(status_bit(status, 4)),
+                     static_cast<unsigned>(status_bit(status, 5)));
+            if ((status_bit(status, 0) != 0u) || (status_bit(status, 4) != 0u) || (status_bit(status, 6) != 0u)) {
+                ESP_RETURN_ON_ERROR(write_control(kControlResetMailbox),
+                                    kLogTag,
+                                    "caps timeout mailbox reset failed");
+            }
+            begin_full_resync(0u);
+            return ESP_OK;
+        }
+    }
+
     if (g_caps_response_seen && !g_defs_request_sent && !g_defs_response_seen && can_send_request(status)) {
         return send_defs_snapshot_request(g_next_defs_offset);
+    }
+
+    if (g_caps_response_seen && !g_defs_request_sent && !g_defs_response_seen && (status_bit(status, 5) != 0u)) {
+        return handle_unsolicited_response();
     }
 
     if (g_defs_request_sent && !g_defs_response_seen && (status_bit(status, 5) != 0u)) {
@@ -1346,7 +1454,7 @@ esp_err_t poll()
                     kLogTag,
                     "finalize defs response failed");
 
-        if (payload_len < (plclink::kHeaderSize + sizeof(plclink::DefsSnapshotChunkPrefix))) {
+        if (payload_len < plclink::kHeaderSize) {
             ESP_LOGE(kLogTag, "plcLink defs response too short len=%u", static_cast<unsigned>(payload_len));
             return ESP_ERR_INVALID_RESPONSE;
         }
@@ -1357,8 +1465,11 @@ esp_err_t poll()
             return ESP_ERR_INVALID_RESPONSE;
         }
         if (header.message_type == plclink::kMsgStatesUpdatesRes) {
-            g_defs_request_sent = false;
             return process_state_update_frame(payload, payload_len, " while waiting for defs snapshot");
+        }
+        if (payload_len < (plclink::kHeaderSize + sizeof(plclink::DefsSnapshotChunkPrefix))) {
+            ESP_LOGE(kLogTag, "plcLink defs response too short len=%u", static_cast<unsigned>(payload_len));
+            return ESP_ERR_INVALID_RESPONSE;
         }
         if (header.message_type != plclink::kMsgDefsSnapshotRes) {
             ESP_LOGW(kLogTag,
@@ -1398,6 +1509,10 @@ esp_err_t poll()
         return send_states_snapshot_request(g_next_states_start_index);
     }
 
+    if (g_defs_response_seen && !g_states_request_sent && !g_states_response_seen && (status_bit(status, 5) != 0u)) {
+        return handle_unsolicited_response();
+    }
+
     if (g_states_request_sent && !g_states_response_seen && (status_bit(status, 5) != 0u)) {
         uint8_t payload[kMaxMailboxPayload + 1] = {};
         uint16_t payload_len = 0;
@@ -1408,7 +1523,7 @@ esp_err_t poll()
                     kLogTag,
                     "finalize states response failed");
 
-        if (payload_len < (plclink::kHeaderSize + sizeof(plclink::StatesSnapshotChunkPrefix))) {
+        if (payload_len < plclink::kHeaderSize) {
             ESP_LOGE(kLogTag, "plcLink states response too short len=%u", static_cast<unsigned>(payload_len));
             return ESP_ERR_INVALID_RESPONSE;
         }
@@ -1419,8 +1534,11 @@ esp_err_t poll()
             return ESP_ERR_INVALID_RESPONSE;
         }
         if (header.message_type == plclink::kMsgStatesUpdatesRes) {
-            g_states_request_sent = false;
             return process_state_update_frame(payload, payload_len, " while waiting for states snapshot");
+        }
+        if (payload_len < (plclink::kHeaderSize + sizeof(plclink::StatesSnapshotChunkPrefix))) {
+            ESP_LOGE(kLogTag, "plcLink states response too short len=%u", static_cast<unsigned>(payload_len));
+            return ESP_ERR_INVALID_RESPONSE;
         }
         if (header.message_type != plclink::kMsgStatesSnapshotRes) {
             ESP_LOGW(kLogTag,
@@ -1457,7 +1575,9 @@ esp_err_t poll()
 
         ++g_frame_count;
         ++g_snapshot_chunk_count;
-        g_snapshot_record_count = static_cast<uint16_t>(g_snapshot_record_count + prefix.returned_record_count);
+        if (!g_runtime_resync_view_active) {
+            g_snapshot_record_count = static_cast<uint16_t>(g_snapshot_record_count + prefix.returned_record_count);
+        }
         store_snapshot_chunk(prefix, chunk_bytes, expected_records_payload);
 
         g_states_request_sent = false;
@@ -1472,6 +1592,13 @@ esp_err_t poll()
         if (prefix.more != 0u) {
         } else {
             g_states_response_seen = true;
+            g_runtime_resync_view_active = false;
+            g_snapshot_record_count = static_cast<uint16_t>(std::min<size_t>(g_point_count, g_state_records.size()));
+            g_published_snapshot_sequence = prefix.states_sequence_base;
+            g_published_snapshot_point_count = g_point_count;
+            g_published_snapshot_loaded_points = g_snapshot_record_count;
+            g_published_snapshot_max_payload = g_max_fragment_payload;
+            g_have_published_snapshot = true;
             ESP_LOGI(kLogTag,
                      "Completed plcLink states snapshot total=%u chunks=%u records=%u seq=%lu",
                      static_cast<unsigned>(prefix.total_point_count),
@@ -1495,14 +1622,15 @@ bool is_busy()
 BootProgress get_boot_progress()
 {
     BootProgress progress = {};
+    const bool preserve_runtime_view = g_runtime_resync_view_active && g_have_published_snapshot;
     progress.percent = 10u;
-    progress.loaded_points = g_snapshot_record_count;
-    progress.total_points = g_point_count;
+    progress.loaded_points = preserve_runtime_view ? g_published_snapshot_loaded_points : g_snapshot_record_count;
+    progress.total_points = preserve_runtime_view ? g_published_snapshot_point_count : g_point_count;
     progress.link_ready = (g_fpga_device != nullptr);
     progress.caps_received = g_caps_response_seen;
     progress.snapshot_started = g_defs_request_sent || (g_defs_loaded_bytes != 0u) || g_defs_response_seen ||
                               g_states_request_sent || (g_snapshot_record_count != 0u) || g_states_response_seen;
-    progress.snapshot_complete = g_defs_response_seen && g_states_response_seen;
+    progress.snapshot_complete = (g_defs_response_seen && g_states_response_seen) || preserve_runtime_view;
 
     if (!progress.link_ready) {
         return progress;
@@ -1513,20 +1641,22 @@ BootProgress get_boot_progress()
         return progress;
     }
 
-    progress.percent = compute_snapshot_percent();
+    progress.percent = preserve_runtime_view ? 100u : compute_snapshot_percent();
     return progress;
 }
 
 SnapshotInfo get_snapshot_info()
 {
     SnapshotInfo info = {};
-    info.point_count = g_point_count;
-    info.loaded_points = g_snapshot_record_count;
-    info.max_payload = g_max_fragment_payload;
-    info.complete = g_states_response_seen;
-    info.sequence = g_states_sequence;
+    const bool expose_published_snapshot = g_have_published_snapshot && (g_runtime_resync_view_active || g_states_response_seen);
+    info.point_count = expose_published_snapshot ? g_published_snapshot_point_count : g_point_count;
+    info.loaded_points = expose_published_snapshot ? g_published_snapshot_loaded_points : g_snapshot_record_count;
+    info.max_payload = expose_published_snapshot ? g_published_snapshot_max_payload : g_max_fragment_payload;
+    info.complete = expose_published_snapshot ? true : g_states_response_seen;
+    info.sequence = expose_published_snapshot ? g_published_snapshot_sequence : g_states_sequence;
     if (state_try_lock(kStateReadLockTimeoutTicks)) {
-        info.loaded_points = static_cast<uint16_t>(std::min<size_t>(g_snapshot_record_count, g_state_records.size()));
+        const uint16_t current_loaded = static_cast<uint16_t>(std::min<size_t>(g_snapshot_record_count, g_state_records.size()));
+        info.loaded_points = expose_published_snapshot ? g_published_snapshot_loaded_points : current_loaded;
         state_unlock();
     }
     return info;
@@ -1649,9 +1779,15 @@ bool pop_point_update(PointUpdate* out_update)
         if (index < g_state_records.size()) {
             *out_update = {};
             out_update->sequence = pending.sequence;
-            out_update->point_count = g_point_count;
-            out_update->loaded_points = static_cast<uint16_t>(std::min<size_t>(g_snapshot_record_count, g_state_records.size()));
-            out_update->complete = g_states_response_seen;
+            if (g_runtime_resync_view_active && g_have_published_snapshot) {
+                out_update->point_count = g_published_snapshot_point_count;
+                out_update->loaded_points = g_published_snapshot_loaded_points;
+                out_update->complete = true;
+            } else {
+                out_update->point_count = g_point_count;
+                out_update->loaded_points = static_cast<uint16_t>(std::min<size_t>(g_snapshot_record_count, g_state_records.size()));
+                out_update->complete = g_states_response_seen;
+            }
             out_update->state = g_state_records[index];
             if (index < g_definition_records.size()) {
                 out_update->definition = g_definition_records[index];

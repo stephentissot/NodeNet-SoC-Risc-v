@@ -1,6 +1,7 @@
 DEVICE=45k
 PACKAGE=CABGA381
 SPEED=6
+NEXTPNR_SEED ?= 5
 
 TOP=top
 
@@ -93,6 +94,11 @@ SOURCES := src/top.sv \
 SOURCES += $(LITEDRAM_RTL)
 
 SOURCES := $(sort $(SOURCES))
+
+NEXTPNR_ARGS :=
+ifneq ($(strip $(NEXTPNR_SEED)),)
+NEXTPNR_ARGS += --seed $(NEXTPNR_SEED)
+endif
 
 
 .PHONY: all firmware-build firmware-test firmware-image firmware-bootloader flash-fw-check flash-fw-check-image flash-fw flash-fw-write-image flash-fw-run firmware-image-tests flash-fw-test-missing flash-fw-test-size flash-fw-test-crc plc-package plc-mirror-package plc-package-check plc-package-build-check plc-mirror-package-check flash-plc-package flash-plc-package-write bringup clean clean-firmware lock-flash unlock-flash ram-fast ram-fw fw firmware-only litedram-gen litedram-copy litedram-refresh esp32 esp32Flash esp32FlashFs monitor
@@ -406,6 +412,7 @@ $(BUILD)/$(TOP).config: $(BUILD)/$(TOP).json
 		--package $(PACKAGE) \
 		--speed $(SPEED) \
 		--ignore-rel-clk \
+		$(NEXTPNR_ARGS) \
 		--json $< \
 		--lpf $(LPF) \
 		--textcfg $@

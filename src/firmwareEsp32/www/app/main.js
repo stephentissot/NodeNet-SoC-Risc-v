@@ -87,7 +87,7 @@ const translations = {
     point: 'Point',
     type: 'Type',
     flags: 'Flags',
-    valueBits: 'ValueBits',
+    value: 'Value',
     quality: 'Quality',
     timestamp: 'Timestamp',
   },
@@ -169,7 +169,7 @@ const translations = {
     point: 'Point',
     type: 'Type',
     flags: 'Flags',
-    valueBits: 'ValueBits',
+    value: 'Valeur',
     quality: 'Quality',
     timestamp: 'Timestamp',
   },
@@ -525,9 +525,19 @@ function connectSocket() {
     }
 
     if (message.type === 'plc_snapshot_available') {
+      const currentSequence = lastSequence.value;
+      const currentStateCount = states.value.length;
       applySnapshotMeta(message.snapshot);
-      if ((message.snapshot?.loaded_points || 0) < states.value.length) {
+      if ((message.snapshot?.loaded_points || 0) < currentStateCount) {
         states.value = [];
+      }
+      if (message.snapshot?.complete &&
+          (message.snapshot.sequence !== currentSequence || (message.snapshot.loaded_points || 0) !== currentStateCount)) {
+        try {
+          await loadStates();
+        } catch (error) {
+          errorText.value = error.message;
+        }
       }
       return;
     }
@@ -624,6 +634,69 @@ function boolFromRecord(record) {
 
 function uintFromRecord(record) {
   return record ? (Number(record.value_bits) >>> 0) : 0;
+}
+
+function floatFromBits(valueBits) {
+  const buffer = new ArrayBuffer(4);
+  const view = new DataView(buffer);
+  view.setUint32(0, Number(valueBits) >>> 0, true);
+  return view.getFloat32(0, true);
+}
+
+function decodeRecordValue(record) {
+  if (!record) {
+    return null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(record, 'value')) {
+    return record.value;
+  }
+
+  const valueType = Number(record.value_type);
+  const valueBits = Number(record.value_bits) >>> 0;
+  if (valueType === 0) {
+    return valueBits !== 0;
+  }
+  if (valueType === 1) {
+    return valueBits & 0xffff;
+  }
+  if (valueType === 2) {
+    return (valueBits << 16) >> 16;
+  }
+  if (valueType === 3) {
+    return valueBits >>> 0;
+  }
+  if (valueType === 4 || valueType === 6) {
+    return valueBits | 0;
+  }
+  if (valueType === 5) {
+    return floatFromBits(valueBits);
+  }
+  if (valueType === 7) {
+    return record.string_value || '';
+  }
+  return null;
+}
+
+function formatRecordValue(record) {
+  const value = decodeRecordValue(record);
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'boolean') {
+    return value ? 'true' : 'false';
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      return 'null';
+    }
+    if (Number.isInteger(value)) {
+      return String(value);
+    }
+
+    return String(Number(value.toFixed(6)));
+  }
+  return String(value);
 }
 
 const app = {
@@ -738,6 +811,7 @@ const app = {
       loginPassword,
       loginUsername,
       pointCount,
+      formatRecordValue,
       settingsMessage,
       socketState,
       slotActionBusy,
@@ -1054,7 +1128,7 @@ const app = {
                   <th>{{ t('point') }}</th>
                   <th>{{ t('type') }}</th>
                   <th>{{ t('flags') }}</th>
-                  <th>{{ t('valueBits') }}</th>
+                  <th>{{ t('value') }}</th>
                   <th>{{ t('quality') }}</th>
                   <th>{{ t('timestamp') }}</th>
                 </tr>
@@ -1064,7 +1138,7 @@ const app = {
                   <td>{{ record.feature ? record.feature + '.' + record.point_id : record.point_index }}</td>
                   <td>{{ record.value_type }}</td>
                   <td>{{ record.state_flags }}</td>
-                  <td>{{ record.string_value || record.value_bits }}</td>
+                  <td>{{ formatRecordValue(record) }}</td>
                   <td>{{ record.quality }}</td>
                   <td>{{ record.timestamp_ms }}</td>
                 </tr>

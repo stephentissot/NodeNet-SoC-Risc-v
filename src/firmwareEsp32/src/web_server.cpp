@@ -4,6 +4,7 @@
 #include <freertos/task.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -25,6 +26,13 @@ namespace {
 
 constexpr const char* kLogTag = "web-server";
 constexpr size_t kMaxWsClients = 4;
+constexpr uint8_t kPointValueTypeBool = 0u;
+constexpr uint8_t kPointValueTypeUint16 = 1u;
+constexpr uint8_t kPointValueTypeInt16 = 2u;
+constexpr uint8_t kPointValueTypeUint32 = 3u;
+constexpr uint8_t kPointValueTypeInt32 = 4u;
+constexpr uint8_t kPointValueTypeFloat = 5u;
+constexpr uint8_t kPointValueTypeEnum = 6u;
 constexpr uint8_t kPointValueTypeString = 7u;
 constexpr const char* kAuthCookieName = "nodenet_auth";
 constexpr const char* kFakeAdminUsername = "admin";
@@ -128,6 +136,53 @@ std::string build_point_path(const char* device_id, const char* feature, const c
     return path;
 }
 
+void append_typed_value_json(std::string& body,
+                             uint8_t value_type,
+                             uint32_t value_bits,
+                             const char* string_value)
+{
+    body += ",\"value\":";
+    switch (value_type) {
+    case kPointValueTypeBool:
+        body += (value_bits != 0u) ? "true" : "false";
+        break;
+    case kPointValueTypeUint16:
+        body += std::to_string(static_cast<unsigned long>(static_cast<uint16_t>(value_bits & 0xFFFFu)));
+        break;
+    case kPointValueTypeInt16:
+        body += std::to_string(static_cast<long>(static_cast<int16_t>(value_bits & 0xFFFFu)));
+        break;
+    case kPointValueTypeUint32:
+        body += std::to_string(static_cast<unsigned long>(value_bits));
+        break;
+    case kPointValueTypeInt32:
+    case kPointValueTypeEnum:
+        body += std::to_string(static_cast<long>(static_cast<int32_t>(value_bits)));
+        break;
+    case kPointValueTypeFloat: {
+        float value = 0.0f;
+        std::memcpy(&value, &value_bits, sizeof(value));
+        if (!std::isfinite(value)) {
+            body += "null";
+            break;
+        }
+
+        char buffer[32] = {};
+        std::snprintf(buffer, sizeof(buffer), "%.9g", static_cast<double>(value));
+        body += buffer;
+        break;
+    }
+    case kPointValueTypeString:
+        body += '"';
+        body += json_escape(string_value);
+        body += '"';
+        break;
+    default:
+        body += "null";
+        break;
+    }
+}
+
 bool boot_equal(const spi_link::BootProgress& lhs, const spi_link::BootProgress& rhs)
 {
     return std::memcmp(&lhs, &rhs, sizeof(lhs)) == 0;
@@ -204,6 +259,10 @@ std::string make_point_update_json(const spi_link::PointUpdate& update)
     body += ",\"value_type\":" + std::to_string(record.value_type);
     body += ",\"state_flags\":" + std::to_string(record.state_flags);
     body += ",\"value_bits\":" + std::to_string(static_cast<unsigned long>(record.value_bits));
+    append_typed_value_json(body,
+                            record.value_type,
+                            record.value_bits,
+                            (record.value_type == kPointValueTypeString) ? update.state.string_value : nullptr);
     body += ",\"quality\":" + std::to_string(static_cast<unsigned long>(record.quality));
     body += ",\"timestamp_ms\":" + std::to_string(static_cast<unsigned long>(record.timestamp_ms));
     if (record.value_type == kPointValueTypeString) {
@@ -984,6 +1043,10 @@ esp_err_t handle_snapshot(httpd_req_t* req)
         chunk += ",\"value_type\":" + std::to_string(record.value_type);
         chunk += ",\"state_flags\":" + std::to_string(record.state_flags);
         chunk += ",\"value_bits\":" + std::to_string(static_cast<unsigned long>(record.value_bits));
+        append_typed_value_json(chunk,
+                    record.value_type,
+                    record.value_bits,
+                    (record.value_type == kPointValueTypeString) ? cached.string_value : nullptr);
         chunk += ",\"quality\":" + std::to_string(static_cast<unsigned long>(record.quality));
         chunk += ",\"timestamp_ms\":" + std::to_string(static_cast<unsigned long>(record.timestamp_ms));
         if (record.value_type == kPointValueTypeString) {

@@ -73,7 +73,8 @@ void handleSpiMailboxProtocol(SpiMailbox& mailbox, const NodeNetCore& nodeNetCor
                                            states_sequence);
 
     size_t dirty_index = 0u;
-    const bool dirty_pending = point_catalog.peekDirtyStateIndex(dirty_index);
+    uint32_t dirty_sequence = 0u;
+    const bool dirty_pending = point_catalog.peekDirtyStateIndex(dirty_index, dirty_sequence);
     const uint16_t mailbox_status = mailbox.Status();
     if constexpr (kEnablePlcLinkTraceLogs) {
         static NodeLogger spi_logger(transport, 0x05);
@@ -85,7 +86,7 @@ void handleSpiMailboxProtocol(SpiMailbox& mailbox, const NodeNetCore& nodeNetCor
                 mailbox_status != last_logged_status ||
                 dirty_index != last_logged_dirty_index) {
                 spi_logger.Info("plcLink pump pending seq=%lu dirty=%u status=0x%04x has_rx=%u tx_ready=%u fullsync=%u",
-                                static_cast<unsigned long>(states_sequence),
+                                static_cast<unsigned long>(dirty_sequence),
                                 static_cast<unsigned>(dirty_index),
                                 static_cast<unsigned>(mailbox_status),
                                 mailbox.HasMessage() ? 1u : 0u,
@@ -177,6 +178,7 @@ int main(void)
     }
 
     while (1) {
+        nodeNetCore.drainPlcVmStateEvents();
         handleSpiMailboxProtocol(spiMailbox, nodeNetCore);
         nodeNetCore.loop();
         const uint32_t now_ms = millis();

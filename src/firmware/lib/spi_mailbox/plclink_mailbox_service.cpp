@@ -501,8 +501,36 @@ bool pumpUpdates(SpiMailbox& mailbox,
         return false;
     }
 
+    if (point_catalog.runtimeFullSyncRequired()) {
+        uint8_t tx_buffer[SpiMailbox::kMaxPayloadSize] = {};
+        plclink::ProtocolHeader response_header = {};
+        response_header.magic = plclink::kMagic;
+        response_header.version = plclink::kVersion;
+        response_header.message_type = plclink::kMsgStatesUpdatesRes;
+        response_header.flags = static_cast<uint8_t>(plclink::kFlagResponse | plclink::kFlagUpdatePayload);
+        response_header.request_id = 0u;
+        response_header.fragment_index = 0u;
+        response_header.fragment_count = 1u;
+        response_header.generation = defs_generation;
+        response_header.sequence = states_sequence;
+
+        plclink::StatesUpdatePrefix prefix = {};
+        prefix.states_sequence = states_sequence;
+        prefix.update_count = 0u;
+        std::memcpy(&tx_buffer[plclink::kHeaderSize], &prefix, sizeof(prefix));
+
+        response_header.payload_length = static_cast<uint16_t>(sizeof(prefix));
+        if (!plclink::encodeHeader(response_header, tx_buffer, sizeof(tx_buffer))) {
+            return false;
+        }
+
+        return mailbox.SendMessage(tx_buffer,
+                                   static_cast<uint16_t>(plclink::kHeaderSize + response_header.payload_length));
+    }
+
     size_t dirty_index = 0u;
-    if (!point_catalog.peekDirtyStateIndex(dirty_index)) {
+    uint32_t dirty_sequence = 0u;
+    if (!point_catalog.peekDirtyStateIndex(dirty_index, dirty_sequence)) {
         return false;
     }
 
@@ -534,10 +562,10 @@ bool pumpUpdates(SpiMailbox& mailbox,
     response_header.fragment_index = 0u;
     response_header.fragment_count = 1u;
     response_header.generation = defs_generation;
-    response_header.sequence = states_sequence;
+    response_header.sequence = dirty_sequence;
 
     plclink::StatesUpdatePrefix prefix = {};
-    prefix.states_sequence = states_sequence;
+    prefix.states_sequence = dirty_sequence;
     prefix.update_count = 1u;
     std::memcpy(&tx_buffer[plclink::kHeaderSize], &prefix, sizeof(prefix));
 

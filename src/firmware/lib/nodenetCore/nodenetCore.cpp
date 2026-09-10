@@ -34,6 +34,9 @@ constexpr uint8_t kBootNodeServicesProgressStart = 10u;
 constexpr uint8_t kBootNodeServicesProgressEnd = 34u;
 constexpr uint8_t kBootRestoreProgressStart = 70u;
 constexpr uint8_t kBootRestoreProgressEnd = 95u;
+PointState* g_plclink_state_shadow = nullptr;
+size_t g_plclink_state_shadow_count = 0u;
+bool g_plclink_state_shadow_ready = false;
 
 constexpr const char* kPlcSlotRuntimePointIds[] = {
     "loaded",
@@ -232,6 +235,84 @@ static bool point_state_payload_equal(PointValueType value_type,
     default:
         return false;
     }
+}
+
+static bool ensure_plclink_state_shadow(const PointCatalog& catalog, bool reseed)
+{
+    const size_t count = catalog.size();
+    if (count == 0u) {
+        g_plclink_state_shadow_ready = true;
+        g_plclink_state_shadow_count = 0u;
+        return true;
+    }
+
+    if (g_plclink_state_shadow_count != count) {
+        void* resized = realloc(g_plclink_state_shadow, count * sizeof(PointState));
+        if (resized == nullptr) {
+            return false;
+        }
+        g_plclink_state_shadow = static_cast<PointState*>(resized);
+        g_plclink_state_shadow_count = count;
+        reseed = true;
+    }
+
+    if (!g_plclink_state_shadow_ready || reseed) {
+        const PointState* states = catalog.states();
+        if (states == nullptr) {
+            return false;
+        }
+        std::memcpy(g_plclink_state_shadow, states, count * sizeof(PointState));
+        g_plclink_state_shadow_ready = true;
+    }
+
+    return true;
+}
+
+static void sync_plclink_state_shadow_index(const PointCatalog& catalog, size_t index)
+{
+    if (!ensure_plclink_state_shadow(catalog, false)) {
+        return;
+    }
+    if (index >= g_plclink_state_shadow_count) {
+        return;
+    }
+
+    const PointState* states = catalog.states();
+    if (states == nullptr) {
+        return;
+    }
+
+    g_plclink_state_shadow[index] = states[index];
+}
+
+static size_t recover_plc_vm_overflow_dirty_states(PointCatalog& catalog)
+{
+    if (!ensure_plclink_state_shadow(catalog, false)) {
+        return static_cast<size_t>(-1);
+    }
+
+    const size_t count = catalog.size();
+    const PointDefinition* definitions = catalog.entries();
+    const PointState* states = catalog.states();
+    if ((definitions == nullptr) || (states == nullptr)) {
+        return static_cast<size_t>(-1);
+    }
+
+    size_t recovered_count = 0u;
+    for (size_t index = 0u; index < count; ++index) {
+        if (point_state_payload_equal(definitions[index].value_type,
+                                      g_plclink_state_shadow[index],
+                                      states[index])) {
+            continue;
+        }
+
+        g_plclink_state_shadow[index] = states[index];
+        if (catalog.notifyStateChanged(index)) {
+            ++recovered_count;
+        }
+    }
+
+    return recovered_count;
 }
 
 static bool publish_builtin_state_if_changed(NodeNetCore& core,
@@ -1034,6 +1115,30 @@ static uint32_t plc_engine_scan_interval_cycles()
     return *plc_reg_ptr(0x10u);
 }
 
+static uint32_t plc_vm_signature()
+{
+    return *plc_reg_ptr(0x0Cu);
+}
+
+static uint32_t plc_vm_dirty_event_snapshot()
+{
+    return *plc_reg_ptr(0x14u);
+}
+
+static void plc_vm_dirty_event_clear(bool clear_valid, bool clear_overflow)
+{
+    uint32_t control = 0u;
+    if (clear_valid) {
+        control |= 0x1u;
+    }
+    if (clear_overflow) {
+        control |= 0x2u;
+    }
+    if (control != 0u) {
+        *plc_reg_ptr(0x14u) = control;
+    }
+}
+
 static void plc_engine_set_enabled(bool enabled)
 {
     *plc_reg_ptr(0x00u) = enabled ? 0x1u : 0x0u;
@@ -1567,6 +1672,7 @@ void NodeNetCore::begin()
     oled::showBootProgress("Node services: builtins", 18u);
     registerBuiltinPointDefinitions();
     _pointCatalogAutosaveEnabled = true;
+    (void)ensure_plclink_state_shadow(_pointCatalog, true);
     if (_pointCatalogDirty) {
         oled::showBootProgress("Node services: save catalog", 30u);
         (void)savePointCatalog();
@@ -1583,6 +1689,12 @@ void NodeNetCore::begin()
     oled::showBootProgress("Node services: plc core", 33u);
     _plcCore.begin(&_pointCatalog, _modbus0, _logger);
     _plcCore.setModbusBatchMaxGap(modbus0Settings.comSettings.max_gap);
+    if (_logger != nullptr) {
+        _logger->Info("PLC VM regs signature=0x%08lx dirty_raw=0x%08lx scan_cycles=%lu",
+                      static_cast<unsigned long>(plc_vm_signature()),
+                      static_cast<unsigned long>(plc_vm_dirty_event_snapshot()),
+                      static_cast<unsigned long>(plc_engine_scan_interval_cycles()));
+    }
 
     oled::showBootProgress("Node services: publish", 34u);
     publishBuiltinPointStates();
@@ -1601,6 +1713,7 @@ void NodeNetCore::loop()
     processInputQueue();
 
     _plcCore.loop();
+    drainPlcVmStateEvents();
     refreshLoadedMirrorProgramRuntimeMapsIfNeeded();
 
     const uint32_t now_ms = millis();
@@ -1612,6 +1725,84 @@ void NodeNetCore::loop()
     processOutputQueue();
     processPendingPlcErase();
     processPendingPlcAutoLoad();
+}
+
+void NodeNetCore::drainPlcVmStateEvents()
+{
+    constexpr uint32_t kDirtyEventValidMask = 0x1u;
+    constexpr uint32_t kDirtyEventOverflowMask = 0x2u;
+    constexpr uint32_t kDirtyEventOffsetQ16Shift = 2u;
+    constexpr uint32_t kDirtyEventOffsetQ16Mask = 0x1FFFu;
+    constexpr uint32_t kDirtyEventOffsetShift = 4u;
+    constexpr uint8_t kMaxEventsPerLoop = 8u;
+
+    // Once a full sync is pending, incremental dirty events are obsolete.
+    if (_pointCatalog.runtimeFullSyncRequired()) {
+        (void)ensure_plclink_state_shadow(_pointCatalog, true);
+        const uint32_t raw = plc_vm_dirty_event_snapshot();
+        if ((raw & (kDirtyEventValidMask | kDirtyEventOverflowMask)) != 0u) {
+            plc_vm_dirty_event_clear(true, true);
+        }
+        return;
+    }
+
+    for (uint8_t attempt = 0u; attempt < kMaxEventsPerLoop; ++attempt) {
+        const uint32_t raw = plc_vm_dirty_event_snapshot();
+        const bool valid = (raw & kDirtyEventValidMask) != 0u;
+        const bool overflow = (raw & kDirtyEventOverflowMask) != 0u;
+
+        if (overflow) {
+            const size_t recovered_count = recover_plc_vm_overflow_dirty_states(_pointCatalog);
+            plc_vm_dirty_event_clear(true, true);
+            if (recovered_count == static_cast<size_t>(-1)) {
+                _pointCatalog.requestRuntimeFullSync();
+                if (_logger != nullptr) {
+                    _logger->Warning("PLC VM dirty-state event overflow; requesting full plcLink state resync");
+                }
+            }
+            break;
+        }
+
+        if (!valid) {
+            break;
+        }
+
+        const uint32_t offset_q16 = (raw >> kDirtyEventOffsetQ16Shift) & kDirtyEventOffsetQ16Mask;
+        const uint32_t point_state_offset = offset_q16 << kDirtyEventOffsetShift;
+        if ((point_state_offset % sizeof(PointState)) != 0u) {
+            _pointCatalog.requestRuntimeFullSync();
+            plc_vm_dirty_event_clear(true, true);
+            if (_logger != nullptr) {
+                _logger->Warning("PLC VM dirty-state event had invalid offset 0x%08lx; requesting full resync",
+                                 static_cast<unsigned long>(point_state_offset));
+            }
+            break;
+        }
+
+        const size_t point_index = point_state_offset / sizeof(PointState);
+        if (point_index >= _pointCatalog.size()) {
+            _pointCatalog.requestRuntimeFullSync();
+            plc_vm_dirty_event_clear(true, true);
+            if (_logger != nullptr) {
+                _logger->Warning("PLC VM dirty-state event index out of range idx=%lu size=%lu; requesting full resync",
+                                 static_cast<unsigned long>(point_index),
+                                 static_cast<unsigned long>(_pointCatalog.size()));
+            }
+            break;
+        }
+
+        if (_logger != nullptr) {
+            _logger->Info("PLC VM dirty-state event raw=0x%08lx offset=0x%08lx idx=%lu overflow=%u",
+                          static_cast<unsigned long>(raw),
+                          static_cast<unsigned long>(point_state_offset),
+                          static_cast<unsigned long>(point_index),
+                          static_cast<unsigned>(overflow ? 1u : 0u));
+        }
+
+        (void)_pointCatalog.notifyStateChanged(point_index);
+        sync_plclink_state_shadow_index(_pointCatalog, point_index);
+        plc_vm_dirty_event_clear(true, false);
+    }
 }
 
 void NodeNetCore::savePreferences()
@@ -1787,7 +1978,11 @@ void NodeNetCore::syncPlcRuntimeDefinitions()
 
 bool NodeNetCore::updatePointState(const PointIdentity& id, const PointState& state)
 {
-    return _pointCatalog.updateState(id, state);
+    const bool updated = _pointCatalog.updateState(id, state);
+    if (updated) {
+        sync_plclink_state_shadow_index(_pointCatalog, _pointCatalog.findIndex(id));
+    }
+    return updated;
 }
 
 bool NodeNetCore::updatePointCommandState(const PointIdentity& id, const PointCommandState& state)

@@ -20,6 +20,7 @@ Current project status:
 - relocatable `objectFileV1` PLC upload, firmware-side link/load, linked-bytecode readback, and object-file readback
 - 16 PLC slots with reboot persistence in the raw PLC flash package and automatic restore after boot
 - OLED boot progress screen plus post-boot slot status screen
+- ESP32 SPI coprocessor for local web API is in progress on the current branch; the shared SPI link, snapshot bootstrap, incremental state updates, and web UI runtime path are now working together on hardware, while broader validation and the MQTT bridge remain pending
 
 ## Features
 
@@ -495,7 +496,7 @@ See [src/wbDevices/README.md](src/wbDevices/README.md) for detailed documentatio
 - [ ] Dual Ethernet breakout using i9 onboard Broadcom PHYs (2x RJ45 with magnetics)
 - [x] RJ45 LEDs integrated through `wb_led` at dedicated addresses
 - [ ] Final RJ45 firmware policy (link/activity/status) for production runtime
-- [ ] ESP32 module SPI coprocessor for web API and MQTT bridge
+- [ ] ESP32 module SPI coprocessor for web API and MQTT bridge (in progress: shared SPI link, HTTP app, websocket updates, and plcLink snapshot/resync path validated on hardware; MQTT bridge still pending)
 - [ ] Power option study: use ESP32 module 3.3V rail vs dedicated 12V->3.3V buck
 - [x] Modbus RTU master module + firmware driver (`wb_modbus_master` + `ModbusMaster`)
 - [ ] Modbus RTU slave mode

@@ -759,12 +759,13 @@ bool PointCatalog::notifyStateChanged(size_t index) {
     return true;
 }
 
-bool PointCatalog::peekDirtyStateIndex(size_t& index_out) const {
+bool PointCatalog::peekDirtyStateIndex(size_t& index_out, uint32_t& sequence_out) const {
     if (dirty_state_queue_count_ == 0u) {
         return false;
     }
 
     index_out = dirty_state_queue_[dirty_state_queue_head_];
+    sequence_out = dirty_state_sequence_queue_[dirty_state_queue_head_];
     return true;
 }
 
@@ -814,7 +815,8 @@ bool PointCatalog::loadFromJson(const char* json) {
 }
 
 bool PointCatalog::popDirtyStateIndex(size_t& index_out) {
-    if (!peekDirtyStateIndex(index_out)) {
+    uint32_t sequence_out = 0u;
+    if (!peekDirtyStateIndex(index_out, sequence_out)) {
         return false;
     }
 
@@ -870,6 +872,7 @@ bool PointCatalog::saveToJson(char* out, size_t out_size) const {
 
 void PointCatalog::resetDirtyStateTracking() {
     std::memset(dirty_state_queue_, 0, sizeof(dirty_state_queue_));
+    std::memset(dirty_state_sequence_queue_, 0, sizeof(dirty_state_sequence_queue_));
     std::memset(dirty_state_flags_, 0, sizeof(dirty_state_flags_));
     dirty_state_queue_head_ = 0u;
     dirty_state_queue_tail_ = 0u;
@@ -880,10 +883,14 @@ void PointCatalog::resetDirtyStateTracking() {
 
 void PointCatalog::requestRuntimeFullSync() {
     std::memset(dirty_state_queue_, 0, sizeof(dirty_state_queue_));
+    std::memset(dirty_state_sequence_queue_, 0, sizeof(dirty_state_sequence_queue_));
     std::memset(dirty_state_flags_, 0, sizeof(dirty_state_flags_));
     dirty_state_queue_head_ = 0u;
     dirty_state_queue_tail_ = 0u;
     dirty_state_queue_count_ = 0u;
+    if (!runtime_full_sync_required_) {
+        states_sequence_ += 1u;
+    }
     runtime_full_sync_required_ = true;
 }
 
@@ -892,10 +899,15 @@ void PointCatalog::markStateDirty(size_t index) {
         return;
     }
 
-    states_sequence_ += 1u;
+    if (runtime_full_sync_required_) {
+        return;
+    }
+
     if (dirtyStateFlag(index)) {
         return;
     }
+
+    states_sequence_ += 1u;
 
     if (dirty_state_queue_count_ >= kMaxPoints) {
         requestRuntimeFullSync();
@@ -903,6 +915,7 @@ void PointCatalog::markStateDirty(size_t index) {
     }
 
     dirty_state_queue_[dirty_state_queue_tail_] = static_cast<uint16_t>(index);
+    dirty_state_sequence_queue_[dirty_state_queue_tail_] = states_sequence_;
     dirty_state_queue_tail_ = (dirty_state_queue_tail_ + 1u) % kMaxPoints;
     dirty_state_queue_count_ += 1u;
     setDirtyStateFlag(index, true);
